@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Lua REQUIRED)
 find_package(CLI11 REQUIRED)
+find_package(Boost REQUIRED)
 
 find_path(SOL2_INCLUDE_DIR 
     NAMES sol/sol.hpp
@@ -14,6 +15,10 @@ find_path(SOL2_INCLUDE_DIR
 
 if(NOT SOL2_INCLUDE_DIR)
     message(FATAL_ERROR "Sol2 Header nicht gefunden!")
+endif()
+
+if(Boost_FOUND)
+    message(STATUS "Boost gefunden (Version: ${Boost_VERSION})")
 endif()
 
 include_directories(src/main/include)
@@ -42,6 +47,9 @@ target_include_directories(ReqPack PRIVATE
     src/main/include
 )
 
-target_link_libraries(ReqPack PRIVATE ${LUA_LIBRARIES})
+target_link_libraries(ReqPack PRIVATE 
+	${LUA_LIBRARIES}
+	Boost::boost
+)
 
 target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)

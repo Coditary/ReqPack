@@ -4,6 +4,6 @@ Planner::Planner() {}
 
 Planner::~Planner() {}
 
-void Planner::plan() {
-	// Placeholder for planning logic
+Graph* Planner::plan() {
+	return nullptr;
 }

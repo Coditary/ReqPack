@@ -4,6 +4,6 @@ Executer::Executer() {}
 
 Executer::~Executer() {}
 
-void Executer::execute() {
-	// Placeholder for execution logic
+void Executer::execute(Graph *graph) {
+
 }

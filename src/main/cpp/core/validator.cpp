@@ -4,6 +4,6 @@ Validator::Validator() {}
 
 Validator::~Validator() {}
 
-void Validator::validate() {
-	// Placeholder for validation logic
+Graph* Validator::validate(Graph *graph) {
+	return graph;
 }

@@ -6,6 +6,8 @@
 #include "core/validator.h"
 #include "core/executor.h"
 
+#include "core/types.h"
+
 
 class Orchestrator {
 

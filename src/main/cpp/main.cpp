@@ -3,6 +3,7 @@
 
 int main(int argc, char* argv[]) {
 	Orchestrator orchestrator;
+	orchestrator.run();
 
     Cli cli;
     CliOutput args = cli.parse(argc, argv);

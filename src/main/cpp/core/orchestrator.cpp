@@ -15,8 +15,9 @@ Orchestrator::~Orchestrator() {
 }
 
 void Orchestrator::run() {
+	Graph* graph;
 	registry->load();
-	planner->plan();
-	validator->validate();
-	executor->execute();
+	graph = planner->plan();
+	graph = validator->validate(graph);
+	executor->execute(graph);
 }

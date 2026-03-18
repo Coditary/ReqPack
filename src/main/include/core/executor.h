@@ -2,13 +2,14 @@
 #define EXECUTOR_H
 
 
+#include "core/types.h"
 
 class Executer {
 public:
 	Executer();
 	~Executer();
 
-	void execute();
+	void execute(Graph *graph);
 };
 
 

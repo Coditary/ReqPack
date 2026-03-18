@@ -1,14 +1,14 @@
 #ifndef VALIDATOR_H
 #define VALIDATOR_H
 
-
+#include "core/types.h"
 
 class Validator {
 public:
 	Validator();
 	~Validator();
 
-	void validate();
+	Graph* validate(Graph *graph);
 };
 
 
