@@ -1,11 +1,13 @@
 #pragma once
 
 #include "core/types.h"
+#include "core/registry.h"
 
 class Planner {
+	Registry* registry;
 
 public:
-	Planner();
+	Planner(Registry* registry);
 	~Planner();
 
 	Graph* plan();
