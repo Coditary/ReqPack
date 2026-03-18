@@ -7,15 +7,23 @@ int main(int argc, char* argv[]) {
     Cli cli;
     CliOutput args = cli.parse(argc, argv);
 
-	IPlugin* luaPlugin = new LuaBridge("plugins/sample_plugin.lua");
+	Registry registry;
+	registry.scanDirectory("./plugins");
 
-	luaPlugin->init();
+	registry.loadPlugin("dnf");
 
-	std::vector<Package> pkgs = { {"htop", "latest"}, {"vim", "9.0"} };
-
-	luaPlugin->install(pkgs);
-
-	luaPlugin->shutdown();
+	if (registry.isLoaded("dnf")) {
+		IPlugin* luaPlugin = registry.getPlugin("dnf");
+		luaPlugin->init();
+		luaPlugin->search("btop");
+		luaPlugin->shutdown();
+	} else {
+		Logger logger;
+		logger.err("Plugin 'dnf' not found or failed to load.");
+		for (const auto& name : registry.getAvailableNames()) {
+			logger.info("Available plugin: " + name);
+		}
+	}
 
 
     if (args.command.empty()) {

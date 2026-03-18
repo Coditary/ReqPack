@@ -1,42 +1,33 @@
 #include "plugins/lua_bridge.h"
-#include <iostream>
 
 LuaBridge::LuaBridge(const std::string& scriptPath) : m_scriptPath(scriptPath) {
-    m_lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::table, sol::lib::string, sol::lib::os);
+    m_lua.open_libraries(sol::lib::base, sol::lib::os, sol::lib::io, sol::lib::table, sol::lib::string);
 
-    m_lua.new_usertype<Package>("Package",
-        "name", &Package::name,
-        "version", &Package::version
-    );
-
-    m_lua.new_usertype<PackageInfo>("PackageInfo",
-        "name", &PackageInfo::name,
-        "version", &PackageInfo::version,
-        "description", &PackageInfo::description
-    );
+    auto loadResult = m_lua.script_file(m_scriptPath, sol::script_pass_on_error);
+    if (loadResult.valid()) {
+        m_pluginTable = m_lua["plugin"];
+        if (m_pluginTable.valid()) {
+            m_name = m_pluginTable.get_or("name", std::string("Unknown"));
+            m_version = m_pluginTable.get_or("version", std::string("0.0.0"));
+        }
+    } else {
+        sol::error err = loadResult;
+        std::cerr << "[Lua Load Error] " << m_scriptPath << ": " << err.what() << std::endl;
+    }
 }
 
 bool LuaBridge::init() {
-    auto loadResult = m_lua.script_file(m_scriptPath, sol::script_pass_on_error);
-    if (!loadResult.valid()) {
-        sol::error err = loadResult;
-        std::cerr << "Lua Load Error: " << err.what() << std::endl;
-        return false;
-    }
-
-    m_pluginTable = m_lua["plugin"];
-    if (!m_pluginTable.valid()) {
-        std::cerr << "Error: Global table 'plugin' not found in " << m_scriptPath << std::endl;
-        return false;
-    }
-
-    m_name = m_pluginTable.get_or("name", std::string("Unknown Lua Plugin"));
-    m_version = m_pluginTable.get_or("version", std::string("0.0.0"));
+    if (!m_pluginTable.valid()) return false;
 
     sol::protected_function luaInit = m_pluginTable["init"];
     if (luaInit.valid()) {
         auto result = luaInit();
-        return result.valid() ? result.get<bool>() : false;
+        if (!result.valid()) {
+            sol::error err = result;
+            std::cerr << "[Lua Exec Error] init(): " << err.what() << std::endl;
+            return false;
+        }
+        return result.return_count() == 0 ? true : result.get<bool>();
     }
 
     return true;
