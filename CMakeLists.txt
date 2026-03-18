@@ -29,7 +29,7 @@ set(SOURCES
     src/main/cpp/main.cpp
     src/main/cpp/cli/cli.cpp
     src/main/cpp/output/logger.cpp
-    src/main/cpp/plugins/bridge.cpp
+    src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/core/orchestrator.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/validator.cpp

@@ -3,18 +3,14 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 Logger::Logger() {
-    // Standardmäßig farbige Konsolenausgabe erstellen
     auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     sinks.push_back(console_sink);
 
-    // Logger instanziieren (Name "Global")
     logger = std::make_shared<spdlog::logger>("Global", sinks.begin(), sinks.end());
     
-    // Standard-Einstellungen
     logger->set_level(spdlog::level::info);
     logger->set_pattern("%^[%T] [%l] %v%$");
     
-    // Registrierung im spdlog-Pool (optional, erlaubt Zugriff via spdlog::get("Global"))
     spdlog::register_logger(logger);
 }
 
@@ -23,7 +19,6 @@ Logger::~Logger() {
 }
 
 void Logger::setLevel(const std::string& level) {
-    // Umwandlung von String zu spdlog-Enum
     spdlog::level::level_enum lvl = spdlog::level::from_str(level);
     logger->set_level(lvl);
 }
@@ -37,14 +32,10 @@ void Logger::setPattern(const std::string& pattern) {
 }
 
 void Logger::setFileSink(const std::string& filename) {
-    // Neuen Datei-Sink erstellen
     auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(filename, true);
     
-    // Sink zur Liste und zum Logger hinzufügen
     sinks.push_back(file_sink);
     
-    // Da spdlog-Logger-Sinks zur Laufzeit nicht einfach via Vektor getauscht werden,
-    // weisen wir die neue Sink-Liste dem Logger direkt zu
     logger->sinks() = sinks;
 }
 
@@ -56,10 +47,8 @@ void Logger::setBacktrace(bool enable, size_t max_size) {
     }
 }
 
-// Logging-Methoden
 void Logger::crit(const std::string& message) {
     logger->critical(message);
-    // Backtrace im Falle eines Critical-Errors ausspucken, falls aktiviert
     logger->dump_backtrace(); 
 }
 

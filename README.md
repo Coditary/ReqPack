@@ -102,7 +102,7 @@ end
 ## 📃 Build & Run
 
 ```bash
-git clone https://github.com/yourname/reqpack.git
+git clone https://github.com/Coditary/ReqPack.git
 cd reqpack
 mkdir build && cd build
 cmake ..

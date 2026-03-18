@@ -1,21 +1,27 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include "core/types.h"
 
+#define REQPACK_API_VERSION 1
+
 class IPlugin {
 public:
     virtual ~IPlugin() = default;
+	virtual uint32_t getInterfaceVersion() const {
+        return REQPACK_API_VERSION;
+    }
 
-	virtual void init() = 0;
-	virtual void shutdown() = 0;
+	virtual bool init() = 0;
+	virtual bool shutdown() = 0;
 
     virtual std::string getName() const = 0;
     virtual std::string getVersion() const = 0;
     
     virtual std::vector<Package> getRequirements() = 0;
-	virtual std::vector<string> getCategories() = 0;
+	virtual std::vector<std::string> getCategories() = 0;
 
     virtual void install(const std::vector<Package>& packages) = 0;
     virtual void remove(const std::vector<Package>& packages) = 0;
