@@ -4,16 +4,11 @@
 #include <iostream>
 #include <algorithm>
 
-namespace fs = std::filesystem;
-
-#include <filesystem>
-namespace fs = std::filesystem;
-
 void Registry::scanDirectory(const std::string& path) {
-    if (!fs::exists(path)) return;
+    if (!std::filesystem::exists(path)) return;
 
-    for (const auto& entry : fs::recursive_directory_iterator(path)) {
-        fs::path filePath = entry.path();
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
+		std::filesystem::path filePath = entry.path();
         
         if (filePath.extension() == ".lua") {
             std::string id = filePath.stem().string(); 
