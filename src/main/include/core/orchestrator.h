@@ -1,5 +1,4 @@
-#ifndef ORCHESTRATOR_H
-#define ORCHESTRATOR_H
+#pragma once
 
 #include "core/registry.h"
 #include "core/planner.h"
@@ -24,5 +23,3 @@ public:
 	void run();
 };
 
-
-#endif // ORCHESTRATOR_H

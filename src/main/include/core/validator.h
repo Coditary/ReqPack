@@ -1,5 +1,4 @@
-#ifndef VALIDATOR_H
-#define VALIDATOR_H
+#pragma once
 
 #include "core/types.h"
 
@@ -12,4 +11,3 @@ public:
 };
 
 
-#endif // VALIDATOR_H

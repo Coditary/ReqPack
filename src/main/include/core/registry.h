@@ -1,5 +1,4 @@
-#ifndef REGISTRY_H
-#define REGISTRY_H
+#pragma once
 
 
 class Registry {
@@ -10,5 +9,3 @@ public:
 	void load();
 };
 
-
-#endif // REGISTRY_H

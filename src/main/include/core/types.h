@@ -1,5 +1,4 @@
-#ifndef TYPES_H
-#define TYPES_H
+#pragma once
 
 #include <boost/graph/adjacency_list.hpp>
 
@@ -11,5 +10,3 @@ struct Package {
 
 typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::directedS, Package> Graph;
 
-
-#endif // TYPES_H

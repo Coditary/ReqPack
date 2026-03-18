@@ -1,6 +1,4 @@
-#ifndef EXECUTOR_H
-#define EXECUTOR_H
-
+#pragma once
 
 #include "core/types.h"
 
@@ -12,5 +10,3 @@ public:
 	void execute(Graph *graph);
 };
 
-
-#endif // EXECUTOR_H

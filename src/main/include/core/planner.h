@@ -1,5 +1,4 @@
-#ifndef PLANNER_H
-#define PLANNER_H
+#pragma once
 
 #include "core/types.h"
 
@@ -12,5 +11,3 @@ public:
 	Graph* plan();
 };
 
-
-#endif // PLANNER_H

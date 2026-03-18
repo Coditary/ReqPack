@@ -1,5 +1,4 @@
-#ifndef CLI_H
-#define CLI_H
+#pragma once
 
 #include <string>
 #include <vector>
@@ -19,4 +18,3 @@ public:
     void print_help();
 };
 
-#endif

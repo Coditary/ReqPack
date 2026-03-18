@@ -1,10 +1,8 @@
 #include "cli/cli.h"
-#include "orchestrator.h"
+#include "core/orchestrator.h"
+#include "output/logger.h"
 
 int main(int argc, char* argv[]) {
-	Orchestrator orchestrator;
-	orchestrator.run();
-
     Cli cli;
     CliOutput args = cli.parse(argc, argv);
 
