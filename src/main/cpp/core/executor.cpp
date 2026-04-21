@@ -6,7 +6,7 @@
 #include <iterator>
 #include <map>
 
-Executer::Executer(Registry* registry) {
+Executer::Executer(Registry* registry, const ReqPackConfig& config) : config(config) {
 	this->registry = registry;
 }
 
@@ -17,16 +17,23 @@ void Executer::execute(Graph *graph) {
 		return;
 	}
 
-	this->startTransactionDb();
-	if (!this->canWriteToVirtualFileSystem()) {
+	if (this->config.execution.useTransactionDb) {
+		this->startTransactionDb();
+	}
+
+	if (this->config.execution.checkVirtualFileSystemWrite && !this->canWriteToVirtualFileSystem()) {
 		return;
 	}
 
 	const std::vector<TaskGroup> taskGroups = this->createTaskGroups(*graph);
 	const std::vector<TransactionRecord> records = this->executeTaskGroups(taskGroups);
-	this->writeTransactionResults(records);
-	this->markCommittedTransactions();
-	this->deleteCommittedTransactions();
+	if (this->config.execution.useTransactionDb) {
+		this->writeTransactionResults(records);
+		this->markCommittedTransactions();
+		if (this->config.execution.deleteCommittedTransactions) {
+			this->deleteCommittedTransactions();
+		}
+	}
 }
 
 void Executer::startTransactionDb() const {
@@ -61,6 +68,16 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroups(const std::
 	for (const TaskGroup& taskGroup : taskGroups) {
 		const std::vector<TransactionRecord> groupRecords = this->executeTaskGroup(taskGroup);
 		records.insert(records.end(), groupRecords.begin(), groupRecords.end());
+
+		if (this->config.execution.stopOnFirstFailure) {
+			const bool hasFailure = std::any_of(groupRecords.begin(), groupRecords.end(), [](const TransactionRecord& record) {
+				return record.status == "failed";
+			});
+
+			if (hasFailure) {
+				break;
+			}
+		}
 	}
 
 	return records;

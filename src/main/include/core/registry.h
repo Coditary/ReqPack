@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/configuration.h"
+
 #include <vector>
 #include <memory>
 #include <string>
@@ -17,11 +19,12 @@ enum class PluginState {
 
 class Registry {
 private:
+    ReqPackConfig config;
     std::map<std::string, std::unique_ptr<IPlugin>> m_plugins;
     std::map<std::string, PluginState> m_states;
 
 public:
-    Registry() = default;
+    Registry(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
     ~Registry();
 
     void scanDirectory(const std::string& directoryPath);

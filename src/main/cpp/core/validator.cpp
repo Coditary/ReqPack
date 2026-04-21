@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-Validator::Validator() {}
+Validator::Validator(const ReqPackConfig& config) : config(config) {}
 
 Validator::~Validator() {}
 
@@ -79,11 +79,11 @@ std::vector<Validator::ValidationFinding> Validator::runOwaspScan(const Package&
 
 Validator::ValidationPolicy Validator::loadPolicy() const {
 	ValidationPolicy policy;
-	policy.promptOnUnsafe = DEFAULT_REQPACK_CONFIG.security.promptOnUnsafe ||
-		DEFAULT_REQPACK_CONFIG.security.onUnsafe == UnsafeAction::PROMPT;
-	policy.abortThreshold = to_string(DEFAULT_REQPACK_CONFIG.security.severityThreshold);
-	policy.abortScoreThreshold = DEFAULT_REQPACK_CONFIG.security.scoreThreshold;
-	policy.generateReport = DEFAULT_REQPACK_CONFIG.reports.enabled;
+	policy.promptOnUnsafe = this->config.security.promptOnUnsafe ||
+		this->config.security.onUnsafe == UnsafeAction::PROMPT;
+	policy.abortThreshold = to_string(this->config.security.severityThreshold);
+	policy.abortScoreThreshold = this->config.security.scoreThreshold;
+	policy.generateReport = this->config.reports.enabled;
 	return policy;
 }
 

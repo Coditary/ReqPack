@@ -24,21 +24,25 @@ Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& pac
 
 }  // namespace
 
-Planner::Planner(Registry* registry) {
+Planner::Planner(Registry* registry, const ReqPackConfig& config) : config(config) {
 	this->registry = registry;
 }
 
 Planner::~Planner() {}
 
 Graph* Planner::plan(const std::vector<Request>& requests) {
-	const std::vector<Request> expandedRequests = this->expandProxies(requests);
+	const std::vector<Request> expandedRequests = this->config.planner.enableProxyExpansion ?
+		this->expandProxies(requests) :
+		requests;
 	this->ensurePluginsAvailable(expandedRequests);
 
 	const std::vector<Package> dependencies = this->collectPluginDependencies(expandedRequests);
 	this->ensurePluginDependenciesAvailable(dependencies);
 
 	Graph* graph = this->buildDag(expandedRequests);
-	(void)this->topologicallySort(*graph);
+	if (this->config.planner.topologicallySortGraph) {
+		(void)this->topologicallySort(*graph);
+	}
 
 	return graph;
 }
@@ -49,6 +53,10 @@ std::vector<Request> Planner::expandProxies(const std::vector<Request>& requests
 }
 
 void Planner::ensurePluginsAvailable(const std::vector<Request>& requests) const {
+	if (!this->config.planner.autoDownloadMissingPlugins) {
+		return;
+	}
+
 	for (const Request& request : requests) {
 		if (this->pluginExists(request.system)) {
 			continue;
@@ -88,6 +96,10 @@ std::vector<Package> Planner::collectPluginDependencies(const std::vector<Reques
 }
 
 void Planner::ensurePluginDependenciesAvailable(const std::vector<Package>& dependencies) const {
+	if (!this->config.planner.autoDownloadMissingDependencies) {
+		return;
+	}
+
 	for (const Package& dependency : dependencies) {
 		if (this->dependencyExists(dependency)) {
 			continue;

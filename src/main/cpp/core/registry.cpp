@@ -4,6 +4,8 @@
 #include <iostream>
 #include <algorithm>
 
+Registry::Registry(const ReqPackConfig& config) : config(config) {}
+
 void Registry::scanDirectory(const std::string& path) {
     if (!std::filesystem::exists(path)) return;
 
@@ -24,6 +26,7 @@ void Registry::scanDirectory(const std::string& path) {
 bool Registry::loadPlugin(const std::string& name) {
     if (m_plugins.find(name) == m_plugins.end()) return false;
     if (m_states[name] == PluginState::ACTIVE) return true;
+    if (!this->config.registry.autoLoadPlugins) return false;
 
     if (m_plugins[name]->init()) {
         m_states[name] = PluginState::ACTIVE;
@@ -61,6 +64,10 @@ std::vector<std::string> Registry::findByCategory(const std::string& category) c
 }
 
 void Registry::shutdownAll() {
+	if (!this->config.registry.shutDownPluginsOnExit) {
+		return;
+	}
+
     for (auto& [name, plugin] : m_plugins) {
         if (m_states[name] == PluginState::ACTIVE) {
             plugin->shutdown();

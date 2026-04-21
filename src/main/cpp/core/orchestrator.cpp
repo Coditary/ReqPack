@@ -2,11 +2,11 @@
 
 #include <utility>
 
-Orchestrator::Orchestrator(std::vector<Request> requests) : requests(std::move(requests)) {
-	this->registry  = new Registry();
-	this->planner   = new Planner(this->registry);
-	this->validator = new Validator();
-	this->executor  = new Executer(this->registry);
+Orchestrator::Orchestrator(std::vector<Request> requests, const ReqPackConfig& config) : config(config), requests(std::move(requests)) {
+	this->registry  = new Registry(this->config);
+	this->planner   = new Planner(this->registry, this->config);
+	this->validator = new Validator(this->config);
+	this->executor  = new Executer(this->registry, this->config);
 }
 
 Orchestrator::~Orchestrator() {
@@ -18,7 +18,7 @@ Orchestrator::~Orchestrator() {
 
 void Orchestrator::run() {
 	Graph* graph;
-	this->registry->scanDirectory("./plugins");
+	this->registry->scanDirectory(this->config.registry.pluginDirectory);
 
 	graph = this->planner->plan(this->requests);
 	graph = this->validator->validate(graph);

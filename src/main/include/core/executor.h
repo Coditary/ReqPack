@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/configuration.h"
 #include "core/registry.h"
 #include "core/types.h"
 
@@ -8,6 +9,8 @@
 #include <vector>
 
 class Executer {
+	ReqPackConfig config;
+
 	struct TransactionRecord {
 		std::string system;
 		std::string packageName;
@@ -36,7 +39,7 @@ class Executer {
 	std::vector<TransactionRecord> buildFailureRecords(const TaskGroup& taskGroup) const;
 
 public:
-	Executer(Registry* registry);
+	Executer(Registry* registry, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
 	~Executer();
 
 	void execute(Graph *graph);

@@ -7,6 +7,8 @@
 #include <vector>
 
 class Validator {
+	ReqPackConfig config;
+
 	struct ValidationFinding {
 		Package package;
 		std::string source;
@@ -35,7 +37,7 @@ class Validator {
 	int severityRank(const std::string& severity) const;
 
 public:
-	Validator();
+	Validator(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
 	~Validator();
 
 	Graph* validate(Graph *graph);
