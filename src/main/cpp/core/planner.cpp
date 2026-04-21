@@ -157,10 +157,7 @@ void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
 	}
 
 	for (const std::string& packageName : request.packages) {
-		Package package;
-		package.action = request.action;
-		package.system = request.system;
-		package.name = packageName;
+		const Package package = this->makeRequestedPackage(request, packageName);
 
 		const Graph::vertex_descriptor packageVertex = findOrAddPackageVertex(graph, package);
 		for (const Graph::vertex_descriptor dependencyVertex : dependencyVertices) {
@@ -173,6 +170,22 @@ void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
 			}
 		}
 	}
+}
+
+Package Planner::makeRequestedPackage(const Request& request, const std::string& packageSpecifier) const {
+	Package package;
+	package.action = request.action;
+	package.system = request.system;
+
+	const std::size_t versionSeparator = packageSpecifier.rfind('@');
+	if (versionSeparator == std::string::npos || versionSeparator == 0 || versionSeparator == packageSpecifier.size() - 1) {
+		package.name = packageSpecifier;
+		return package;
+	}
+
+	package.name = packageSpecifier.substr(0, versionSeparator);
+	package.version = packageSpecifier.substr(versionSeparator + 1);
+	return package;
 }
 
 std::vector<Graph::vertex_descriptor> Planner::topologicallySort(const Graph& graph) const {

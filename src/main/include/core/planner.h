@@ -20,6 +20,7 @@ class Planner {
 
 	Graph* buildDag(const std::vector<Request>& requests) const;
 	void addRequestToGraph(Graph& graph, const Request& request) const;
+	Package makeRequestedPackage(const Request& request, const std::string& packageSpecifier) const;
 	std::vector<Graph::vertex_descriptor> topologicallySort(const Graph& graph) const;
 
 public:

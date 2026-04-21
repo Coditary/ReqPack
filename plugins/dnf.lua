@@ -12,6 +12,14 @@ local function sys_call(cmd)
     return success
 end
 
+local function package_spec(pkg)
+    if pkg.version == nil or pkg.version == "" then
+        return pkg.name
+    end
+
+    return pkg.name .. "-" .. pkg.version
+end
+
 function plugin.init()
     local handle = io.popen("which dnf 2>/dev/null")
     local result = handle:read("*a")
@@ -33,7 +41,7 @@ function plugin.install(packages)
 
     local names = {}
     for _, pkg in ipairs(packages) do
-        table.insert(names, pkg.name)
+        table.insert(names, package_spec(pkg))
     end
     local batch_string = table.concat(names, " ")
 
