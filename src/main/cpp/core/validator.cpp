@@ -78,8 +78,13 @@ std::vector<Validator::ValidationFinding> Validator::runOwaspScan(const Package&
 }
 
 Validator::ValidationPolicy Validator::loadPolicy() const {
-	// Skeleton hook: later this will read CLI flags or config to control prompting, thresholds and reports.
-	return {};
+	ValidationPolicy policy;
+	policy.promptOnUnsafe = DEFAULT_REQPACK_CONFIG.security.promptOnUnsafe ||
+		DEFAULT_REQPACK_CONFIG.security.onUnsafe == UnsafeAction::PROMPT;
+	policy.abortThreshold = to_string(DEFAULT_REQPACK_CONFIG.security.severityThreshold);
+	policy.abortScoreThreshold = DEFAULT_REQPACK_CONFIG.security.scoreThreshold;
+	policy.generateReport = DEFAULT_REQPACK_CONFIG.reports.enabled;
+	return policy;
 }
 
 bool Validator::exceedsThreshold(const std::vector<ValidationFinding>& findings, const ValidationPolicy& policy) const {
