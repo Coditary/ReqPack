@@ -2,24 +2,33 @@
 
 #include <CLI/CLI.hpp>
 
+#include "core/types.h"
+
+#include <filesystem>
 #include <memory>
-#include <map>
+#include <optional>
+#include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class Cli {
 
 public:
-    std::string command;
-    std::vector<std::string> packages;
-    std::map<std::string, bool> flags;
-
-
     Cli();
-    void parse(int argc, char* argv[]);
+    std::vector<Request> parse(int argc, char* argv[]);
 
     void print_help();
 
 private:
     std::unique_ptr<CLI::App> app;
+
+    static ActionType parse_action(const std::string& command);
+    static bool is_flag(const std::string& argument);
+    static std::optional<std::pair<std::string, std::string>> split_scoped_package(
+        const std::string& argument,
+        const std::set<std::string>& known_systems
+    );
+    static std::set<std::string> discover_systems();
+    static std::filesystem::path plugin_directory();
 };

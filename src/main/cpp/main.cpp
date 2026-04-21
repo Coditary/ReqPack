@@ -5,9 +5,9 @@
 
 int main(int argc, char* argv[]) {
     Cli cli;
-    cli.parse(argc, argv);
+    const std::vector<Request> requests = cli.parse(argc, argv);
 
-    if (cli.command.empty()) {
+    if (requests.empty()) {
         cli.print_help();
         return 0;
     }

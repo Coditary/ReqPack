@@ -2,8 +2,10 @@
 
 #include <boost/graph/adjacency_list.hpp>
 #include <string>
+#include <vector>
 
 enum class ActionType {
+	UNKNOWN,
 	INSTALL,
 	REMOVE,
 	UPDATE,
@@ -11,7 +13,8 @@ enum class ActionType {
 };
 
 struct Request {
-	ActionType action;
+	ActionType action{ActionType::UNKNOWN};
+	std::string system;
 	std::vector<std::string> packages;
 	std::vector<std::string> flags;
 };
@@ -33,4 +36,3 @@ struct PackageInfo {
 
 
 typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::directedS, Package> Graph;
-
