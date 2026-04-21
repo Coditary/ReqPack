@@ -4,8 +4,14 @@
 #include "output/logger.h"
 #include "plugins/lua_bridge.h"
 
+#include <filesystem>
+
 int main(int argc, char* argv[]) {
-    const ReqPackConfig config = DEFAULT_REQPACK_CONFIG;
+    Cli cli;
+    const ReqPackConfigOverrides configOverrides = cli.parseConfigOverrides(argc, argv);
+    const std::filesystem::path configPath = configOverrides.configPath.value_or(default_reqpack_config_path());
+    const ReqPackConfig fileConfig = load_config_from_lua(configPath, DEFAULT_REQPACK_CONFIG);
+    const ReqPackConfig config = apply_config_overrides(fileConfig, configOverrides);
     Logger logger;
 
     logger.setLevel(to_string(config.logging.level));
@@ -14,8 +20,6 @@ int main(int argc, char* argv[]) {
     if (config.logging.fileOutput) {
         logger.setFileSink(config.logging.filePath);
     }
-
-    Cli cli;
     const std::vector<Request> requests = cli.parse(argc, argv);
 
     if (requests.empty()) {

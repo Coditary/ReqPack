@@ -1,5 +1,7 @@
 #pragma once
 
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -106,7 +108,63 @@ struct ReqPackConfig {
     std::vector<std::string> enabledReportFormats{};
 };
 
+struct ReqPackConfigOverrides {
+    std::optional<std::filesystem::path> configPath;
+
+    std::optional<LogLevel> logLevel;
+    std::optional<std::string> logPattern;
+    std::optional<bool> fileOutput;
+    std::optional<std::string> logFilePath;
+    std::optional<bool> enableBacktrace;
+    std::optional<std::size_t> backtraceSize;
+
+    std::optional<bool> runSnykScan;
+    std::optional<bool> runOwaspScan;
+    std::optional<SeverityLevel> severityThreshold;
+    std::optional<double> scoreThreshold;
+    std::optional<UnsafeAction> onUnsafe;
+    std::optional<bool> promptOnUnsafe;
+
+    std::optional<bool> reportEnabled;
+    std::optional<ReportFormat> reportFormat;
+    std::optional<std::string> reportOutputPath;
+
+    std::optional<bool> dryRun;
+    std::optional<bool> stopOnFirstFailure;
+    std::optional<bool> useTransactionDb;
+
+    std::optional<bool> enableProxyExpansion;
+
+    std::optional<std::string> pluginDirectory;
+    std::optional<bool> autoLoadPlugins;
+
+    std::optional<bool> interactive;
+};
+
 inline const ReqPackConfig DEFAULT_REQPACK_CONFIG{};
+
+std::optional<SeverityLevel> severity_level_from_string(const std::string& severity);
+std::optional<LogLevel> log_level_from_string(const std::string& level);
+std::optional<ReportFormat> report_format_from_string(const std::string& format);
+std::optional<UnsafeAction> unsafe_action_from_string(const std::string& action);
+
+std::filesystem::path reqpack_home_directory();
+std::filesystem::path default_reqpack_config_path();
+
+ReqPackConfig load_config_from_lua(
+    const std::filesystem::path& configPath,
+    const ReqPackConfig& fallback = DEFAULT_REQPACK_CONFIG
+);
+
+ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackConfigOverrides& overrides);
+
+bool consume_cli_config_flag(
+    const std::vector<std::string>& arguments,
+    std::size_t& index,
+    ReqPackConfigOverrides& overrides
+);
+
+ReqPackConfigOverrides extract_cli_config_overrides(int argc, char* argv[]);
 
 inline std::string to_string(SeverityLevel severity) {
     switch (severity) {

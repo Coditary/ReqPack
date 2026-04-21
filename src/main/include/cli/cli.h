@@ -2,6 +2,7 @@
 
 #include <CLI/CLI.hpp>
 
+#include "core/configuration.h"
 #include "core/types.h"
 
 #include <filesystem>
@@ -17,6 +18,7 @@ class Cli {
 public:
     Cli();
     std::vector<Request> parse(int argc, char* argv[]);
+    ReqPackConfigOverrides parseConfigOverrides(int argc, char* argv[]) const;
 
     void print_help();
 
@@ -25,6 +27,7 @@ private:
 
     static ActionType parse_action(const std::string& command);
     static bool is_flag(const std::string& argument);
+    static bool is_help_flag(const std::string& argument);
     static std::optional<std::pair<std::string, std::string>> split_scoped_package(
         const std::string& argument,
         const std::set<std::string>& known_systems

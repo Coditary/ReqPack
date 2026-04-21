@@ -30,6 +30,7 @@ set(SOURCES
     src/main/cpp/cli/cli.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/plugins/lua_bridge.cpp
+    src/main/cpp/core/configuration.cpp
     src/main/cpp/core/orchestrator.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/validator.cpp

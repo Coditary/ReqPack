@@ -48,7 +48,38 @@ std::vector<Request> Cli::parse(int argc, char* argv[]) {
         return requests;
     }
 
-    const ActionType action = parse_action(arguments.front());
+    std::vector<std::string> requestArguments;
+    requestArguments.reserve(arguments.size());
+
+    for (std::size_t i = 0; i < arguments.size(); ++i) {
+        if (is_help_flag(arguments[i])) {
+            continue;
+        }
+
+        ReqPackConfigOverrides ignoredOverrides;
+        std::size_t configIndex = i;
+        if (consume_cli_config_flag(arguments, configIndex, ignoredOverrides)) {
+            i = configIndex;
+            continue;
+        }
+
+        requestArguments.push_back(arguments[i]);
+    }
+
+    if (requestArguments.empty()) {
+        return requests;
+    }
+
+    std::size_t actionIndex = requestArguments.size();
+    ActionType action = ActionType::UNKNOWN;
+    for (std::size_t i = 0; i < requestArguments.size(); ++i) {
+        action = parse_action(requestArguments[i]);
+        if (action != ActionType::UNKNOWN) {
+            actionIndex = i;
+            break;
+        }
+    }
+
     if (action == ActionType::UNKNOWN) {
         return requests;
     }
@@ -65,8 +96,8 @@ std::vector<Request> Cli::parse(int argc, char* argv[]) {
         return requests[it->second];
     };
 
-    for (std::size_t i = 1; i < arguments.size(); ++i) {
-        const std::string& argument = arguments[i];
+    for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
+        const std::string& argument = requestArguments[i];
 
         if (is_flag(argument)) {
             global_flags.push_back(argument.substr(2));
@@ -106,6 +137,10 @@ std::vector<Request> Cli::parse(int argc, char* argv[]) {
     return requests;
 }
 
+ReqPackConfigOverrides Cli::parseConfigOverrides(int argc, char* argv[]) const {
+    return extract_cli_config_overrides(argc, argv);
+}
+
 void Cli::print_help() {
     std::cout << app->help();
 }
@@ -131,6 +166,10 @@ ActionType Cli::parse_action(const std::string& command) {
 
 bool Cli::is_flag(const std::string& argument) {
     return argument.rfind("--", 0) == 0 && argument.size() > 2;
+}
+
+bool Cli::is_help_flag(const std::string& argument) {
+    return argument == "--help" || argument == "-h";
 }
 
 std::optional<std::pair<std::string, std::string>> Cli::split_scoped_package(
