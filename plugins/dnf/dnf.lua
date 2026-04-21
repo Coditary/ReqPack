@@ -1,14 +1,13 @@
--- fedora_dnf.lua
 plugin = {
     name = "Fedora DNF Manager",
-    version = "1.1.0",
+    version = "1.2.0",
     author = "Leodora",
-    description = "Echtes DNF Plugin für Fedora"
+    description = "Echtes DNF Plugin fuer Fedora"
 }
 
 local function sys_call(cmd)
     print("[DNF-Exec] " .. cmd)
-    local success, exit_type, code = os.execute(cmd)
+    local success = os.execute(cmd)
     return success
 end
 
@@ -24,7 +23,7 @@ function plugin.init()
     local handle = io.popen("which dnf 2>/dev/null")
     local result = handle:read("*a")
     handle:close()
-    
+
     if result == "" then
         print("[Lua: DNF] Fehler: dnf wurde auf diesem System nicht gefunden!")
         return false
@@ -46,17 +45,17 @@ function plugin.install(packages)
     local batch_string = table.concat(names, " ")
 
     print("[Lua: DNF] Installiere Batch: " .. batch_string)
-    
+
     local cmd = "sudo dnf install -y " .. batch_string
     return sys_call(cmd)
 end
 
 function plugin.remove(packages)
     if #packages == 0 then return true end
-    
+
     local names = {}
     for _, pkg in ipairs(packages) do table.insert(names, pkg.name) end
-    
+
     local cmd = "sudo dnf remove -y " .. table.concat(names, " ")
     return sys_call(cmd)
 end
@@ -108,8 +107,10 @@ function plugin.shutdown()
     return true
 end
 
-function plugin.getRequirements() return {} end
+function plugin.getRequirements()
+    return {}
+end
 
-function plugin.info(name) 
-    return { name = name, version = "unknown", description = "DNF Package" } 
+function plugin.info(name)
+    return { name = name, version = "unknown", description = "DNF Package" }
 end

@@ -11,7 +11,10 @@ private:
     sol::state m_lua;
     std::string m_name;
     std::string m_version;
+    std::string m_pluginId;
+    std::string m_pluginDirectory;
     std::string m_scriptPath;
+    std::string m_bootstrapPath;
     
     sol::table m_pluginTable;
 

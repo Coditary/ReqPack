@@ -3,6 +3,7 @@
 #include <CLI/CLI.hpp>
 
 #include "core/configuration.h"
+#include "core/registry_database.h"
 #include "core/types.h"
 
 #include <filesystem>

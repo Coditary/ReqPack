@@ -81,7 +81,28 @@ struct PlannerConfig {
     std::map<std::string, std::string> systemAliases{};
 };
 
+struct DownloaderConfig {
+    bool enabled{true};
+    bool followRedirects{true};
+    long connectTimeoutSeconds{10};
+    long requestTimeoutSeconds{60};
+    std::string userAgent{"ReqPack/0.1.0"};
+    std::map<std::string, std::string> pluginSources{};
+};
+
+struct RegistrySourceEntry {
+    std::string source{};
+    bool alias{false};
+    std::string description{};
+};
+
+using RegistrySourceMap = std::map<std::string, RegistrySourceEntry>;
+
 struct RegistryConfig {
+    std::string databasePath{"~/.reqpack/registry"};
+    std::string remoteUrl{};
+    std::string overlayPath{};
+    RegistrySourceMap sources{};
     std::string pluginDirectory{"./plugins"};
     bool autoLoadPlugins{true};
     bool shutDownPluginsOnExit{true};
@@ -103,6 +124,7 @@ struct ReqPackConfig {
     ReportConfig reports{};
     ExecutionConfig execution{};
     PlannerConfig planner{};
+    DownloaderConfig downloader{};
     RegistryConfig registry{};
     InteractionConfig interaction{};
 
@@ -137,6 +159,7 @@ struct ReqPackConfigOverrides {
 
     std::optional<bool> enableProxyExpansion;
 
+    std::optional<std::string> registryPath;
     std::optional<std::string> pluginDirectory;
     std::optional<bool> autoLoadPlugins;
 
@@ -152,6 +175,12 @@ std::optional<UnsafeAction> unsafe_action_from_string(const std::string& action)
 
 std::filesystem::path reqpack_home_directory();
 std::filesystem::path default_reqpack_config_path();
+std::filesystem::path default_reqpack_registry_path();
+std::filesystem::path registry_database_directory(const std::filesystem::path& registryPath);
+std::filesystem::path registry_source_file_path(const std::filesystem::path& registryPath);
+
+RegistrySourceMap load_registry_sources_from_lua(const std::filesystem::path& sourcePath);
+RegistrySourceMap collect_registry_sources(const ReqPackConfig& config);
 
 ReqPackConfig load_config_from_lua(
     const std::filesystem::path& configPath,

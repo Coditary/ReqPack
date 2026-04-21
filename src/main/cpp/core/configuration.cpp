@@ -101,6 +101,62 @@ std::filesystem::path expand_user_path(const std::filesystem::path& path) {
     return path;
 }
 
+RegistrySourceMap load_registry_sources_from_table(const sol::table& table) {
+    RegistrySourceMap sources;
+
+    for (const auto& [key, value] : table) {
+        if (key.get_type() != sol::type::string) {
+            continue;
+        }
+
+        RegistrySourceEntry entry;
+        if (value.get_type() == sol::type::string) {
+            entry.source = value.as<std::string>();
+        } else if (value.get_type() == sol::type::table) {
+            const sol::table entryTable = value.as<sol::table>();
+
+            if (const sol::optional<std::string> source = entryTable["source"]; source.has_value()) {
+                entry.source = source.value();
+            } else if (const sol::optional<std::string> url = entryTable["url"]; url.has_value()) {
+                entry.source = url.value();
+            } else if (const sol::optional<std::string> path = entryTable["path"]; path.has_value()) {
+                entry.source = path.value();
+            } else if (const sol::optional<std::string> target = entryTable["target"]; target.has_value()) {
+                entry.source = target.value();
+            }
+
+            if (const sol::optional<bool> alias = entryTable["alias"]; alias.has_value()) {
+                entry.alias = alias.value();
+            }
+            if (const sol::optional<std::string> description = entryTable["description"]; description.has_value()) {
+                entry.description = description.value();
+            }
+        } else {
+            continue;
+        }
+
+        if (entry.source.empty()) {
+            continue;
+        }
+
+        if (entry.alias) {
+            entry.source = to_lower(entry.source);
+        } else {
+            entry.source = expand_user_path(entry.source).string();
+        }
+
+        sources[to_lower(key.as<std::string>())] = std::move(entry);
+    }
+
+    return sources;
+}
+
+void merge_registry_sources(RegistrySourceMap& target, const RegistrySourceMap& source) {
+    for (const auto& [name, entry] : source) {
+        target[name] = entry;
+    }
+}
+
 template <typename Enum>
 void assign_if_present(const sol::table& table, const char* key, std::optional<Enum> (*converter)(const std::string&), Enum& target) {
     const sol::optional<std::string> value = table[key];
@@ -207,6 +263,80 @@ std::filesystem::path default_reqpack_config_path() {
     return reqpack_home_directory() / "config.lua";
 }
 
+std::filesystem::path default_reqpack_registry_path() {
+    return reqpack_home_directory() / "registry";
+}
+
+std::filesystem::path registry_database_directory(const std::filesystem::path& registryPath) {
+    const std::filesystem::path resolvedPath = expand_user_path(registryPath);
+    if (resolvedPath.has_extension()) {
+        return resolvedPath.parent_path();
+    }
+
+    return resolvedPath;
+}
+
+std::filesystem::path registry_source_file_path(const std::filesystem::path& registryPath) {
+    const std::filesystem::path resolvedPath = expand_user_path(registryPath);
+    if (resolvedPath.has_extension()) {
+        return resolvedPath;
+    }
+
+    return resolvedPath / "registry.lua";
+}
+
+RegistrySourceMap load_registry_sources_from_lua(const std::filesystem::path& sourcePath) {
+    const std::filesystem::path resolvedSourcePath = expand_user_path(sourcePath);
+    if (!std::filesystem::exists(resolvedSourcePath)) {
+        return {};
+    }
+
+    sol::state lua;
+    lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::table, sol::lib::string, sol::lib::math);
+
+    sol::load_result loadResult = lua.load_file(resolvedSourcePath.string());
+    if (!loadResult.valid()) {
+        return {};
+    }
+
+    const sol::protected_function_result executionResult = loadResult();
+    if (!executionResult.valid()) {
+        return {};
+    }
+
+    sol::table root;
+    if (executionResult.get_type() == sol::type::table) {
+        root = executionResult;
+    } else {
+        const sol::object registryObject = lua["registry"];
+        if (registryObject.get_type() != sol::type::table) {
+            return {};
+        }
+
+        root = registryObject.as<sol::table>();
+    }
+
+    const sol::optional<sol::table> sources = root["sources"];
+    return load_registry_sources_from_table(sources.has_value() ? sources.value() : root);
+}
+
+RegistrySourceMap collect_registry_sources(const ReqPackConfig& config) {
+    RegistrySourceMap sources;
+
+    for (const auto& [name, source] : config.downloader.pluginSources) {
+        sources[to_lower(name)] = RegistrySourceEntry{.source = source};
+    }
+
+    merge_registry_sources(sources, config.registry.sources);
+    merge_registry_sources(sources, load_registry_sources_from_lua(registry_source_file_path(config.registry.databasePath)));
+
+    if (!config.registry.overlayPath.empty()) {
+        merge_registry_sources(sources, load_registry_sources_from_lua(config.registry.overlayPath));
+    }
+
+    return sources;
+}
+
 ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, const ReqPackConfig& fallback) {
     ReqPackConfig config = fallback;
     const std::filesystem::path resolvedConfigPath = expand_user_path(configPath);
@@ -305,11 +435,43 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         }
     }
 
+    const sol::optional<sol::table> downloader = root["downloader"];
+    if (downloader.has_value()) {
+        assign_if_present(downloader.value(), "enabled", config.downloader.enabled);
+        assign_if_present(downloader.value(), "followRedirects", config.downloader.followRedirects);
+        assign_if_present(downloader.value(), "connectTimeoutSeconds", config.downloader.connectTimeoutSeconds);
+        assign_if_present(downloader.value(), "requestTimeoutSeconds", config.downloader.requestTimeoutSeconds);
+        assign_if_present(downloader.value(), "userAgent", config.downloader.userAgent);
+
+        const sol::optional<sol::table> pluginSources = downloader.value()["pluginSources"];
+        if (pluginSources.has_value()) {
+            for (const auto& [key, value] : pluginSources.value()) {
+                if (key.get_type() != sol::type::string || value.get_type() != sol::type::string) {
+                    continue;
+                }
+
+                config.downloader.pluginSources[to_lower(key.as<std::string>())] = value.as<std::string>();
+            }
+        }
+    }
+
     const sol::optional<sol::table> registry = root["registry"];
     if (registry.has_value()) {
+        assign_if_present(registry.value(), "databasePath", config.registry.databasePath);
+        assign_if_present(registry.value(), "remoteUrl", config.registry.remoteUrl);
+        assign_if_present(registry.value(), "overlayPath", config.registry.overlayPath);
         assign_if_present(registry.value(), "pluginDirectory", config.registry.pluginDirectory);
         assign_if_present(registry.value(), "autoLoadPlugins", config.registry.autoLoadPlugins);
         assign_if_present(registry.value(), "shutDownPluginsOnExit", config.registry.shutDownPluginsOnExit);
+
+        const sol::optional<sol::table> sources = registry.value()["sources"];
+        if (sources.has_value()) {
+            merge_registry_sources(config.registry.sources, load_registry_sources_from_table(sources.value()));
+        }
+    }
+    config.registry.databasePath = expand_user_path(config.registry.databasePath).string();
+    if (!config.registry.overlayPath.empty()) {
+        config.registry.overlayPath = expand_user_path(config.registry.overlayPath).string();
     }
     config.registry.pluginDirectory = expand_user_path(config.registry.pluginDirectory).string();
 
@@ -351,6 +513,7 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
 
     if (overrides.enableProxyExpansion.has_value()) config.planner.enableProxyExpansion = overrides.enableProxyExpansion.value();
 
+    if (overrides.registryPath.has_value()) config.registry.databasePath = expand_user_path(overrides.registryPath.value()).string();
     if (overrides.pluginDirectory.has_value()) config.registry.pluginDirectory = expand_user_path(overrides.pluginDirectory.value()).string();
     if (overrides.autoLoadPlugins.has_value()) config.registry.autoLoadPlugins = overrides.autoLoadPlugins.value();
 
@@ -463,6 +626,18 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
     if (argument == "--plugin-dir") {
         if (require_value(value)) overrides.pluginDirectory = value;
+        return true;
+    }
+    if (argument == "--registry" || argument == "--registry-path") {
+        if (require_value(value)) overrides.registryPath = value;
+        return true;
+    }
+    if (const std::optional<std::string> registryPath = inline_value("--registry=")) {
+        overrides.registryPath = registryPath.value();
+        return true;
+    }
+    if (const std::optional<std::string> registryPath = inline_value("--registry-path=")) {
+        overrides.registryPath = registryPath.value();
         return true;
     }
     if (argument == "--no-auto-load-plugins") {

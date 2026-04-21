@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/configuration.h"
+#include "core/registry_database.h"
 
 #include <vector>
 #include <memory>
@@ -20,12 +21,19 @@ enum class PluginState {
 class Registry {
 private:
     ReqPackConfig config;
+    RegistryDatabase database;
     std::map<std::string, std::unique_ptr<IPlugin>> m_plugins;
     std::map<std::string, PluginState> m_states;
+
+    std::string resolvePluginName(const std::string& name) const;
+    void materializePluginScript(const RegistryRecord& record) const;
 
 public:
     Registry(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
     ~Registry();
+
+    RegistryDatabase* getDatabase();
+    const RegistryDatabase* getDatabase() const;
 
     void scanDirectory(const std::string& directoryPath);
     bool loadPlugin(const std::string& name);

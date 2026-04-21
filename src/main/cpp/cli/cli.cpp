@@ -149,7 +149,9 @@ void Cli::print_help() {
     std::cout << app->help();
     std::cout << "\nConfig:\n"
               << "  --config <path>         Loads config from a custom Lua file\n"
-              << "  --config=<path>         Same as above\n";
+              << "  --config=<path>         Same as above\n"
+              << "  --registry <path>       Loads registry sources from a custom path\n"
+              << "  --registry=<path>       Same as above\n";
 }
 
 ActionType Cli::parse_action(const std::string& command) {
@@ -199,6 +201,16 @@ std::optional<std::pair<std::string, std::string>> Cli::split_scoped_package(
 std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {
     std::set<std::string> systems;
     const std::filesystem::path directory = config.registry.pluginDirectory;
+    RegistryDatabase registryDatabase(config);
+
+    if (registryDatabase.ensureReady()) {
+        for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
+            systems.insert(to_lower(record.name));
+            if (record.alias && !record.source.empty()) {
+                systems.insert(to_lower(record.source));
+            }
+        }
+    }
 
     if (!std::filesystem::exists(directory)) {
         for (const auto& [alias, target] : config.planner.systemAliases) {
@@ -210,6 +222,10 @@ std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
         if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
+            continue;
+        }
+
+        if (entry.path().parent_path().filename() != entry.path().stem()) {
             continue;
         }
 

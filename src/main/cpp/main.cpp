@@ -4,9 +4,15 @@
 #include "output/logger.h"
 #include "plugins/lua_bridge.h"
 
+#include <curl/curl.h>
+
 #include <filesystem>
 
 int main(int argc, char* argv[]) {
+    if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
+        return 1;
+    }
+
     Cli cli;
     const ReqPackConfigOverrides configOverrides = cli.parseConfigOverrides(argc, argv);
     const std::filesystem::path configPath = configOverrides.configPath.value_or(default_reqpack_config_path());
@@ -24,11 +30,13 @@ int main(int argc, char* argv[]) {
 
     if (requests.empty()) {
         cli.print_help();
+        curl_global_cleanup();
         return 0;
     }
 
     Orchestrator orchestrator(requests, config);
     orchestrator.run();
 
+    curl_global_cleanup();
     return 0;
 }

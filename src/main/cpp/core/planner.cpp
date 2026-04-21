@@ -3,12 +3,25 @@
 #include <boost/graph/topological_sort.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 
 namespace {
 
 bool samePackage(const Package& left, const Package& right) {
 	return left.action == right.action && left.system == right.system && left.name == right.name && left.version == right.version;
+}
+
+Package normalizeDependency(Package dependency, const std::string& defaultSystem) {
+	if (dependency.action == ActionType::UNKNOWN) {
+		dependency.action = ActionType::INSTALL;
+	}
+
+	if (dependency.system.empty()) {
+		dependency.system = defaultSystem;
+	}
+
+	return dependency;
 }
 
 Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& package) {
@@ -24,7 +37,7 @@ Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& pac
 
 }  // namespace
 
-Planner::Planner(Registry* registry, const ReqPackConfig& config) : config(config) {
+Planner::Planner(Registry* registry, RegistryDatabase* database, const ReqPackConfig& config) : config(config), downloader(database, config) {
 	this->registry = registry;
 }
 
@@ -77,16 +90,15 @@ void Planner::ensurePluginsAvailable(const std::vector<Request>& requests) const
 }
 
 bool Planner::pluginExists(const std::string& system) const {
-	if (this->registry->getPlugin(system) == nullptr) {
-		return false;
-	}
-
-	return this->registry->loadPlugin(system);
+	return this->registry->getPlugin(system) != nullptr;
 }
 
 void Planner::queuePluginDownload(const std::string& system) const {
-	(void)system;
-	// Skeleton hook: later this will enqueue a downloader request for a missing plugin.
+	if (!this->downloader.downloadPlugin(system)) {
+		return;
+	}
+
+	this->registry->scanDirectory(this->config.registry.pluginDirectory);
 }
 
 std::vector<Package> Planner::collectPluginDependencies(const std::vector<Request>& requests) const {
@@ -98,8 +110,9 @@ std::vector<Package> Planner::collectPluginDependencies(const std::vector<Reques
 			continue;
 		}
 
-		const std::vector<Package> pluginDependencies = plugin->getRequirements();
-		dependencies.insert(dependencies.end(), pluginDependencies.begin(), pluginDependencies.end());
+		for (Package dependency : plugin->getRequirements()) {
+			dependencies.push_back(normalizeDependency(std::move(dependency), request.system));
+		}
 	}
 
 	return dependencies;
@@ -120,14 +133,19 @@ void Planner::ensurePluginDependenciesAvailable(const std::vector<Package>& depe
 }
 
 bool Planner::dependencyExists(const Package& dependency) const {
-	(void)dependency;
-	// Skeleton hook: later this will inspect whether a dependency is already available.
-	return true;
+	return !dependency.system.empty() && this->registry->getPlugin(dependency.system) != nullptr;
 }
 
 void Planner::queueDependencyDownload(const Package& dependency) const {
-	(void)dependency;
-	// Skeleton hook: later this will enqueue a downloader request for a missing dependency.
+	if (dependency.system.empty()) {
+		return;
+	}
+
+	if (!this->downloader.downloadPlugin(dependency.system)) {
+		return;
+	}
+
+	this->registry->scanDirectory(this->config.registry.pluginDirectory);
 }
 
 Graph* Planner::buildDag(const std::vector<Request>& requests) const {
@@ -145,30 +163,40 @@ void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
 		return;
 	}
 
-	std::vector<Graph::vertex_descriptor> dependencyVertices;
-	IPlugin* plugin = this->registry->getPlugin(request.system);
-	if (plugin != nullptr) {
-		const std::vector<Package> dependencies = plugin->getRequirements();
-		dependencyVertices.reserve(dependencies.size());
+	std::function<Graph::vertex_descriptor(const Package&, std::vector<std::string>&)> addPackageWithDependencies;
+	addPackageWithDependencies = [&](const Package& package, std::vector<std::string>& activeSystems) -> Graph::vertex_descriptor {
+		const Graph::vertex_descriptor packageVertex = findOrAddPackageVertex(graph, package);
 
-		for (const Package& dependency : dependencies) {
-			dependencyVertices.push_back(findOrAddPackageVertex(graph, dependency));
+		if (std::find(activeSystems.begin(), activeSystems.end(), package.system) != activeSystems.end()) {
+			return packageVertex;
 		}
-	}
+
+		activeSystems.push_back(package.system);
+
+		IPlugin* plugin = this->registry->getPlugin(package.system);
+		if (plugin == nullptr && this->config.planner.autoDownloadMissingDependencies) {
+			this->queueDependencyDownload(Package{.action = ActionType::INSTALL, .system = package.system});
+			plugin = this->registry->getPlugin(package.system);
+		}
+
+		if (plugin != nullptr) {
+			for (Package dependency : plugin->getRequirements()) {
+				const Package normalizedDependency = normalizeDependency(std::move(dependency), package.system);
+				const Graph::vertex_descriptor dependencyVertex = addPackageWithDependencies(normalizedDependency, activeSystems);
+				if (dependencyVertex != packageVertex && !boost::edge(dependencyVertex, packageVertex, graph).second) {
+					boost::add_edge(dependencyVertex, packageVertex, graph);
+				}
+			}
+		}
+
+		activeSystems.pop_back();
+		return packageVertex;
+	};
 
 	for (const std::string& packageName : request.packages) {
 		const Package package = this->makeRequestedPackage(request, packageName);
-
-		const Graph::vertex_descriptor packageVertex = findOrAddPackageVertex(graph, package);
-		for (const Graph::vertex_descriptor dependencyVertex : dependencyVertices) {
-			if (dependencyVertex == packageVertex) {
-				continue;
-			}
-
-			if (!boost::edge(dependencyVertex, packageVertex, graph).second) {
-				boost::add_edge(dependencyVertex, packageVertex, graph);
-			}
-		}
+		std::vector<std::string> activeSystems;
+		(void)addPackageWithDependencies(package, activeSystems);
 	}
 }
 

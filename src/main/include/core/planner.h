@@ -1,11 +1,13 @@
 #pragma once
 
 #include "core/configuration.h"
+#include "core/downloader.h"
 #include "core/types.h"
 #include "core/registry.h"
 
 class Planner {
 	ReqPackConfig config;
+	Downloader downloader;
 	Registry* registry;
 
 	std::vector<Request> expandProxies(const std::vector<Request>& requests) const;
@@ -24,7 +26,7 @@ class Planner {
 	std::vector<Graph::vertex_descriptor> topologicallySort(const Graph& graph) const;
 
 public:
-	Planner(Registry* registry, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+	Planner(Registry* registry, RegistryDatabase* database, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
 	~Planner();
 
 	Graph* plan(const std::vector<Request>& requests);

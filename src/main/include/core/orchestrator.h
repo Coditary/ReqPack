@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/configuration.h"
+#include "core/registry_database.h"
 #include "core/registry.h"
 #include "core/planner.h"
 #include "core/validator.h"
