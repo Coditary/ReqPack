@@ -6,7 +6,7 @@ Orchestrator::Orchestrator(std::vector<Request> requests) : requests(std::move(r
 	this->registry  = new Registry();
 	this->planner   = new Planner(this->registry);
 	this->validator = new Validator();
-	this->executor  = new Executer();
+	this->executor  = new Executer(this->registry);
 }
 
 Orchestrator::~Orchestrator() {

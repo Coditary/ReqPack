@@ -1,7 +1,28 @@
 #include "plugins/lua_bridge.h"
 
+#include <iostream>
+
 LuaBridge::LuaBridge(const std::string& scriptPath) : m_scriptPath(scriptPath) {
     m_lua.open_libraries(sol::lib::base, sol::lib::os, sol::lib::io, sol::lib::table, sol::lib::string);
+
+    m_lua.new_usertype<Package>(
+        "Package",
+        sol::constructors<Package()>(),
+        "system", &Package::system,
+        "name", &Package::name,
+        "version", &Package::version
+    );
+
+    m_lua.new_usertype<PackageInfo>(
+        "PackageInfo",
+        sol::constructors<PackageInfo()>(),
+        "name", &PackageInfo::name,
+        "version", &PackageInfo::version,
+        "description", &PackageInfo::description,
+        "homepage", &PackageInfo::homepage,
+        "author", &PackageInfo::author,
+        "email", &PackageInfo::email
+    );
 
     auto loadResult = m_lua.script_file(m_scriptPath, sol::script_pass_on_error);
     if (loadResult.valid()) {

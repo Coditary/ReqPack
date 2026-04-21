@@ -8,7 +8,7 @@
 namespace {
 
 bool samePackage(const Package& left, const Package& right) {
-	return left.system == right.system && left.name == right.name && left.version == right.version;
+	return left.action == right.action && left.system == right.system && left.name == right.name && left.version == right.version;
 }
 
 Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& package) {
@@ -59,7 +59,11 @@ void Planner::ensurePluginsAvailable(const std::vector<Request>& requests) const
 }
 
 bool Planner::pluginExists(const std::string& system) const {
-	return this->registry->getPlugin(system) != nullptr;
+	if (this->registry->getPlugin(system) == nullptr) {
+		return false;
+	}
+
+	return this->registry->loadPlugin(system);
 }
 
 void Planner::queuePluginDownload(const std::string& system) const {
@@ -132,6 +136,7 @@ void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
 
 	for (const std::string& packageName : request.packages) {
 		Package package;
+		package.action = request.action;
 		package.system = request.system;
 		package.name = packageName;
 

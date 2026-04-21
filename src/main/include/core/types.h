@@ -20,6 +20,7 @@ struct Request {
 };
 
 struct Package {
+	ActionType action{ActionType::UNKNOWN};
 	std::string system;
 	std::string name;
 	std::string version;
