@@ -6,6 +6,7 @@ Planner::Planner(Registry* registry) {
 
 Planner::~Planner() {}
 
-Graph* Planner::plan() {
+Graph* Planner::plan(const std::vector<Request>& requests) {
+	(void)requests;
 	return nullptr;
 }

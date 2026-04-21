@@ -12,5 +12,8 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    Orchestrator orchestrator(requests);
+    orchestrator.run();
+
     return 0;
 }

@@ -10,6 +10,5 @@ public:
 	Planner(Registry* registry);
 	~Planner();
 
-	Graph* plan();
+	Graph* plan(const std::vector<Request>& requests);
 };
-

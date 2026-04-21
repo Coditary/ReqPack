@@ -14,12 +14,12 @@ class Orchestrator {
 	Planner*   planner;
 	Validator* validator;
 	Executer*  executor;
+	std::vector<Request> requests;
 
 
 public:
-	Orchestrator();
+	Orchestrator(std::vector<Request> requests);
 	~Orchestrator();
 
 	void run();
 };
-
