@@ -143,6 +143,9 @@ ReqPackConfigOverrides Cli::parseConfigOverrides(int argc, char* argv[]) const {
 
 void Cli::print_help() {
     std::cout << app->help();
+    std::cout << "\nConfig:\n"
+              << "  --config <path>         Loads config from a custom Lua file\n"
+              << "  --config=<path>         Same as above\n";
 }
 
 ActionType Cli::parse_action(const std::string& command) {

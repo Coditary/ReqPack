@@ -101,6 +101,7 @@ function plugin.shutdown()
 end
 
 function plugin.getRequirements() return {} end
+
 function plugin.info(name) 
     return { name = name, version = "unknown", description = "DNF Package" } 
 end

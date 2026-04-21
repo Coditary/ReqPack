@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <pwd.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 namespace {
 
@@ -25,6 +28,77 @@ std::optional<bool> bool_from_string(const std::string& value) {
     }
 
     return std::nullopt;
+}
+
+std::optional<std::filesystem::path> passwd_home_from_user(const std::string& username) {
+    if (username.empty()) {
+        return std::nullopt;
+    }
+
+    if (passwd* entry = getpwnam(username.c_str())) {
+        if (entry->pw_dir != nullptr && std::string(entry->pw_dir).size() > 0) {
+            return std::filesystem::path(entry->pw_dir);
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::filesystem::path> passwd_home_from_uid(uid_t uid) {
+    if (passwd* entry = getpwuid(uid)) {
+        if (entry->pw_dir != nullptr && std::string(entry->pw_dir).size() > 0) {
+            return std::filesystem::path(entry->pw_dir);
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::filesystem::path invoking_user_home_directory() {
+    const char* sudoUser = std::getenv("SUDO_USER");
+    if (sudoUser != nullptr && std::string(sudoUser).size() > 0) {
+        if (const auto home = passwd_home_from_user(sudoUser)) {
+            return home.value();
+        }
+    }
+
+    const char* sudoUid = std::getenv("SUDO_UID");
+    if (sudoUid != nullptr && std::string(sudoUid).size() > 0) {
+        try {
+            if (const auto home = passwd_home_from_uid(static_cast<uid_t>(std::stoul(sudoUid)))) {
+                return home.value();
+            }
+        } catch (...) {
+        }
+    }
+
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && std::string(home).size() > 0) {
+        return std::filesystem::path(home);
+    }
+
+    if (const auto passwdHome = passwd_home_from_uid(getuid())) {
+        return passwdHome.value();
+    }
+
+    return std::filesystem::current_path();
+}
+
+std::filesystem::path expand_user_path(const std::filesystem::path& path) {
+    const std::string raw = path.string();
+    if (raw.empty() || raw.front() != '~') {
+        return path;
+    }
+
+    const std::filesystem::path home = invoking_user_home_directory();
+    if (raw == "~") {
+        return home;
+    }
+    if (raw.rfind("~/", 0) == 0) {
+        return home / raw.substr(2);
+    }
+
+    return path;
 }
 
 template <typename Enum>
@@ -126,12 +200,7 @@ std::optional<UnsafeAction> unsafe_action_from_string(const std::string& action)
 }
 
 std::filesystem::path reqpack_home_directory() {
-    const char* home = std::getenv("HOME");
-    if (home == nullptr || std::string(home).empty()) {
-        return std::filesystem::current_path() / ".reqpack";
-    }
-
-    return std::filesystem::path(home) / ".reqpack";
+    return invoking_user_home_directory() / ".reqpack";
 }
 
 std::filesystem::path default_reqpack_config_path() {
@@ -140,14 +209,15 @@ std::filesystem::path default_reqpack_config_path() {
 
 ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, const ReqPackConfig& fallback) {
     ReqPackConfig config = fallback;
-    if (!std::filesystem::exists(configPath)) {
+    const std::filesystem::path resolvedConfigPath = expand_user_path(configPath);
+    if (!std::filesystem::exists(resolvedConfigPath)) {
         return config;
     }
 
     sol::state lua;
     lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::table, sol::lib::string, sol::lib::math);
 
-    sol::load_result loadResult = lua.load_file(configPath.string());
+    sol::load_result loadResult = lua.load_file(resolvedConfigPath.string());
     if (!loadResult.valid()) {
         return config;
     }
@@ -182,6 +252,7 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(logging.value(), "pattern", config.logging.pattern);
         assign_if_present(logging.value(), "level", log_level_from_string, config.logging.level);
     }
+    config.logging.filePath = expand_user_path(config.logging.filePath).string();
 
     const sol::optional<sol::table> security = root["security"];
     if (security.has_value()) {
@@ -203,6 +274,7 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(reports.value(), "includeDependencyGraph", config.reports.includeDependencyGraph);
         assign_if_present(reports.value(), "format", report_format_from_string, config.reports.format);
     }
+    config.reports.outputPath = expand_user_path(config.reports.outputPath).string();
 
     const sol::optional<sol::table> execution = root["execution"];
     if (execution.has_value()) {
@@ -228,6 +300,7 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(registry.value(), "autoLoadPlugins", config.registry.autoLoadPlugins);
         assign_if_present(registry.value(), "shutDownPluginsOnExit", config.registry.shutDownPluginsOnExit);
     }
+    config.registry.pluginDirectory = expand_user_path(config.registry.pluginDirectory).string();
 
     const sol::optional<sol::table> interaction = root["interaction"];
     if (interaction.has_value()) {
@@ -246,7 +319,7 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.logLevel.has_value()) config.logging.level = overrides.logLevel.value();
     if (overrides.logPattern.has_value()) config.logging.pattern = overrides.logPattern.value();
     if (overrides.fileOutput.has_value()) config.logging.fileOutput = overrides.fileOutput.value();
-    if (overrides.logFilePath.has_value()) config.logging.filePath = overrides.logFilePath.value();
+    if (overrides.logFilePath.has_value()) config.logging.filePath = expand_user_path(overrides.logFilePath.value()).string();
     if (overrides.enableBacktrace.has_value()) config.logging.enableBacktrace = overrides.enableBacktrace.value();
     if (overrides.backtraceSize.has_value()) config.logging.backtraceSize = overrides.backtraceSize.value();
 
@@ -259,7 +332,7 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
 
     if (overrides.reportEnabled.has_value()) config.reports.enabled = overrides.reportEnabled.value();
     if (overrides.reportFormat.has_value()) config.reports.format = overrides.reportFormat.value();
-    if (overrides.reportOutputPath.has_value()) config.reports.outputPath = overrides.reportOutputPath.value();
+    if (overrides.reportOutputPath.has_value()) config.reports.outputPath = expand_user_path(overrides.reportOutputPath.value()).string();
 
     if (overrides.dryRun.has_value()) config.execution.dryRun = overrides.dryRun.value();
     if (overrides.stopOnFirstFailure.has_value()) config.execution.stopOnFirstFailure = overrides.stopOnFirstFailure.value();
@@ -267,7 +340,7 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
 
     if (overrides.enableProxyExpansion.has_value()) config.planner.enableProxyExpansion = overrides.enableProxyExpansion.value();
 
-    if (overrides.pluginDirectory.has_value()) config.registry.pluginDirectory = overrides.pluginDirectory.value();
+    if (overrides.pluginDirectory.has_value()) config.registry.pluginDirectory = expand_user_path(overrides.pluginDirectory.value()).string();
     if (overrides.autoLoadPlugins.has_value()) config.registry.autoLoadPlugins = overrides.autoLoadPlugins.value();
 
     if (overrides.interactive.has_value()) config.interaction.interactive = overrides.interactive.value();
@@ -278,6 +351,23 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
 bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::size_t& index, ReqPackConfigOverrides& overrides) {
     const std::string& argument = arguments[index];
 
+    auto starts_with = [&](const std::string& prefix) {
+        return argument.rfind(prefix, 0) == 0;
+    };
+
+    auto inline_value = [&](const std::string& prefix) -> std::optional<std::string> {
+        if (!starts_with(prefix)) {
+            return std::nullopt;
+        }
+
+        const std::string value = argument.substr(prefix.size());
+        if (value.empty()) {
+            return std::nullopt;
+        }
+
+        return value;
+    };
+
     auto require_value = [&](std::string& value) -> bool {
         if (index + 1 >= arguments.size()) {
             return false;
@@ -287,6 +377,10 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     };
 
     std::string value;
+    if (const std::optional<std::string> customConfig = inline_value("--config=")) {
+        overrides.configPath = std::filesystem::path(customConfig.value());
+        return true;
+    }
     if (argument == "--config") {
         if (require_value(value)) overrides.configPath = std::filesystem::path(value);
         return true;
