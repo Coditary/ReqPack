@@ -29,6 +29,10 @@ Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package M
 }
 
 std::vector<Request> Cli::parse(int argc, char* argv[]) {
+    return this->parse(argc, argv, DEFAULT_REQPACK_CONFIG);
+}
+
+std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& config) {
     std::vector<Request> requests;
     std::vector<std::string> global_flags;
     std::unordered_map<std::string, std::size_t> request_index_by_system;
@@ -84,7 +88,7 @@ std::vector<Request> Cli::parse(int argc, char* argv[]) {
         return requests;
     }
 
-    const std::set<std::string> known_systems = discover_systems();
+    const std::set<std::string> known_systems = discover_systems(config);
     std::string current_system;
 
     auto ensure_request = [&](const std::string& system) -> Request& {
@@ -192,11 +196,15 @@ std::optional<std::pair<std::string, std::string>> Cli::split_scoped_package(
     return std::make_pair(system, argument.substr(separator + 1));
 }
 
-std::set<std::string> Cli::discover_systems() {
+std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {
     std::set<std::string> systems;
-    const std::filesystem::path directory = plugin_directory();
+    const std::filesystem::path directory = config.registry.pluginDirectory;
 
     if (!std::filesystem::exists(directory)) {
+        for (const auto& [alias, target] : config.planner.systemAliases) {
+            systems.insert(to_lower(alias));
+            systems.insert(to_lower(target));
+        }
         return systems;
     }
 
@@ -208,24 +216,10 @@ std::set<std::string> Cli::discover_systems() {
         systems.insert(to_lower(entry.path().stem().string()));
     }
 
-    return systems;
-}
-
-std::filesystem::path Cli::plugin_directory() {
-    std::filesystem::path current = std::filesystem::current_path();
-
-    while (true) {
-        const std::filesystem::path candidate = current / "plugins";
-        if (std::filesystem::exists(candidate)) {
-            return candidate;
-        }
-
-        if (current == current.root_path()) {
-            break;
-        }
-
-        current = current.parent_path();
+    for (const auto& [alias, target] : config.planner.systemAliases) {
+        systems.insert(to_lower(alias));
+        systems.insert(to_lower(target));
     }
 
-    return std::filesystem::current_path() / "plugins";
+    return systems;
 }

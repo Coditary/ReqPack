@@ -48,8 +48,18 @@ Graph* Planner::plan(const std::vector<Request>& requests) {
 }
 
 std::vector<Request> Planner::expandProxies(const std::vector<Request>& requests) const {
-	// Skeleton hook: later this will resolve proxy systems like 'python' -> 'pip'.
-	return requests;
+	std::vector<Request> expandedRequests = requests;
+
+	for (Request& request : expandedRequests) {
+		auto alias = this->config.planner.systemAliases.find(request.system);
+		if (alias == this->config.planner.systemAliases.end()) {
+			continue;
+		}
+
+		request.system = alias->second;
+	}
+
+	return expandedRequests;
 }
 
 void Planner::ensurePluginsAvailable(const std::vector<Request>& requests) const {
@@ -76,7 +86,7 @@ bool Planner::pluginExists(const std::string& system) const {
 
 void Planner::queuePluginDownload(const std::string& system) const {
 	(void)system;
-	// Skeleton hook: later this will create a download/install request for a missing plugin.
+	// Skeleton hook: later this will enqueue a downloader request for a missing plugin.
 }
 
 std::vector<Package> Planner::collectPluginDependencies(const std::vector<Request>& requests) const {
@@ -117,7 +127,7 @@ bool Planner::dependencyExists(const Package& dependency) const {
 
 void Planner::queueDependencyDownload(const Package& dependency) const {
 	(void)dependency;
-	// Skeleton hook: later this will create a download/install request for a missing dependency.
+	// Skeleton hook: later this will enqueue a downloader request for a missing dependency.
 }
 
 Graph* Planner::buildDag(const std::vector<Request>& requests) const {

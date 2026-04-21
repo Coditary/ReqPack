@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
     if (config.logging.fileOutput) {
         logger.setFileSink(config.logging.filePath);
     }
-    const std::vector<Request> requests = cli.parse(argc, argv);
+    const std::vector<Request> requests = cli.parse(argc, argv, config);
 
     if (requests.empty()) {
         cli.print_help();

@@ -18,6 +18,7 @@ class Cli {
 public:
     Cli();
     std::vector<Request> parse(int argc, char* argv[]);
+    std::vector<Request> parse(int argc, char* argv[], const ReqPackConfig& config);
     ReqPackConfigOverrides parseConfigOverrides(int argc, char* argv[]) const;
 
     void print_help();
@@ -32,6 +33,5 @@ private:
         const std::string& argument,
         const std::set<std::string>& known_systems
     );
-    static std::set<std::string> discover_systems();
-    static std::filesystem::path plugin_directory();
+    static std::set<std::string> discover_systems(const ReqPackConfig& config);
 };

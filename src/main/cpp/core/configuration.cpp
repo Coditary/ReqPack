@@ -292,6 +292,17 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(planner.value(), "autoDownloadMissingDependencies", config.planner.autoDownloadMissingDependencies);
         assign_if_present(planner.value(), "buildDependencyDag", config.planner.buildDependencyDag);
         assign_if_present(planner.value(), "topologicallySortGraph", config.planner.topologicallySortGraph);
+
+        const sol::optional<sol::table> aliases = planner.value()["systemAliases"];
+        if (aliases.has_value()) {
+            for (const auto& [key, value] : aliases.value()) {
+                if (key.get_type() != sol::type::string || value.get_type() != sol::type::string) {
+                    continue;
+                }
+
+                config.planner.systemAliases[to_lower(key.as<std::string>())] = to_lower(value.as<std::string>());
+            }
+        }
     }
 
     const sol::optional<sol::table> registry = root["registry"];

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -77,6 +78,7 @@ struct PlannerConfig {
     bool autoDownloadMissingDependencies{true};
     bool buildDependencyDag{true};
     bool topologicallySortGraph{true};
+    std::map<std::string, std::string> systemAliases{};
 };
 
 struct RegistryConfig {
