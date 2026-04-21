@@ -1,5 +1,29 @@
 #include "core/planner.h"
 
+#include <boost/graph/topological_sort.hpp>
+
+#include <algorithm>
+#include <utility>
+
+namespace {
+
+bool samePackage(const Package& left, const Package& right) {
+	return left.system == right.system && left.name == right.name && left.version == right.version;
+}
+
+Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& package) {
+	auto [vertex, vertexEnd] = boost::vertices(graph);
+	for (; vertex != vertexEnd; ++vertex) {
+		if (samePackage(graph[*vertex], package)) {
+			return *vertex;
+		}
+	}
+
+	return boost::add_vertex(package, graph);
+}
+
+}  // namespace
+
 Planner::Planner(Registry* registry) {
 	this->registry = registry;
 }
@@ -7,6 +31,126 @@ Planner::Planner(Registry* registry) {
 Planner::~Planner() {}
 
 Graph* Planner::plan(const std::vector<Request>& requests) {
-	(void)requests;
-	return nullptr;
+	const std::vector<Request> expandedRequests = this->expandProxies(requests);
+	this->ensurePluginsAvailable(expandedRequests);
+
+	const std::vector<Package> dependencies = this->collectPluginDependencies(expandedRequests);
+	this->ensurePluginDependenciesAvailable(dependencies);
+
+	Graph* graph = this->buildDag(expandedRequests);
+	(void)this->topologicallySort(*graph);
+
+	return graph;
+}
+
+std::vector<Request> Planner::expandProxies(const std::vector<Request>& requests) const {
+	// Skeleton hook: later this will resolve proxy systems like 'python' -> 'pip'.
+	return requests;
+}
+
+void Planner::ensurePluginsAvailable(const std::vector<Request>& requests) const {
+	for (const Request& request : requests) {
+		if (this->pluginExists(request.system)) {
+			continue;
+		}
+
+		this->queuePluginDownload(request.system);
+	}
+}
+
+bool Planner::pluginExists(const std::string& system) const {
+	return this->registry->getPlugin(system) != nullptr;
+}
+
+void Planner::queuePluginDownload(const std::string& system) const {
+	(void)system;
+	// Skeleton hook: later this will create a download/install request for a missing plugin.
+}
+
+std::vector<Package> Planner::collectPluginDependencies(const std::vector<Request>& requests) const {
+	std::vector<Package> dependencies;
+
+	for (const Request& request : requests) {
+		IPlugin* plugin = this->registry->getPlugin(request.system);
+		if (plugin == nullptr) {
+			continue;
+		}
+
+		const std::vector<Package> pluginDependencies = plugin->getRequirements();
+		dependencies.insert(dependencies.end(), pluginDependencies.begin(), pluginDependencies.end());
+	}
+
+	return dependencies;
+}
+
+void Planner::ensurePluginDependenciesAvailable(const std::vector<Package>& dependencies) const {
+	for (const Package& dependency : dependencies) {
+		if (this->dependencyExists(dependency)) {
+			continue;
+		}
+
+		this->queueDependencyDownload(dependency);
+	}
+}
+
+bool Planner::dependencyExists(const Package& dependency) const {
+	(void)dependency;
+	// Skeleton hook: later this will inspect whether a dependency is already available.
+	return true;
+}
+
+void Planner::queueDependencyDownload(const Package& dependency) const {
+	(void)dependency;
+	// Skeleton hook: later this will create a download/install request for a missing dependency.
+}
+
+Graph* Planner::buildDag(const std::vector<Request>& requests) const {
+	Graph* graph = new Graph();
+
+	for (const Request& request : requests) {
+		this->addRequestToGraph(*graph, request);
+	}
+
+	return graph;
+}
+
+void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
+	if (request.packages.empty()) {
+		return;
+	}
+
+	std::vector<Graph::vertex_descriptor> dependencyVertices;
+	IPlugin* plugin = this->registry->getPlugin(request.system);
+	if (plugin != nullptr) {
+		const std::vector<Package> dependencies = plugin->getRequirements();
+		dependencyVertices.reserve(dependencies.size());
+
+		for (const Package& dependency : dependencies) {
+			dependencyVertices.push_back(findOrAddPackageVertex(graph, dependency));
+		}
+	}
+
+	for (const std::string& packageName : request.packages) {
+		Package package;
+		package.system = request.system;
+		package.name = packageName;
+
+		const Graph::vertex_descriptor packageVertex = findOrAddPackageVertex(graph, package);
+		for (const Graph::vertex_descriptor dependencyVertex : dependencyVertices) {
+			if (dependencyVertex == packageVertex) {
+				continue;
+			}
+
+			if (!boost::edge(dependencyVertex, packageVertex, graph).second) {
+				boost::add_edge(dependencyVertex, packageVertex, graph);
+			}
+		}
+	}
+}
+
+std::vector<Graph::vertex_descriptor> Planner::topologicallySort(const Graph& graph) const {
+	std::vector<Graph::vertex_descriptor> order;
+	boost::topological_sort(graph, std::back_inserter(order));
+	std::reverse(order.begin(), order.end());
+	return order;
 }
