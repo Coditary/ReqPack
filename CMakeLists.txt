@@ -46,6 +46,7 @@ target_include_directories(ReqPack PRIVATE
 )
 
 target_link_libraries(ReqPack PRIVATE 
+	CLI11::CLI11
 	${LUA_LIBRARIES}
 	Boost::boost
 	spdlog::spdlog

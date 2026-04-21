@@ -1,20 +1,25 @@
 #pragma once
 
+#include <CLI/CLI.hpp>
+
+#include <memory>
+#include <map>
 #include <string>
 #include <vector>
-#include <map>
 
-struct CliOutput {
+class Cli {
+
+public:
     std::string command;
     std::vector<std::string> packages;
     std::map<std::string, bool> flags;
-};
 
-class Cli {
-public:
+
     Cli();
-    CliOutput parse(int argc, char* argv[]);
-    
-    void print_help();
-};
+    void parse(int argc, char* argv[]);
 
+    void print_help();
+
+private:
+    std::unique_ptr<CLI::App> app;
+};
