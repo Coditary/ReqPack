@@ -6,6 +6,74 @@
 #include <filesystem>
 #include <fstream>
 
+namespace {
+
+void remove_directory_contents(const std::filesystem::path& directory) {
+    std::error_code error;
+    if (!std::filesystem::exists(directory)) {
+        return;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (error) {
+            return;
+        }
+        std::filesystem::remove_all(entry.path(), error);
+        if (error) {
+            return;
+        }
+    }
+}
+
+void copy_directory_contents(const std::filesystem::path& source, const std::filesystem::path& target) {
+    std::error_code error;
+    std::filesystem::create_directories(target, error);
+    if (error) {
+        return;
+    }
+
+    for (auto it = std::filesystem::recursive_directory_iterator(source, error); it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+        if (error) {
+            return;
+        }
+
+        const std::filesystem::directory_entry& entry = *it;
+
+        const std::filesystem::path relativePath = std::filesystem::relative(entry.path(), source, error);
+        if (error) {
+            return;
+        }
+
+        if (!relativePath.empty() && *relativePath.begin() == ".git") {
+            if (entry.is_directory()) {
+                it.disable_recursion_pending();
+            }
+            continue;
+        }
+
+        const std::filesystem::path targetPath = target / relativePath;
+        if (entry.is_directory()) {
+            std::filesystem::create_directories(targetPath, error);
+            if (error) {
+                return;
+            }
+            continue;
+        }
+
+        std::filesystem::create_directories(targetPath.parent_path(), error);
+        if (error) {
+            return;
+        }
+
+        std::filesystem::copy_file(entry.path(), targetPath, std::filesystem::copy_options::overwrite_existing, error);
+        if (error) {
+            return;
+        }
+    }
+}
+
+}  // namespace
+
 Registry::Registry(const ReqPackConfig& config) : config(config), database(config) {}
 
 RegistryDatabase* Registry::getDatabase() {
@@ -42,6 +110,12 @@ void Registry::materializePluginScript(const RegistryRecord& record) const {
     }
 
     const std::filesystem::path targetDirectory = std::filesystem::path(this->config.registry.pluginDirectory) / record.name;
+    if (record.bundleSource && !record.bundlePath.empty() && std::filesystem::exists(record.bundlePath)) {
+        remove_directory_contents(targetDirectory);
+        copy_directory_contents(record.bundlePath, targetDirectory);
+        return;
+    }
+
     const std::filesystem::path targetPath = targetDirectory / (record.name + ".lua");
     std::filesystem::create_directories(targetPath.parent_path());
 

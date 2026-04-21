@@ -25,7 +25,6 @@ private:
     std::map<std::string, std::unique_ptr<IPlugin>> m_plugins;
     std::map<std::string, PluginState> m_states;
 
-    std::string resolvePluginName(const std::string& name) const;
     void materializePluginScript(const RegistryRecord& record) const;
 
 public:
@@ -34,6 +33,7 @@ public:
 
     RegistryDatabase* getDatabase();
     const RegistryDatabase* getDatabase() const;
+    std::string resolvePluginName(const std::string& name) const;
 
     void scanDirectory(const std::string& directoryPath);
     bool loadPlugin(const std::string& name);

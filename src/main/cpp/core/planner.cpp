@@ -24,6 +24,15 @@ Package normalizeDependency(Package dependency, const std::string& defaultSystem
 	return dependency;
 }
 
+Package resolveDependencySystem(Package dependency, const Registry* registry) {
+	if (dependency.system.empty()) {
+		return dependency;
+	}
+
+	dependency.system = registry->resolvePluginName(dependency.system);
+	return dependency;
+}
+
 Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& package) {
 	auto [vertex, vertexEnd] = boost::vertices(graph);
 	for (; vertex != vertexEnd; ++vertex) {
@@ -111,7 +120,7 @@ std::vector<Package> Planner::collectPluginDependencies(const std::vector<Reques
 		}
 
 		for (Package dependency : plugin->getRequirements()) {
-			dependencies.push_back(normalizeDependency(std::move(dependency), request.system));
+			dependencies.push_back(resolveDependencySystem(normalizeDependency(std::move(dependency), request.system), this->registry));
 		}
 	}
 
@@ -181,7 +190,7 @@ void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
 
 		if (plugin != nullptr) {
 			for (Package dependency : plugin->getRequirements()) {
-				const Package normalizedDependency = normalizeDependency(std::move(dependency), package.system);
+				const Package normalizedDependency = resolveDependencySystem(normalizeDependency(std::move(dependency), package.system), this->registry);
 				const Graph::vertex_descriptor dependencyVertex = addPackageWithDependencies(normalizedDependency, activeSystems);
 				if (dependencyVertex != packageVertex && !boost::edge(dependencyVertex, packageVertex, graph).second) {
 					boost::add_edge(dependencyVertex, packageVertex, graph);
@@ -203,7 +212,7 @@ void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
 Package Planner::makeRequestedPackage(const Request& request, const std::string& packageSpecifier) const {
 	Package package;
 	package.action = request.action;
-	package.system = request.system;
+	package.system = this->registry->resolvePluginName(request.system);
 
 	const std::size_t versionSeparator = packageSpecifier.rfind('@');
 	if (versionSeparator == std::string::npos || versionSeparator == 0 || versionSeparator == packageSpecifier.size() - 1) {

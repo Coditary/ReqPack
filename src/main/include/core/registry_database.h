@@ -17,6 +17,8 @@ struct RegistryRecord {
     std::string description;
     std::string script;
     std::string bootstrapScript;
+    std::string bundlePath;
+    bool bundleSource{false};
 };
 
 class RegistryDatabase {

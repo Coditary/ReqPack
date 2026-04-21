@@ -95,6 +95,22 @@ std::optional<std::pair<std::string, std::string>> read_plugin_directory(const s
     return read_plugin_payload_files(directory / (pluginName + ".lua"), directory / "bootstrap.lua");
 }
 
+std::optional<std::filesystem::path> plugin_bundle_root(const std::filesystem::path& basePath, const std::string& pluginName) {
+    const std::vector<std::filesystem::path> candidates = {
+        basePath / "plugins" / pluginName,
+        basePath / pluginName,
+        basePath
+    };
+
+    for (const std::filesystem::path& candidate : candidates) {
+        if (std::filesystem::exists(candidate / (pluginName + ".lua"))) {
+            return candidate;
+        }
+    }
+
+    return std::nullopt;
+}
+
 bool is_git_source(const std::string& source) {
     const std::string normalized = to_lower_copy(strip_query_fragment(source));
     return starts_with(normalized, "git+") ||
@@ -207,20 +223,29 @@ bool sync_git_repository(const ReqPackConfig& config, const std::string& source,
 }
 
 std::optional<std::pair<std::string, std::string>> read_plugin_repository(const std::filesystem::path& repositoryPath, const std::string& pluginName) {
-    const std::vector<std::pair<std::filesystem::path, std::filesystem::path>> candidates = {
-        {
-            repositoryPath / "plugins" / pluginName / (pluginName + ".lua"),
-            repositoryPath / "plugins" / pluginName / "bootstrap.lua"
-        },
-        {
-            repositoryPath / pluginName / (pluginName + ".lua"),
-            repositoryPath / pluginName / "bootstrap.lua"
-        }
-    };
+    if (const auto bundleRoot = plugin_bundle_root(repositoryPath, pluginName)) {
+        return read_plugin_directory(bundleRoot.value(), pluginName);
+    }
 
-    for (const auto& [scriptPath, bootstrapPath] : candidates) {
-        if (const auto payload = read_plugin_payload_files(scriptPath, bootstrapPath)) {
-            return payload;
+    return std::nullopt;
+}
+
+std::optional<std::filesystem::path> resolve_bundle_path(const ReqPackConfig& config, const std::string& source, const std::string& pluginName) {
+    const std::filesystem::path sourcePath(source);
+    if (std::filesystem::exists(sourcePath) && std::filesystem::is_directory(sourcePath)) {
+        if (const auto bundleRoot = plugin_bundle_root(sourcePath, pluginName)) {
+            return bundleRoot;
+        }
+
+        if (std::filesystem::exists(sourcePath / (pluginName + ".lua"))) {
+            return sourcePath;
+        }
+    }
+
+    if (is_git_source(source)) {
+        const std::filesystem::path repositoryPath = git_repository_cache_path(config, source, pluginName);
+        if (const auto bundleRoot = plugin_bundle_root(repositoryPath, pluginName)) {
+            return bundleRoot;
         }
     }
 
@@ -366,6 +391,8 @@ std::string serialize_record(const RegistryRecord& record) {
     stream << "source=" << escape_field(record.source) << '\n';
     stream << "alias=" << (record.alias ? "1" : "0") << '\n';
     stream << "description=" << escape_field(record.description) << '\n';
+    stream << "bundleSource=" << (record.bundleSource ? "1" : "0") << '\n';
+    stream << "bundlePath=" << escape_field(record.bundlePath) << '\n';
     stream << "bootstrap=" << escape_field(record.bootstrapScript) << '\n';
     stream << META_SEPARATOR;
     stream << record.script;
@@ -398,6 +425,10 @@ std::optional<RegistryRecord> deserialize_record(const std::string& name, const 
             record.alias = value == "1";
         } else if (key == "description") {
             record.description = value;
+        } else if (key == "bundleSource") {
+            record.bundleSource = value == "1";
+        } else if (key == "bundlePath") {
+            record.bundlePath = value;
         } else if (key == "bootstrap") {
             record.bootstrapScript = value;
         }
@@ -622,6 +653,8 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
         record.source = entry.source;
         record.alias = entry.alias;
         record.description = entry.description;
+        record.bundleSource = false;
+        record.bundlePath.clear();
 
         bool needsWrite = true;
         bool needsPayloadRefresh = !record.alias;
@@ -630,6 +663,8 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
             if (!sourceChanged) {
                 record.script = existing->script;
                 record.bootstrapScript = existing->bootstrapScript;
+                record.bundleSource = existing->bundleSource;
+                record.bundlePath = existing->bundlePath;
             }
             if (record.description.empty()) {
                 record.description = existing->description;
@@ -637,8 +672,16 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
 
             const bool descriptionChanged = existing->description != record.description;
 
+            if (!record.alias && !record.bundleSource) {
+                if (const auto bundlePath = resolve_bundle_path(this->config, record.source, record.name)) {
+                    record.bundleSource = true;
+                    record.bundlePath = bundlePath->string();
+                }
+            }
+
             needsPayloadRefresh = !record.alias && (sourceChanged || record.script.empty());
-            needsWrite = sourceChanged || descriptionChanged || needsPayloadRefresh;
+            needsWrite = sourceChanged || descriptionChanged || needsPayloadRefresh ||
+                         record.bundleSource != existing->bundleSource || record.bundlePath != existing->bundlePath;
 
             if (!needsWrite) {
                 continue;
@@ -649,6 +692,13 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
             if (const auto fetchedPayload = fetch_plugin_payload(this->config, record.source, record.name)) {
                 record.script = fetchedPayload->first;
                 record.bootstrapScript = fetchedPayload->second;
+                if (const auto bundlePath = resolve_bundle_path(this->config, record.source, record.name)) {
+                    record.bundleSource = true;
+                    record.bundlePath = bundlePath->string();
+                } else {
+                    record.bundleSource = false;
+                    record.bundlePath.clear();
+                }
                 needsWrite = true;
             }
         }

@@ -58,6 +58,70 @@ bool write_file(const std::filesystem::path& path, const std::string& content) {
     return written == content.size();
 }
 
+void remove_directory_contents(const std::filesystem::path& directory) {
+    std::error_code error;
+    if (!std::filesystem::exists(directory)) {
+        return;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (error) {
+            return;
+        }
+        std::filesystem::remove_all(entry.path(), error);
+        if (error) {
+            return;
+        }
+    }
+}
+
+void copy_directory_contents(const std::filesystem::path& source, const std::filesystem::path& target) {
+    std::error_code error;
+    std::filesystem::create_directories(target, error);
+    if (error) {
+        return;
+    }
+
+    for (auto it = std::filesystem::recursive_directory_iterator(source, error); it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+        if (error) {
+            return;
+        }
+
+        const std::filesystem::directory_entry& entry = *it;
+
+        const std::filesystem::path relativePath = std::filesystem::relative(entry.path(), source, error);
+        if (error) {
+            return;
+        }
+
+        if (!relativePath.empty() && *relativePath.begin() == ".git") {
+            if (entry.is_directory()) {
+                it.disable_recursion_pending();
+            }
+            continue;
+        }
+
+        const std::filesystem::path targetPath = target / relativePath;
+        if (entry.is_directory()) {
+            std::filesystem::create_directories(targetPath, error);
+            if (error) {
+                return;
+            }
+            continue;
+        }
+
+        std::filesystem::create_directories(targetPath.parent_path(), error);
+        if (error) {
+            return;
+        }
+
+        std::filesystem::copy_file(entry.path(), targetPath, std::filesystem::copy_options::overwrite_existing, error);
+        if (error) {
+            return;
+        }
+    }
+}
+
 }  // namespace
 
 bool Downloader::downloadPlugin(const std::string& system) const {
@@ -69,23 +133,36 @@ bool Downloader::downloadPlugin(const std::string& system) const {
         return false;
     }
 
+    const std::string resolvedSystem = this->resolve_plugin_name(system);
+
     std::optional<RegistryRecord> record = this->plugin_record_for(system);
+    if (!record.has_value() && resolvedSystem != system) {
+        record = this->plugin_record_for(resolvedSystem);
+    }
     if (!record.has_value() && !this->ensure_registry_source_file()) {
         return false;
     }
 
     if (!record.has_value()) {
         record = this->plugin_record_for(system);
+        if (!record.has_value() && resolvedSystem != system) {
+            record = this->plugin_record_for(resolvedSystem);
+        }
     }
 
     if (!record.has_value() || record->source.empty()) {
         return false;
     }
 
-    const std::string resolvedSystem = this->resolve_plugin_name(system);
     const std::filesystem::path targetPath = this->plugin_target_path(resolvedSystem);
 
     if (!record->script.empty()) {
+        if (record->bundleSource && !record->bundlePath.empty() && std::filesystem::exists(record->bundlePath)) {
+            remove_directory_contents(targetPath.parent_path());
+            copy_directory_contents(record->bundlePath, targetPath.parent_path());
+            return true;
+        }
+
         if (!write_file(targetPath, record->script)) {
             return false;
         }
