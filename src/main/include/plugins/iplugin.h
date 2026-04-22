@@ -24,9 +24,9 @@ public:
 	virtual std::vector<std::string> getCategories() = 0;
 	virtual std::vector<Package> getMissingPackages(const std::vector<Package>& packages) = 0;
 
-    virtual void install(const std::vector<Package>& packages) = 0;
-    virtual void remove(const std::vector<Package>& packages) = 0;
-    virtual void update(const std::vector<Package>& packages) = 0;
+    virtual bool install(const std::vector<Package>& packages) = 0;
+    virtual bool remove(const std::vector<Package>& packages) = 0;
+    virtual bool update(const std::vector<Package>& packages) = 0;
 
     virtual std::vector<PackageInfo> list() = 0;
     

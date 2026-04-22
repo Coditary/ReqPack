@@ -52,6 +52,7 @@ set(SOURCES
     src/main/cpp/core/configuration.cpp
     src/main/cpp/core/downloader.cpp
     src/main/cpp/core/registry_database.cpp
+    src/main/cpp/core/transaction_database.cpp
     src/main/cpp/core/orchestrator.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/validator.cpp

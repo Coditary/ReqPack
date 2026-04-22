@@ -248,21 +248,6 @@ function plugin.getRequirements()
     }
 end
 
-function plugin.getMissingPackages(packages)
-    local missing = {}
-    for _, pkg in ipairs(packages or {}) do
-        local artifact, err = artifact_from_pkg(pkg)
-        if artifact == nil then
-            print("[Lua: Maven] Fehler: " .. err)
-            table.insert(missing, pkg)
-        elseif not path_exists(artifact_repo_path(artifact)) then
-            table.insert(missing, pkg)
-        end
-    end
-
-    return missing
-end
-
 function plugin.install(packages)
     if #packages == 0 then return true end
 
@@ -365,4 +350,28 @@ function plugin.info(name)
         version = latestVersion,
         description = path_exists(repoPath) and ("Installed locally at " .. repoPath) or "Not present in local Maven repository"
     }
+end
+
+function plugin.getMissingPackages(packages)
+    local missing = {}
+    for _, pkg in ipairs(packages or {}) do
+        local artifact, err = artifact_from_pkg(pkg)
+        local action = pkg.action
+        if artifact == nil then
+            print("[Lua: Maven] Fehler: " .. err)
+            table.insert(missing, pkg)
+        elseif action == "remove" or action == 2 then
+            if path_exists(artifact_repo_path(artifact)) then
+                table.insert(missing, pkg)
+            end
+        elseif action == "update" or action == 3 then
+            if not path_exists(artifact_repo_path(artifact)) then
+                table.insert(missing, pkg)
+            end
+        elseif not path_exists(artifact_repo_path(artifact)) then
+            table.insert(missing, pkg)
+        end
+    end
+
+    return missing
 end

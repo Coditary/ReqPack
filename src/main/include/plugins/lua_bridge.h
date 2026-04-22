@@ -32,9 +32,9 @@ public:
     std::vector<std::string> getCategories() override;
     std::vector<Package> getMissingPackages(const std::vector<Package>& packages) override;
 
-    void install(const std::vector<Package>& packages) override;
-    void remove(const std::vector<Package>& packages) override;
-    void update(const std::vector<Package>& packages) override;
+    bool install(const std::vector<Package>& packages) override;
+    bool remove(const std::vector<Package>& packages) override;
+    bool update(const std::vector<Package>& packages) override;
 
     std::vector<PackageInfo> list() override;
     std::vector<PackageInfo> search(const std::string& prompt) override;

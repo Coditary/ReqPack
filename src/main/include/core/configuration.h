@@ -70,6 +70,7 @@ struct ExecutionConfig {
     bool checkVirtualFileSystemWrite{true};
     bool stopOnFirstFailure{false};
     bool dryRun{false};
+    std::string transactionDatabasePath{"~/.reqpack/transactions"};
 };
 
 struct PlannerConfig {

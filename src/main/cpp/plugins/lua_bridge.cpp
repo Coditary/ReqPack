@@ -92,6 +92,14 @@ void register_types(sol::state& lua) {
     lua.new_usertype<Package>(
         "Package",
         sol::constructors<Package()>(),
+        "action", sol::property(
+            [](const Package& package) {
+                return static_cast<int>(package.action);
+            },
+            [](Package& package, int action) {
+                package.action = static_cast<ActionType>(action);
+            }
+        ),
         "system", &Package::system,
         "name", &Package::name,
         "version", &Package::version
@@ -245,29 +253,36 @@ std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& p
 	return packages;
 }
 
-void LuaBridge::install(const std::vector<Package>& packages) {
+bool LuaBridge::install(const std::vector<Package>& packages) {
     sol::protected_function func = m_pluginTable["install"];
     if (func.valid()) {
         auto result = func(packages);
         if (!result.valid()) {
             sol::error err = result;
             std::cerr << "Lua Error (install): " << err.what() << std::endl;
+            return false;
         }
+		return result.return_count() == 0 ? true : result.get<bool>();
     }
+	return false;
 }
 
-void LuaBridge::remove(const std::vector<Package>& packages) {
+bool LuaBridge::remove(const std::vector<Package>& packages) {
     sol::protected_function func = m_pluginTable["remove"];
     if (func.valid()) {
-        func(packages);
+		auto result = func(packages);
+		return result.valid() ? (result.return_count() == 0 ? true : result.get<bool>()) : false;
     }
+	return false;
 }
 
-void LuaBridge::update(const std::vector<Package>& packages) {
+bool LuaBridge::update(const std::vector<Package>& packages) {
     sol::protected_function func = m_pluginTable["update"];
     if (func.valid()) {
-        func(packages);
+		auto result = func(packages);
+		return result.valid() ? (result.return_count() == 0 ? true : result.get<bool>()) : false;
     }
+	return false;
 }
 
 std::vector<Package> LuaBridge::getRequirements() {

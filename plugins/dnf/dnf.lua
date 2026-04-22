@@ -18,6 +18,15 @@ local function command_succeeds(cmd)
     return success == true or success == 0 or code == 0
 end
 
+local function command_exit_code(cmd)
+    local success, _, code = os.execute(cmd)
+    if success == true or success == 0 then
+        return 0
+    end
+
+    return tonumber(code) or 1
+end
+
 local function sys_call(cmd)
     print("[DNF-Exec] " .. cmd)
     return command_succeeds(cmd)
@@ -29,6 +38,14 @@ local function package_spec(pkg)
     end
 
     return pkg.name .. "-" .. pkg.version
+end
+
+local function package_installed(name)
+    return command_succeeds("rpm -q --quiet " .. shell_quote(name) .. " >/dev/null 2>&1")
+end
+
+local function package_has_update(name)
+    return command_exit_code("dnf check-update --quiet " .. shell_quote(name) .. " >/dev/null 2>&1") == 100
 end
 
 local function command_exists(name)
@@ -57,7 +74,21 @@ end
 function plugin.getMissingPackages(packages)
     local missing = {}
     for _, pkg in ipairs(packages or {}) do
-        if not command_succeeds("rpm -q --quiet " .. shell_quote(package_spec(pkg)) .. " >/dev/null 2>&1") then
+        local action = pkg.action
+        local installed = package_installed(package_spec(pkg))
+        if action == "remove" or action == 2 then
+            if package_installed(pkg.name) then
+                table.insert(missing, pkg)
+            end
+        elseif action == "update" or action == 3 then
+            if pkg.version ~= nil and pkg.version ~= "" then
+                if not installed then
+                    table.insert(missing, pkg)
+                end
+            elseif package_installed(pkg.name) and package_has_update(pkg.name) then
+                table.insert(missing, pkg)
+            end
+        elseif not installed then
             table.insert(missing, pkg)
         end
     end
@@ -114,7 +145,7 @@ function plugin.update(packages)
     local cmd = "sudo dnf upgrade -y"
     if #packages > 0 then
         local names = {}
-        for _, pkg in ipairs(packages) do table.insert(names, pkg.name) end
+        for _, pkg in ipairs(packages) do table.insert(names, package_spec(pkg)) end
         cmd = cmd .. " " .. table.concat(names, " ")
     end
     return sys_call(cmd)

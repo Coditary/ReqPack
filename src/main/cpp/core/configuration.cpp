@@ -413,7 +413,9 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(execution.value(), "checkVirtualFileSystemWrite", config.execution.checkVirtualFileSystemWrite);
         assign_if_present(execution.value(), "stopOnFirstFailure", config.execution.stopOnFirstFailure);
         assign_if_present(execution.value(), "dryRun", config.execution.dryRun);
+        assign_if_present(execution.value(), "transactionDatabasePath", config.execution.transactionDatabasePath);
     }
+    config.execution.transactionDatabasePath = expand_user_path(config.execution.transactionDatabasePath).string();
 
     const sol::optional<sol::table> planner = root["planner"];
     if (planner.has_value()) {
