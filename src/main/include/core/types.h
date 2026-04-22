@@ -9,7 +9,8 @@ enum class ActionType {
 	INSTALL,
 	REMOVE,
 	UPDATE,
-	SEARCH
+	SEARCH,
+	ENSURE
 };
 
 struct Request {

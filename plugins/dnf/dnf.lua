@@ -5,10 +5,22 @@ plugin = {
     description = "Echtes DNF Plugin fuer Fedora"
 }
 
+local function trim(value)
+    return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function shell_quote(value)
+    return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function command_succeeds(cmd)
+    local success, _, code = os.execute(cmd)
+    return success == true or success == 0 or code == 0
+end
+
 local function sys_call(cmd)
     print("[DNF-Exec] " .. cmd)
-    local success = os.execute(cmd)
-    return success
+    return command_succeeds(cmd)
 end
 
 local function package_spec(pkg)
@@ -19,12 +31,19 @@ local function package_spec(pkg)
     return pkg.name .. "-" .. pkg.version
 end
 
-function plugin.init()
-    local handle = io.popen("which dnf 2>/dev/null")
-    local result = handle:read("*a")
-    handle:close()
+local function command_exists(name)
+    local handle = io.popen("command -v " .. name .. " 2>/dev/null")
+    if handle == nil then
+        return false
+    end
 
-    if result == "" then
+    local result = handle:read("*a") or ""
+    handle:close()
+    return trim(result) ~= ""
+end
+
+function plugin.init()
+    if not command_exists("dnf") then
         print("[Lua: DNF] Fehler: dnf wurde auf diesem System nicht gefunden!")
         return false
     end
@@ -33,6 +52,17 @@ end
 
 function plugin.getCategories()
     return { "System", "RPM", "Fedora Native" }
+end
+
+function plugin.getMissingPackages(packages)
+    local missing = {}
+    for _, pkg in ipairs(packages or {}) do
+        if not command_succeeds("rpm -q --quiet " .. shell_quote(package_spec(pkg)) .. " >/dev/null 2>&1") then
+            table.insert(missing, pkg)
+        end
+    end
+
+    return missing
 end
 
 function plugin.install(packages)

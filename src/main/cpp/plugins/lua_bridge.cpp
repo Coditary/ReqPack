@@ -4,6 +4,7 @@
 #include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 
 namespace {
 
@@ -49,20 +50,15 @@ ActionType action_from_lua_object(const sol::object& object) {
     return ActionType::UNKNOWN;
 }
 
-std::vector<Package> packages_from_lua_result(sol::protected_function_result& result) {
-    if (result.return_count() == 0) {
-        return {};
-    }
+std::optional<std::vector<Package>> packages_from_lua_object(const sol::object& value) {
+	if (!value.valid() || value.get_type() != sol::type::table) {
+		return std::nullopt;
+	}
 
-    const sol::object value = result.get<sol::object>();
-    if (!value.valid() || value.get_type() != sol::type::table) {
-        return {};
-    }
-
-    std::vector<Package> packages;
-    const sol::table packageList = value.as<sol::table>();
-    for (const auto& [_, entry] : packageList) {
-        Package package;
+	std::vector<Package> packages;
+	const sol::table packageList = value.as<sol::table>();
+	for (const auto& [_, entry] : packageList) {
+		Package package;
 
         if (entry.get_type() == sol::type::userdata) {
             package = entry.as<Package>();
@@ -86,10 +82,10 @@ std::vector<Package> packages_from_lua_result(sol::protected_function_result& re
             package.version = version.value();
         }
 
-        packages.push_back(std::move(package));
-    }
+		packages.push_back(std::move(package));
+	}
 
-    return packages;
+	return packages;
 }
 
 void register_types(sol::state& lua) {
@@ -167,6 +163,11 @@ bool LuaBridge::init() {
         return false;
     }
 
+    if (m_pluginTable["getMissingPackages"].get_type() != sol::type::function) {
+        std::cerr << "[Lua API Error] getMissingPackages(packages) is required." << std::endl;
+        return false;
+    }
+
     sol::protected_function bootstrap = m_lua["bootstrap"];
     if (bootstrap.valid()) {
         auto bootstrapResult = bootstrap();
@@ -215,6 +216,35 @@ std::vector<std::string> LuaBridge::getCategories() {
     return {};
 }
 
+std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& packages) {
+	sol::protected_function func = m_pluginTable["getMissingPackages"];
+    if (!func.valid()) {
+        std::cerr << "[Lua API Error] getMissingPackages(packages) is required." << std::endl;
+        return packages;
+    }
+
+	auto result = func(packages);
+    if (result.valid()) {
+		if (result.return_count() == 0) {
+			std::cerr << "[Lua API Error] getMissingPackages(packages) must return a package list." << std::endl;
+			return packages;
+		}
+
+		if (const sol::object value = result.get<sol::object>(); value.valid()) {
+			if (const auto missingPackages = packages_from_lua_object(value)) {
+				return missingPackages.value();
+			}
+		}
+
+		std::cerr << "[Lua API Error] getMissingPackages(packages) must return a package list." << std::endl;
+		return packages;
+    }
+
+	sol::error err = result;
+	std::cerr << "Lua Error (getMissingPackages): " << err.what() << std::endl;
+	return packages;
+}
+
 void LuaBridge::install(const std::vector<Package>& packages) {
     sol::protected_function func = m_pluginTable["install"];
     if (func.valid()) {
@@ -244,8 +274,12 @@ std::vector<Package> LuaBridge::getRequirements() {
     sol::protected_function func = m_pluginTable["getRequirements"];
     if (func.valid()) {
         auto result = func();
-        if (result.valid()) {
-            return packages_from_lua_result(result);
+        if (result.valid() && result.return_count() > 0) {
+			if (const sol::object value = result.get<sol::object>(); value.valid()) {
+				if (const auto requirements = packages_from_lua_object(value)) {
+					return requirements.value();
+				}
+			}
         }
     }
     return {};

@@ -5,7 +5,7 @@
 #include <vector>
 #include "core/types.h"
 
-#define REQPACK_API_VERSION 1
+#define REQPACK_API_VERSION 2
 
 class IPlugin {
 public:
@@ -20,8 +20,9 @@ public:
     virtual std::string getName() const = 0;
     virtual std::string getVersion() const = 0;
     
-    virtual std::vector<Package> getRequirements() = 0;
+	virtual std::vector<Package> getRequirements() = 0;
 	virtual std::vector<std::string> getCategories() = 0;
+	virtual std::vector<Package> getMissingPackages(const std::vector<Package>& packages) = 0;
 
     virtual void install(const std::vector<Package>& packages) = 0;
     virtual void remove(const std::vector<Package>& packages) = 0;

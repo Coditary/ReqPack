@@ -129,10 +129,11 @@ void Executer::dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const {
 		return;
 	}
 
-	switch (taskGroup.action) {
-		case ActionType::INSTALL:
-			plugin->install(taskGroup.packages);
-			break;
+		switch (taskGroup.action) {
+			case ActionType::INSTALL:
+			case ActionType::ENSURE:
+				plugin->install(taskGroup.packages);
+				break;
 		case ActionType::REMOVE:
 			plugin->remove(taskGroup.packages);
 			break;

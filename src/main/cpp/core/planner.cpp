@@ -3,13 +3,34 @@
 #include <boost/graph/topological_sort.hpp>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <map>
 #include <utility>
 
 namespace {
 
 bool samePackage(const Package& left, const Package& right) {
 	return left.action == right.action && left.system == right.system && left.name == right.name && left.version == right.version;
+}
+
+bool containsOnlyAction(const std::vector<Request>& requests, const ActionType action) {
+	return !requests.empty() && std::all_of(requests.begin(), requests.end(), [action](const Request& request) {
+		return request.action == action;
+	});
+}
+
+std::filesystem::path requirementsMarkerPath(const ReqPackConfig& config, const std::string& system) {
+	return std::filesystem::path(config.registry.pluginDirectory) / system / ".requirements_ready";
+}
+
+std::string packageSpecifierFromPackage(const Package& package) {
+	if (package.version.empty()) {
+		return package.name;
+	}
+
+	return package.name + "@" + package.version;
 }
 
 Package normalizeDependency(Package dependency, const std::string& defaultSystem) {
@@ -57,11 +78,16 @@ Graph* Planner::plan(const std::vector<Request>& requests) {
 		this->expandProxies(requests) :
 		requests;
 	this->ensurePluginsAvailable(expandedRequests);
+	const std::vector<Request> filteredRequests = this->filterRequestedPackages(expandedRequests);
 
-	const std::vector<Package> dependencies = this->collectPluginDependencies(expandedRequests);
-	this->ensurePluginDependenciesAvailable(dependencies);
-
-	Graph* graph = this->buildDag(expandedRequests);
+	Graph* graph = nullptr;
+	if (containsOnlyAction(filteredRequests, ActionType::ENSURE)) {
+		const std::vector<Package> dependencies = this->collectPluginDependencies(filteredRequests);
+		this->ensurePluginDependenciesAvailable(dependencies);
+		graph = this->buildDependencyDag(this->filterMissingDependencies(dependencies));
+	} else {
+		graph = this->buildDag(filteredRequests);
+	}
 	if (this->config.planner.topologicallySortGraph) {
 		(void)this->topologicallySort(*graph);
 	}
@@ -110,6 +136,94 @@ void Planner::queuePluginDownload(const std::string& system) const {
 	this->registry->scanDirectory(this->config.registry.pluginDirectory);
 }
 
+bool Planner::shouldInstallPluginDependencies(const std::string& system) const {
+	const std::string resolvedSystem = this->registry->resolvePluginName(system);
+	if (this->pluginRequirementsProvisioned(resolvedSystem)) {
+		return false;
+	}
+
+	if (this->pluginRequirementsSatisfied(resolvedSystem)) {
+		this->markPluginRequirementsProvisioned(resolvedSystem);
+		return false;
+	}
+
+	return true;
+}
+
+bool Planner::pluginRequirementsSatisfied(const std::string& system) const {
+	IPlugin* plugin = this->registry->getPlugin(system);
+	if (plugin == nullptr || !this->registry->loadPlugin(system)) {
+		return false;
+	}
+
+	std::vector<Package> requirements;
+	for (Package dependency : plugin->getRequirements()) {
+		requirements.push_back(resolveDependencySystem(normalizeDependency(std::move(dependency), system), this->registry));
+	}
+
+	return this->filterMissingDependencies(requirements).empty();
+}
+
+bool Planner::pluginRequirementsProvisioned(const std::string& system) const {
+	return std::filesystem::exists(requirementsMarkerPath(this->config, system));
+}
+
+void Planner::markPluginRequirementsProvisioned(const std::string& system) const {
+	const std::filesystem::path markerPath = requirementsMarkerPath(this->config, system);
+	std::error_code directoryError;
+	std::filesystem::create_directories(markerPath.parent_path(), directoryError);
+	if (directoryError) {
+		return;
+	}
+
+	std::ofstream marker(markerPath, std::ios::binary | std::ios::trunc);
+	if (!marker) {
+		return;
+	}
+
+	marker << "ready\n";
+}
+
+std::vector<Request> Planner::filterRequestedPackages(const std::vector<Request>& requests) const {
+	std::vector<Request> filteredRequests;
+	filteredRequests.reserve(requests.size());
+
+	for (const Request& request : requests) {
+		if (request.action != ActionType::INSTALL || request.packages.empty()) {
+			filteredRequests.push_back(request);
+			continue;
+		}
+
+		IPlugin* plugin = this->registry->getPlugin(request.system);
+		if (plugin == nullptr || !this->registry->loadPlugin(request.system)) {
+			filteredRequests.push_back(request);
+			continue;
+		}
+
+		std::vector<Package> requestedPackages;
+		requestedPackages.reserve(request.packages.size());
+		for (const std::string& packageSpecifier : request.packages) {
+			requestedPackages.push_back(this->makeRequestedPackage(request, packageSpecifier));
+		}
+
+		const std::vector<Package> missingPackages = plugin->getMissingPackages(requestedPackages);
+		if (missingPackages.empty()) {
+			continue;
+		}
+
+		Request filteredRequest = request;
+		filteredRequest.packages.clear();
+		filteredRequest.packages.reserve(missingPackages.size());
+		for (const Package& missingPackage : missingPackages) {
+			filteredRequest.packages.push_back(packageSpecifierFromPackage(missingPackage));
+		}
+
+		filteredRequests.push_back(std::move(filteredRequest));
+	}
+
+	return filteredRequests;
+}
+
 std::vector<Package> Planner::collectPluginDependencies(const std::vector<Request>& requests) const {
 	std::vector<Package> dependencies;
 
@@ -125,6 +239,41 @@ std::vector<Package> Planner::collectPluginDependencies(const std::vector<Reques
 	}
 
 	return dependencies;
+}
+
+std::vector<Package> Planner::filterMissingDependencies(const std::vector<Package>& dependencies) const {
+	std::vector<Package> missingDependencies;
+	std::map<std::string, std::vector<Package>> dependenciesBySystem;
+	std::map<std::string, IPlugin*> pluginsBySystem;
+
+	for (const Package& dependency : dependencies) {
+		if (dependency.system.empty()) {
+			missingDependencies.push_back(dependency);
+			continue;
+		}
+
+		if (!this->dependencyExists(dependency) && this->config.planner.autoDownloadMissingDependencies) {
+			this->queueDependencyDownload(dependency);
+		}
+
+		IPlugin* plugin = this->registry->getPlugin(dependency.system);
+		if (plugin == nullptr || !this->registry->loadPlugin(dependency.system)) {
+			missingDependencies.push_back(dependency);
+			continue;
+		}
+
+		const std::string resolvedSystem = this->registry->resolvePluginName(dependency.system);
+		dependenciesBySystem[resolvedSystem].push_back(dependency);
+		pluginsBySystem[resolvedSystem] = plugin;
+	}
+
+	for (auto& [system, systemDependencies] : dependenciesBySystem) {
+		IPlugin* plugin = pluginsBySystem[system];
+		const std::vector<Package> pluginMissingDependencies = plugin->getMissingPackages(systemDependencies);
+		missingDependencies.insert(missingDependencies.end(), pluginMissingDependencies.begin(), pluginMissingDependencies.end());
+	}
+
+	return missingDependencies;
 }
 
 void Planner::ensurePluginDependenciesAvailable(const std::vector<Package>& dependencies) const {
@@ -159,39 +308,78 @@ void Planner::queueDependencyDownload(const Package& dependency) const {
 
 Graph* Planner::buildDag(const std::vector<Request>& requests) const {
 	Graph* graph = new Graph();
+	std::map<std::string, bool> includeDependenciesBySystem;
 
 	for (const Request& request : requests) {
-		this->addRequestToGraph(*graph, request);
+		const std::string resolvedSystem = this->registry->resolvePluginName(request.system);
+		bool includeDependencies = false;
+		if (request.action == ActionType::INSTALL) {
+			const auto it = includeDependenciesBySystem.find(resolvedSystem);
+			if (it == includeDependenciesBySystem.end()) {
+				includeDependencies = this->shouldInstallPluginDependencies(resolvedSystem);
+				includeDependenciesBySystem.emplace(resolvedSystem, includeDependencies);
+			} else {
+				includeDependencies = it->second;
+			}
+		}
+
+		this->addRequestToGraph(*graph, request, includeDependencies);
 	}
 
 	return graph;
 }
 
-void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
+Graph* Planner::buildDependencyDag(const std::vector<Package>& dependencies) const {
+	Graph* graph = new Graph();
+
+	for (const Package& dependency : dependencies) {
+		this->addPackageToGraph(*graph, dependency);
+	}
+
+	return graph;
+}
+
+void Planner::addRequestToGraph(Graph& graph, const Request& request, bool includeDependencies) const {
 	if (request.packages.empty()) {
 		return;
 	}
 
-	std::function<Graph::vertex_descriptor(const Package&, std::vector<std::string>&)> addPackageWithDependencies;
-	addPackageWithDependencies = [&](const Package& package, std::vector<std::string>& activeSystems) -> Graph::vertex_descriptor {
-		const Graph::vertex_descriptor packageVertex = findOrAddPackageVertex(graph, package);
+	for (const std::string& packageName : request.packages) {
+		const Package package = this->makeRequestedPackage(request, packageName);
+		if (includeDependencies) {
+			this->addPackageToGraph(graph, package);
+			continue;
+		}
 
-		if (std::find(activeSystems.begin(), activeSystems.end(), package.system) != activeSystems.end()) {
+		(void)findOrAddPackageVertex(graph, package);
+	}
+}
+
+void Planner::addPackageToGraph(Graph& graph, const Package& package) const {
+	std::function<Graph::vertex_descriptor(const Package&, std::vector<std::string>&)> addPackageWithDependencies;
+	addPackageWithDependencies = [&](const Package& currentPackage, std::vector<std::string>& activeSystems) -> Graph::vertex_descriptor {
+		const Graph::vertex_descriptor packageVertex = findOrAddPackageVertex(graph, currentPackage);
+
+		if (std::find(activeSystems.begin(), activeSystems.end(), currentPackage.system) != activeSystems.end()) {
 			return packageVertex;
 		}
 
-		activeSystems.push_back(package.system);
+		activeSystems.push_back(currentPackage.system);
 
-		IPlugin* plugin = this->registry->getPlugin(package.system);
+		IPlugin* plugin = this->registry->getPlugin(currentPackage.system);
 		if (plugin == nullptr && this->config.planner.autoDownloadMissingDependencies) {
-			this->queueDependencyDownload(Package{.action = ActionType::INSTALL, .system = package.system});
-			plugin = this->registry->getPlugin(package.system);
+			this->queueDependencyDownload(Package{.action = ActionType::INSTALL, .system = currentPackage.system});
+			plugin = this->registry->getPlugin(currentPackage.system);
 		}
 
 		if (plugin != nullptr) {
+			std::vector<Package> normalizedDependencies;
 			for (Package dependency : plugin->getRequirements()) {
-				const Package normalizedDependency = resolveDependencySystem(normalizeDependency(std::move(dependency), package.system), this->registry);
-				const Graph::vertex_descriptor dependencyVertex = addPackageWithDependencies(normalizedDependency, activeSystems);
+				normalizedDependencies.push_back(resolveDependencySystem(normalizeDependency(std::move(dependency), currentPackage.system), this->registry));
+			}
+
+			for (const Package& missingDependency : this->filterMissingDependencies(normalizedDependencies)) {
+				const Graph::vertex_descriptor dependencyVertex = addPackageWithDependencies(missingDependency, activeSystems);
 				if (dependencyVertex != packageVertex && !boost::edge(dependencyVertex, packageVertex, graph).second) {
 					boost::add_edge(dependencyVertex, packageVertex, graph);
 				}
@@ -202,11 +390,8 @@ void Planner::addRequestToGraph(Graph& graph, const Request& request) const {
 		return packageVertex;
 	};
 
-	for (const std::string& packageName : request.packages) {
-		const Package package = this->makeRequestedPackage(request, packageName);
-		std::vector<std::string> activeSystems;
-		(void)addPackageWithDependencies(package, activeSystems);
-	}
+	std::vector<std::string> activeSystems;
+	(void)addPackageWithDependencies(package, activeSystems);
 }
 
 Package Planner::makeRequestedPackage(const Request& request, const std::string& packageSpecifier) const {

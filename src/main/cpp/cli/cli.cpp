@@ -134,6 +134,12 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
         request.packages.push_back(argument);
     }
 
+    if (action == ActionType::ENSURE && requests.empty()) {
+        for (const std::string& system : discover_primary_systems(config)) {
+            requests.push_back(Request{.action = action, .system = system});
+        }
+    }
+
     for (Request& request : requests) {
         request.flags = global_flags;
     }
@@ -147,6 +153,12 @@ ReqPackConfigOverrides Cli::parseConfigOverrides(int argc, char* argv[]) const {
 
 void Cli::print_help() {
     std::cout << app->help();
+    std::cout << "\nCommands:\n"
+              << "  install                 Installs requested packages\n"
+              << "  remove                  Removes requested packages\n"
+              << "  update                  Updates requested packages\n"
+              << "  search                  Searches for packages\n"
+              << "  ensure [systems...]     Ensures plugin requirements are installed\n";
     std::cout << "\nConfig:\n"
               << "  --config <path>         Loads config from a custom Lua file\n"
               << "  --config=<path>         Same as above\n"
@@ -168,6 +180,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "search") {
         return ActionType::SEARCH;
+    }
+    if (normalized_command == "ensure") {
+        return ActionType::ENSURE;
     }
 
     return ActionType::UNKNOWN;
@@ -196,6 +211,40 @@ std::optional<std::pair<std::string, std::string>> Cli::split_scoped_package(
     }
 
     return std::make_pair(system, argument.substr(separator + 1));
+}
+
+std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config) {
+    std::set<std::string> systems;
+    const std::filesystem::path directory = config.registry.pluginDirectory;
+    RegistryDatabase registryDatabase(config);
+
+    if (registryDatabase.ensureReady()) {
+        for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
+            if (!record.alias) {
+                systems.insert(to_lower(record.name));
+            }
+        }
+    }
+
+    if (std::filesystem::exists(directory)) {
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
+            if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
+                continue;
+            }
+
+            if (entry.path().parent_path().filename() != entry.path().stem()) {
+                continue;
+            }
+
+            systems.insert(to_lower(entry.path().stem().string()));
+        }
+    }
+
+    for (const auto& [_, target] : config.planner.systemAliases) {
+        systems.insert(to_lower(target));
+    }
+
+    return systems;
 }
 
 std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {

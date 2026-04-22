@@ -182,6 +182,11 @@ bool Registry::loadPlugin(const std::string& name) {
     if (m_states[resolvedName] == PluginState::ACTIVE) return true;
     if (!this->config.registry.autoLoadPlugins) return false;
 
+    if (m_plugins[resolvedName]->getInterfaceVersion() != REQPACK_API_VERSION) {
+        m_states[resolvedName] = PluginState::FAILED;
+        return false;
+    }
+
     if (m_plugins[resolvedName]->init()) {
         m_states[resolvedName] = PluginState::ACTIVE;
         return true;

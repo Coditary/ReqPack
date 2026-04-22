@@ -30,6 +30,7 @@ public:
     
     std::vector<Package> getRequirements() override;
     std::vector<std::string> getCategories() override;
+    std::vector<Package> getMissingPackages(const std::vector<Package>& packages) override;
 
     void install(const std::vector<Package>& packages) override;
     void remove(const std::vector<Package>& packages) override;
