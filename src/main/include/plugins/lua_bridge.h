@@ -3,7 +3,9 @@
 #include <sol/sol.hpp>
 #include <string>
 #include <vector>
+
 #include "core/types.h"
+#include "output/logger.h"
 #include "plugins/iplugin.h"
 
 class LuaBridge : public IPlugin {
@@ -15,6 +17,7 @@ private:
     std::string m_pluginDirectory;
     std::string m_scriptPath;
     std::string m_bootstrapPath;
+    Logger& m_logger;
     
     sol::table m_pluginTable;
 

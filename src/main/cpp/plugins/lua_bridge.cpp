@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
-#include <iostream>
 #include <optional>
 
 namespace {
@@ -117,18 +116,22 @@ void register_types(sol::state& lua) {
     );
 }
 
-bool execute_file(sol::state& lua, const std::string& path) {
+void log_lua_error(Logger& logger, const std::string& scope, const std::string& message) {
+	logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::err, .message = message, .source = "lua", .scope = scope});
+}
+
+bool execute_file(sol::state& lua, Logger& logger, const std::string& path) {
     sol::load_result loadResult = lua.load_file(path);
     if (!loadResult.valid()) {
         sol::error err = loadResult;
-        std::cerr << "[Lua Load Error] " << path << ": " << err.what() << std::endl;
+        log_lua_error(logger, "load", path + ": " + err.what());
         return false;
     }
 
     const sol::protected_function_result executionResult = loadResult();
     if (!executionResult.valid()) {
         sol::error err = executionResult;
-        std::cerr << "[Lua Exec Error] " << path << ": " << err.what() << std::endl;
+        log_lua_error(logger, "exec", path + ": " + err.what());
         return false;
     }
 
@@ -137,7 +140,7 @@ bool execute_file(sol::state& lua, const std::string& path) {
 
 }  // namespace
 
-LuaBridge::LuaBridge(const std::string& scriptPath) : m_scriptPath(scriptPath) {
+LuaBridge::LuaBridge(const std::string& scriptPath) : m_scriptPath(scriptPath), m_logger(Logger::instance()) {
     m_lua.open_libraries(sol::lib::base, sol::lib::os, sol::lib::io, sol::lib::table, sol::lib::string, sol::lib::math);
     register_types(m_lua);
 
@@ -150,12 +153,41 @@ LuaBridge::LuaBridge(const std::string& scriptPath) : m_scriptPath(scriptPath) {
     m_lua["REQPACK_PLUGIN_DIR"] = m_pluginDirectory;
     m_lua["REQPACK_PLUGIN_SCRIPT"] = m_scriptPath;
     m_lua["REQPACK_PLUGIN_BOOTSTRAP"] = m_bootstrapPath;
+    m_lua["print"] = [this](sol::variadic_args args) {
+		std::string message;
+		bool first = true;
+		for (const sol::object& argument : args) {
+			if (!first) {
+				message += "\t";
+			}
+			first = false;
+			if (argument.is<std::string>()) {
+				message += argument.as<std::string>();
+				continue;
+			}
+			if (argument.is<int>()) {
+				message += std::to_string(argument.as<int>());
+				continue;
+			}
+			if (argument.is<double>()) {
+				message += std::to_string(argument.as<double>());
+				continue;
+			}
+			if (argument.is<bool>()) {
+				message += argument.as<bool>() ? "true" : "false";
+				continue;
+			}
+			message += "<lua-value>";
+		}
 
-    if (std::filesystem::exists(m_bootstrapPath) && !execute_file(m_lua, m_bootstrapPath)) {
+		m_logger.stdout(message, "lua", m_pluginId);
+	};
+
+    if (std::filesystem::exists(m_bootstrapPath) && !execute_file(m_lua, m_logger, m_bootstrapPath)) {
         return;
     }
 
-    if (!execute_file(m_lua, m_scriptPath)) {
+    if (!execute_file(m_lua, m_logger, m_scriptPath)) {
         return;
     }
 
@@ -172,7 +204,7 @@ bool LuaBridge::init() {
     }
 
     if (m_pluginTable["getMissingPackages"].get_type() != sol::type::function) {
-        std::cerr << "[Lua API Error] getMissingPackages(packages) is required." << std::endl;
+        log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) is required.");
         return false;
     }
 
@@ -181,7 +213,7 @@ bool LuaBridge::init() {
         auto bootstrapResult = bootstrap();
         if (!bootstrapResult.valid()) {
             sol::error err = bootstrapResult;
-            std::cerr << "[Lua Exec Error] bootstrap(): " << err.what() << std::endl;
+            log_lua_error(m_logger, m_pluginId, std::string("[Lua Exec Error] bootstrap(): ") + err.what());
             return false;
         }
 
@@ -195,7 +227,7 @@ bool LuaBridge::init() {
         auto result = luaInit();
         if (!result.valid()) {
             sol::error err = result;
-            std::cerr << "[Lua Exec Error] init(): " << err.what() << std::endl;
+            log_lua_error(m_logger, m_pluginId, std::string("[Lua Exec Error] init(): ") + err.what());
             return false;
         }
         return result.return_count() == 0 ? true : result.get<bool>();
@@ -227,14 +259,14 @@ std::vector<std::string> LuaBridge::getCategories() {
 std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& packages) {
 	sol::protected_function func = m_pluginTable["getMissingPackages"];
     if (!func.valid()) {
-        std::cerr << "[Lua API Error] getMissingPackages(packages) is required." << std::endl;
+        log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) is required.");
         return packages;
     }
 
 	auto result = func(packages);
     if (result.valid()) {
 		if (result.return_count() == 0) {
-			std::cerr << "[Lua API Error] getMissingPackages(packages) must return a package list." << std::endl;
+			log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) must return a package list.");
 			return packages;
 		}
 
@@ -244,12 +276,12 @@ std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& p
 			}
 		}
 
-		std::cerr << "[Lua API Error] getMissingPackages(packages) must return a package list." << std::endl;
+		log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) must return a package list.");
 		return packages;
     }
 
 	sol::error err = result;
-	std::cerr << "Lua Error (getMissingPackages): " << err.what() << std::endl;
+	log_lua_error(m_logger, m_pluginId, std::string("Lua Error (getMissingPackages): ") + err.what());
 	return packages;
 }
 
@@ -259,7 +291,7 @@ bool LuaBridge::install(const std::vector<Package>& packages) {
         auto result = func(packages);
         if (!result.valid()) {
             sol::error err = result;
-            std::cerr << "Lua Error (install): " << err.what() << std::endl;
+            log_lua_error(m_logger, m_pluginId, std::string("Lua Error (install): ") + err.what());
             return false;
         }
 		return result.return_count() == 0 ? true : result.get<bool>();

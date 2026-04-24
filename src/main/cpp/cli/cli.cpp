@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iostream>
 #include <utility>
+
+#include "output/logger.h"
 
 namespace {
 
@@ -152,18 +153,22 @@ ReqPackConfigOverrides Cli::parseConfigOverrides(int argc, char* argv[]) const {
 }
 
 void Cli::print_help() {
-    std::cout << app->help();
-    std::cout << "\nCommands:\n"
-              << "  install                 Installs requested packages\n"
-              << "  remove                  Removes requested packages\n"
-              << "  update                  Updates requested packages\n"
-              << "  search                  Searches for packages\n"
-              << "  ensure [systems...]     Ensures plugin requirements are installed\n";
-    std::cout << "\nConfig:\n"
-              << "  --config <path>         Loads config from a custom Lua file\n"
-              << "  --config=<path>         Same as above\n"
-              << "  --registry <path>       Loads registry sources from a custom path\n"
-              << "  --registry=<path>       Same as above\n";
+    Logger::instance().stdout(
+        app->help() +
+        "\nCommands:\n"
+        "  install                 Installs requested packages\n"
+        "  remove                  Removes requested packages\n"
+        "  update                  Updates requested packages\n"
+        "  search                  Searches for packages\n"
+        "  ensure [systems...]     Ensures plugin requirements are installed\n"
+        "\nConfig:\n"
+        "  --config <path>         Loads config from a custom Lua file\n"
+        "  --config=<path>         Same as above\n"
+        "  --registry <path>       Loads registry sources from a custom path\n"
+        "  --registry=<path>       Same as above\n",
+        "cli",
+        "help"
+    );
 }
 
 ActionType Cli::parse_action(const std::string& command) {

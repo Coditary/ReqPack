@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
     const std::filesystem::path configPath = configOverrides.configPath.value_or(default_reqpack_config_path());
     const ReqPackConfig fileConfig = load_config_from_lua(configPath, DEFAULT_REQPACK_CONFIG);
     const ReqPackConfig config = apply_config_overrides(fileConfig, configOverrides);
-    Logger logger;
+    Logger& logger = Logger::instance();
 
     logger.setLevel(to_string(config.logging.level));
     logger.setPattern(config.logging.pattern);
@@ -30,12 +30,14 @@ int main(int argc, char* argv[]) {
 
     if (requests.empty()) {
         cli.print_help();
+        logger.flush();
         curl_global_cleanup();
         return 0;
     }
 
     Orchestrator orchestrator(requests, config);
     orchestrator.run();
+    logger.flush();
 
     curl_global_cleanup();
     return 0;
