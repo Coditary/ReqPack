@@ -1,9 +1,16 @@
 #include "plugins/lua_bridge.h"
 
+#include "core/downloader.h"
+#include "plugins/exec_rules.h"
+
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
 
 namespace {
 
@@ -45,19 +52,25 @@ ActionType action_from_lua_object(const sol::object& object) {
     if (action == "search") {
         return ActionType::SEARCH;
     }
+    if (action == "list") {
+        return ActionType::LIST;
+    }
+    if (action == "info") {
+        return ActionType::INFO;
+    }
 
     return ActionType::UNKNOWN;
 }
 
 std::optional<std::vector<Package>> packages_from_lua_object(const sol::object& value) {
-	if (!value.valid() || value.get_type() != sol::type::table) {
-		return std::nullopt;
-	}
+    if (!value.valid() || value.get_type() != sol::type::table) {
+        return std::nullopt;
+    }
 
-	std::vector<Package> packages;
-	const sol::table packageList = value.as<sol::table>();
-	for (const auto& [_, entry] : packageList) {
-		Package package;
+    std::vector<Package> packages;
+    const sol::table packageList = value.as<sol::table>();
+    for (const auto& [_, entry] : packageList) {
+        Package package;
 
         if (entry.get_type() == sol::type::userdata) {
             package = entry.as<Package>();
@@ -80,11 +93,20 @@ std::optional<std::vector<Package>> packages_from_lua_object(const sol::object& 
         if (const sol::optional<std::string> version = packageTable["version"]; version.has_value()) {
             package.version = version.value();
         }
+        if (const sol::optional<std::string> sourcePath = packageTable["sourcePath"]; sourcePath.has_value()) {
+            package.sourcePath = sourcePath.value();
+        }
+        if (const sol::optional<bool> localTarget = packageTable["localTarget"]; localTarget.has_value()) {
+            package.localTarget = localTarget.value();
+        }
+        if (const sol::optional<std::vector<std::string>> flags = packageTable["flags"]; flags.has_value()) {
+            package.flags = flags.value();
+        }
 
-		packages.push_back(std::move(package));
-	}
+        packages.push_back(std::move(package));
+    }
 
-	return packages;
+    return packages;
 }
 
 void register_types(sol::state& lua) {
@@ -101,7 +123,10 @@ void register_types(sol::state& lua) {
         ),
         "system", &Package::system,
         "name", &Package::name,
-        "version", &Package::version
+        "version", &Package::version,
+        "sourcePath", &Package::sourcePath,
+        "localTarget", &Package::localTarget,
+        "flags", &Package::flags
     );
 
     lua.new_usertype<PackageInfo>(
@@ -114,10 +139,19 @@ void register_types(sol::state& lua) {
         "author", &PackageInfo::author,
         "email", &PackageInfo::email
     );
+
+    lua.new_usertype<ExecResult>(
+        "ExecResult",
+        sol::constructors<ExecResult()>(),
+        "success", &ExecResult::success,
+        "exitCode", &ExecResult::exitCode,
+        "stdout", &ExecResult::stdoutText,
+        "stderr", &ExecResult::stderrText
+    );
 }
 
 void log_lua_error(Logger& logger, const std::string& scope, const std::string& message) {
-	logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::err, .message = message, .source = "lua", .scope = scope});
+    logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::err, .message = message, .source = "lua", .scope = scope});
 }
 
 bool execute_file(sol::state& lua, Logger& logger, const std::string& path) {
@@ -138,11 +172,47 @@ bool execute_file(sol::state& lua, Logger& logger, const std::string& path) {
     return true;
 }
 
+std::string value_to_string(const sol::object& value) {
+    if (!value.valid()) {
+        return "null";
+    }
+    if (value.is<std::string>()) {
+        return value.as<std::string>();
+    }
+    if (value.is<bool>()) {
+        return value.as<bool>() ? "true" : "false";
+    }
+    if (value.is<int>()) {
+        return std::to_string(value.as<int>());
+    }
+    if (value.is<double>()) {
+        std::ostringstream stream;
+        stream << value.as<double>();
+        return stream.str();
+    }
+    return "<lua-value>";
+}
+
+std::string escape_shell_double_quotes(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char c : value) {
+        if (c == '\\' || c == '"' || c == '$' || c == '`') {
+            escaped.push_back('\\');
+        }
+        escaped.push_back(c);
+    }
+    return escaped;
+}
+
 }  // namespace
 
-LuaBridge::LuaBridge(const std::string& scriptPath) : m_scriptPath(scriptPath), m_logger(Logger::instance()) {
-    m_lua.open_libraries(sol::lib::base, sol::lib::os, sol::lib::io, sol::lib::table, sol::lib::string, sol::lib::math);
+LuaBridge::LuaBridge(const std::string& scriptPath, const ReqPackConfig& config)
+    : m_scriptPath(scriptPath), m_logger(Logger::instance()), m_config(config) {
+    m_lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math);
     register_types(m_lua);
+    register_context_types();
+    register_reqpack_namespace();
 
     const std::filesystem::path resolvedScriptPath(scriptPath);
     m_pluginDirectory = resolvedScriptPath.parent_path().string();
@@ -154,34 +224,18 @@ LuaBridge::LuaBridge(const std::string& scriptPath) : m_scriptPath(scriptPath), 
     m_lua["REQPACK_PLUGIN_SCRIPT"] = m_scriptPath;
     m_lua["REQPACK_PLUGIN_BOOTSTRAP"] = m_bootstrapPath;
     m_lua["print"] = [this](sol::variadic_args args) {
-		std::string message;
-		bool first = true;
-		for (const sol::object& argument : args) {
-			if (!first) {
-				message += "\t";
-			}
-			first = false;
-			if (argument.is<std::string>()) {
-				message += argument.as<std::string>();
-				continue;
-			}
-			if (argument.is<int>()) {
-				message += std::to_string(argument.as<int>());
-				continue;
-			}
-			if (argument.is<double>()) {
-				message += std::to_string(argument.as<double>());
-				continue;
-			}
-			if (argument.is<bool>()) {
-				message += argument.as<bool>() ? "true" : "false";
-				continue;
-			}
-			message += "<lua-value>";
-		}
+        std::string message;
+        bool first = true;
+        for (const sol::object& argument : args) {
+            if (!first) {
+                message += "\t";
+            }
+            first = false;
+            message += value_to_string(argument);
+        }
 
-		m_logger.stdout(message, "lua", m_pluginId);
-	};
+        m_logger.stdout(message, "lua", m_pluginId);
+    };
 
     if (std::filesystem::exists(m_bootstrapPath) && !execute_file(m_lua, m_logger, m_bootstrapPath)) {
         return;
@@ -193,18 +247,170 @@ LuaBridge::LuaBridge(const std::string& scriptPath) : m_scriptPath(scriptPath), 
 
     m_pluginTable = m_lua["plugin"];
     if (m_pluginTable.valid()) {
-        m_name = m_pluginTable.get_or("name", m_pluginId);
-        m_version = m_pluginTable.get_or("version", std::string("0.0.0"));
+        sol::protected_function getName = m_pluginTable["getName"];
+        if (getName.valid()) {
+            auto result = getName();
+            if (result.valid() && result.return_count() > 0) {
+                m_name = result.get<std::string>();
+            }
+        }
+
+        sol::protected_function getVersion = m_pluginTable["getVersion"];
+        if (getVersion.valid()) {
+            auto result = getVersion();
+            if (result.valid() && result.return_count() > 0) {
+                m_version = result.get<std::string>();
+            }
+        }
+    }
+
+    if (m_name.empty()) {
+        m_name = m_pluginId;
+    }
+    if (m_version.empty()) {
+        m_version = "0.0.0";
     }
 }
 
-bool LuaBridge::init() {
+void LuaBridge::register_context_types() {
+    m_lua.new_usertype<PluginCallContext>(
+        "PluginCallContext",
+        "flags", sol::readonly_property([](const PluginCallContext& context) {
+            return context.flags;
+        }),
+        "plugin", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table plugin = m_lua.create_table();
+            plugin["id"] = context.pluginId;
+            plugin["dir"] = context.pluginDirectory;
+            plugin["script"] = context.scriptPath;
+            plugin["bootstrap"] = context.bootstrapPath;
+            return plugin;
+        }),
+        "log", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table log = m_lua.create_table();
+            log.set_function("debug", [context](const std::string& message) { context.logDebug(message); });
+            log.set_function("info", [context](const std::string& message) { context.logInfo(message); });
+            log.set_function("warn", [context](const std::string& message) { context.logWarn(message); });
+            log.set_function("error", [context](const std::string& message) { context.logError(message); });
+            return log;
+        }),
+        "tx", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table tx = m_lua.create_table();
+            tx.set_function("status", [context](int code) { context.emitStatus(code); });
+            tx.set_function("progress", [context](int percent) { context.emitProgress(percent); });
+            tx.set_function("begin_step", [context](const std::string& label) { context.emitBeginStep(label); });
+            tx.set_function("commit", [context]() { context.emitCommit(); });
+            tx.set_function("success", [context]() { context.emitSuccess(); });
+            tx.set_function("failed", [context](const std::string& message) { context.emitFailure(message); });
+            return tx;
+        }),
+        "events", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table events = m_lua.create_table();
+            const std::array<const char*, 7> names{"installed", "deleted", "updated", "listed", "searched", "informed", "outdated"};
+            for (const char* name : names) {
+                events.set_function(name, [this, context, name](sol::object payload) {
+                    context.emitEvent(name, serializeLuaPayload(payload));
+                });
+            }
+            return events;
+        }),
+        "artifacts", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table artifacts = m_lua.create_table();
+            artifacts.set_function("register", [this, context](sol::object payload) {
+                context.registerArtifact(serializeLuaPayload(payload));
+            });
+            return artifacts;
+        }),
+        "exec", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table exec = m_lua.create_table();
+            exec.set_function("run", sol::overload(
+                [context](const std::string& command) {
+                    return context.execute(command);
+                },
+                [this, context](const std::string& command, const sol::object& rules) {
+                    return run_plugin_command(m_logger, context.pluginId, command, rules);
+                }
+            ));
+            return exec;
+        }),
+        "fs", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table fs = m_lua.create_table();
+            fs.set_function("get_tmp_dir", [context]() {
+                return context.createTempDirectory();
+            });
+            return fs;
+        }),
+        "net", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table net = m_lua.create_table();
+            net.set_function("download", [context](const std::string& url, const std::string& destinationPath) {
+                return context.downloadFile(url, destinationPath);
+            });
+            return net;
+        })
+    );
+}
+
+void LuaBridge::register_reqpack_namespace() {
+    sol::table reqpack = m_lua.create_named_table("reqpack");
+    sol::table exec = m_lua.create_table();
+    exec.set_function("run", [this](const std::string& command) {
+        return runCommand(command);
+    });
+    reqpack["exec"] = exec;
+}
+
+bool LuaBridge::validatePluginContract() const {
     if (!m_pluginTable.valid()) {
+        log_lua_error(m_logger, m_pluginId, "[Lua API Error] plugin table is required.");
         return false;
     }
 
-    if (m_pluginTable["getMissingPackages"].get_type() != sol::type::function) {
-        log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) is required.");
+    const std::array<const char*, 10> requiredMethods{
+        "getName",
+        "getVersion",
+        "getRequirements",
+        "getCategories",
+        "getMissingPackages",
+        "install",
+        "installLocal",
+        "remove",
+        "update",
+        "list"
+    };
+
+    for (const char* method : requiredMethods) {
+		sol::protected_function function = m_pluginTable[method];
+		if (!function.valid()) {
+            log_lua_error(m_logger, m_pluginId, std::string("[Lua API Error] ") + method + " is required.");
+            return false;
+        }
+    }
+
+    const std::array<const char*, 2> requiredQueryMethods{"search", "info"};
+    for (const char* method : requiredQueryMethods) {
+		sol::protected_function function = m_pluginTable[method];
+		if (!function.valid()) {
+            log_lua_error(m_logger, m_pluginId, std::string("[Lua API Error] ") + method + " is required.");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+PluginCallContext LuaBridge::makeContext(const std::vector<std::string>& flags) const {
+    return PluginCallContext{
+        .pluginId = m_pluginId,
+        .pluginDirectory = m_pluginDirectory,
+        .scriptPath = m_scriptPath,
+        .bootstrapPath = m_bootstrapPath,
+        .flags = flags,
+        .host = const_cast<LuaBridge*>(this)
+    };
+}
+
+bool LuaBridge::init() {
+    if (!validatePluginContract()) {
         return false;
     }
 
@@ -240,9 +446,24 @@ bool LuaBridge::shutdown() {
     sol::protected_function luaShutdown = m_pluginTable["shutdown"];
     if (luaShutdown.valid()) {
         auto result = luaShutdown();
-        return result.valid() ? result.get<bool>() : false;
+        return result.valid() ? (result.return_count() == 0 ? true : result.get<bool>()) : false;
     }
     return true;
+}
+
+std::vector<Package> LuaBridge::getRequirements() {
+    sol::protected_function func = m_pluginTable["getRequirements"];
+    if (func.valid()) {
+        auto result = func();
+        if (result.valid() && result.return_count() > 0) {
+            if (const sol::object value = result.get<sol::object>(); value.valid()) {
+                if (const auto requirements = packages_from_lua_object(value)) {
+                    return requirements.value();
+                }
+            }
+        }
+    }
+    return {};
 }
 
 std::vector<std::string> LuaBridge::getCategories() {
@@ -257,110 +478,298 @@ std::vector<std::string> LuaBridge::getCategories() {
 }
 
 std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& packages) {
-	sol::protected_function func = m_pluginTable["getMissingPackages"];
+    sol::protected_function func = m_pluginTable["getMissingPackages"];
     if (!func.valid()) {
         log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) is required.");
         return packages;
     }
 
-	auto result = func(packages);
+    auto result = func(packages);
     if (result.valid()) {
-		if (result.return_count() == 0) {
-			log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) must return a package list.");
-			return packages;
-		}
+        if (result.return_count() == 0) {
+            log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) must return a package list.");
+            return packages;
+        }
 
-		if (const sol::object value = result.get<sol::object>(); value.valid()) {
-			if (const auto missingPackages = packages_from_lua_object(value)) {
-				return missingPackages.value();
-			}
-		}
+        if (const sol::object value = result.get<sol::object>(); value.valid()) {
+            if (const auto missingPackages = packages_from_lua_object(value)) {
+                return missingPackages.value();
+            }
+        }
 
-		log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) must return a package list.");
-		return packages;
+        log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) must return a package list.");
+        return packages;
     }
 
-	sol::error err = result;
-	log_lua_error(m_logger, m_pluginId, std::string("Lua Error (getMissingPackages): ") + err.what());
-	return packages;
+    sol::error err = result;
+    log_lua_error(m_logger, m_pluginId, std::string("Lua Error (getMissingPackages): ") + err.what());
+    return packages;
 }
 
-bool LuaBridge::install(const std::vector<Package>& packages) {
+bool LuaBridge::install(const PluginCallContext& context, const std::vector<Package>& packages) {
     sol::protected_function func = m_pluginTable["install"];
-    if (func.valid()) {
-        auto result = func(packages);
-        if (!result.valid()) {
-            sol::error err = result;
-            log_lua_error(m_logger, m_pluginId, std::string("Lua Error (install): ") + err.what());
-            return false;
-        }
-		return result.return_count() == 0 ? true : result.get<bool>();
+    if (!func.valid()) {
+        return false;
     }
-	return false;
+
+    auto result = func(context, packages);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (install): ") + err.what());
+        return false;
+    }
+    return result.return_count() == 0 ? true : result.get<bool>();
 }
 
-bool LuaBridge::remove(const std::vector<Package>& packages) {
+bool LuaBridge::installLocal(const PluginCallContext& context, const std::string& path) {
+    sol::protected_function func = m_pluginTable["installLocal"];
+    if (!func.valid()) {
+        return false;
+    }
+
+    auto result = func(context, path);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (installLocal): ") + err.what());
+        return false;
+    }
+    return result.return_count() == 0 ? true : result.get<bool>();
+}
+
+bool LuaBridge::remove(const PluginCallContext& context, const std::vector<Package>& packages) {
     sol::protected_function func = m_pluginTable["remove"];
-    if (func.valid()) {
-		auto result = func(packages);
-		return result.valid() ? (result.return_count() == 0 ? true : result.get<bool>()) : false;
+    if (!func.valid()) {
+        return false;
     }
-	return false;
+
+    auto result = func(context, packages);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (remove): ") + err.what());
+        return false;
+    }
+    return result.return_count() == 0 ? true : result.get<bool>();
 }
 
-bool LuaBridge::update(const std::vector<Package>& packages) {
+bool LuaBridge::update(const PluginCallContext& context, const std::vector<Package>& packages) {
     sol::protected_function func = m_pluginTable["update"];
-    if (func.valid()) {
-		auto result = func(packages);
-		return result.valid() ? (result.return_count() == 0 ? true : result.get<bool>()) : false;
+    if (!func.valid()) {
+        return false;
     }
-	return false;
+
+    auto result = packages.empty() ? func(context, sol::lua_nil) : func(context, packages);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (update): ") + err.what());
+        return false;
+    }
+    return result.return_count() == 0 ? true : result.get<bool>();
 }
 
-std::vector<Package> LuaBridge::getRequirements() {
-    sol::protected_function func = m_pluginTable["getRequirements"];
-    if (func.valid()) {
-        auto result = func();
-        if (result.valid() && result.return_count() > 0) {
-			if (const sol::object value = result.get<sol::object>(); value.valid()) {
-				if (const auto requirements = packages_from_lua_object(value)) {
-					return requirements.value();
-				}
-			}
+std::vector<PackageInfo> LuaBridge::packageInfoListFromObject(const sol::object& value) const {
+    if (!value.valid() || value.get_type() != sol::type::table) {
+        return {};
+    }
+
+    std::vector<PackageInfo> result;
+    const sol::table table = value.as<sol::table>();
+    for (const auto& [_, entry] : table) {
+        if (entry.get_type() == sol::type::userdata) {
+            result.push_back(entry.as<PackageInfo>());
+            continue;
         }
+        if (entry.get_type() != sol::type::table) {
+            continue;
+        }
+        const sol::table info = entry.as<sol::table>();
+        PackageInfo packageInfo;
+        packageInfo.name = info.get_or("name", std::string{});
+        packageInfo.version = info.get_or("version", std::string{});
+        packageInfo.description = info.get_or("description", std::string{});
+        packageInfo.homepage = info.get_or("homepage", std::string{});
+        packageInfo.author = info.get_or("author", std::string{});
+        packageInfo.email = info.get_or("email", std::string{});
+        result.push_back(std::move(packageInfo));
     }
-    return {};
+    return result;
 }
 
-std::vector<PackageInfo> LuaBridge::list() {
+PackageInfo LuaBridge::packageInfoFromObject(const sol::object& value) const {
+    if (!value.valid()) {
+        return {};
+    }
+    if (value.get_type() == sol::type::userdata) {
+        return value.as<PackageInfo>();
+    }
+    if (value.get_type() != sol::type::table) {
+        return {};
+    }
+    const sol::table info = value.as<sol::table>();
+    return PackageInfo{
+        .name = info.get_or("name", std::string{}),
+        .version = info.get_or("version", std::string{}),
+        .description = info.get_or("description", std::string{}),
+        .homepage = info.get_or("homepage", std::string{}),
+        .author = info.get_or("author", std::string{}),
+        .email = info.get_or("email", std::string{})
+    };
+}
+
+std::vector<PackageInfo> LuaBridge::list(const PluginCallContext& context) {
     sol::protected_function func = m_pluginTable["list"];
-    if (func.valid()) {
-        auto result = func();
-        if (result.valid()) {
-            return result.get<std::vector<PackageInfo>>();
-        }
+    if (!func.valid()) {
+        return {};
     }
-    return {};
+
+    auto result = func(context);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (list): ") + err.what());
+        return {};
+    }
+    if (result.return_count() == 0) {
+        return {};
+    }
+    return packageInfoListFromObject(result.get<sol::object>());
 }
 
-std::vector<PackageInfo> LuaBridge::search(const std::string& prompt) {
+std::vector<PackageInfo> LuaBridge::search(const PluginCallContext& context, const std::string& prompt) {
     sol::protected_function func = m_pluginTable["search"];
-    if (func.valid()) {
-        auto result = func(prompt);
-        if (result.valid()) {
-            return result.get<std::vector<PackageInfo>>();
-        }
+    if (!func.valid()) {
+        return {};
     }
-    return {};
+
+    auto result = func(context, prompt);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (search): ") + err.what());
+        return {};
+    }
+    if (result.return_count() == 0) {
+        return {};
+    }
+    return packageInfoListFromObject(result.get<sol::object>());
 }
 
-PackageInfo LuaBridge::info(const std::string& packageName) {
+PackageInfo LuaBridge::info(const PluginCallContext& context, const std::string& packageName) {
     sol::protected_function func = m_pluginTable["info"];
-    if (func.valid()) {
-        auto result = func(packageName);
-        if (result.valid()) {
-            return result.get<PackageInfo>();
-        }
+    if (!func.valid()) {
+        return {};
     }
-    return {};
+
+    auto result = func(context, packageName);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (info): ") + err.what());
+        return {};
+    }
+    if (result.return_count() == 0) {
+        return {};
+    }
+    return packageInfoFromObject(result.get<sol::object>());
+}
+
+std::string LuaBridge::serializeLuaPayload(const sol::object& value) const {
+    if (!value.valid()) {
+        return "null";
+    }
+    if (value.is<std::string>() || value.is<bool>() || value.is<int>() || value.is<double>()) {
+        return value_to_string(value);
+    }
+    if (value.get_type() != sol::type::table) {
+        return "<lua-value>";
+    }
+
+    std::ostringstream stream;
+    stream << '{';
+    bool first = true;
+    for (const auto& [key, entry] : value.as<sol::table>()) {
+        if (!first) {
+            stream << ", ";
+        }
+        first = false;
+        stream << value_to_string(key) << '=' << value_to_string(entry);
+    }
+    stream << '}';
+    return stream.str();
+}
+
+ExecResult LuaBridge::runCommand(const std::string& command) const {
+    return run_plugin_command(m_logger, m_pluginId, command);
+}
+
+bool LuaBridge::downloadToPath(const std::string& url, const std::string& destinationPath) const {
+    Downloader downloader(nullptr, m_config);
+    return downloader.download(url, destinationPath);
+}
+
+void LuaBridge::logDebug(const std::string& pluginId, const std::string& message) {
+    m_logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::debug, .message = message, .source = "plugin", .scope = pluginId});
+}
+
+void LuaBridge::logInfo(const std::string& pluginId, const std::string& message) {
+    m_logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::info, .message = message, .source = "plugin", .scope = pluginId});
+}
+
+void LuaBridge::logWarn(const std::string& pluginId, const std::string& message) {
+    m_logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::warn, .message = message, .source = "plugin", .scope = pluginId});
+}
+
+void LuaBridge::logError(const std::string& pluginId, const std::string& message) {
+    m_logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::err, .message = message, .source = "plugin", .scope = pluginId});
+}
+
+void LuaBridge::emitStatus(const std::string& pluginId, int statusCode) {
+    m_logger.emit(OutputAction::PLUGIN_STATUS, OutputContext{.source = "plugin", .scope = pluginId, .statusCode = statusCode});
+}
+
+void LuaBridge::emitProgress(const std::string& pluginId, int percent) {
+    m_logger.emit(OutputAction::PLUGIN_PROGRESS, OutputContext{.source = "plugin", .scope = pluginId, .progressPercent = std::clamp(percent, 0, 100)});
+}
+
+void LuaBridge::emitBeginStep(const std::string& pluginId, const std::string& label) {
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = "plugin", .scope = pluginId, .eventName = "begin_step", .payload = label});
+}
+
+void LuaBridge::emitCommit(const std::string& pluginId) {
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = "plugin", .scope = pluginId, .eventName = "commit", .payload = "committed"});
+}
+
+void LuaBridge::emitSuccess(const std::string& pluginId) {
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = "plugin", .scope = pluginId, .eventName = "success", .payload = "ok"});
+}
+
+void LuaBridge::emitFailure(const std::string& pluginId, const std::string& message) {
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = "plugin", .scope = pluginId, .eventName = "failed", .payload = message});
+}
+
+void LuaBridge::emitEvent(const std::string& pluginId, const std::string& eventName, const std::string& payload) {
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = "plugin", .scope = pluginId, .eventName = eventName, .payload = payload});
+}
+
+void LuaBridge::registerArtifact(const std::string& pluginId, const std::string& payload) {
+    m_logger.emit(OutputAction::PLUGIN_ARTIFACT, OutputContext{.source = "plugin", .scope = pluginId, .payload = payload});
+}
+
+ExecResult LuaBridge::execute(const std::string& pluginId, const std::string& command) {
+    (void)pluginId;
+    return runCommand(command);
+}
+
+std::string LuaBridge::createTempDirectory(const std::string& pluginId) {
+    std::filesystem::path tempDir = std::filesystem::temp_directory_path() / ("reqpack-" + pluginId + "-XXXXXX");
+    std::string templateString = tempDir.string();
+    std::vector<char> buffer(templateString.begin(), templateString.end());
+    buffer.push_back('\0');
+    char* created = mkdtemp(buffer.data());
+    if (created == nullptr) {
+        return {};
+    }
+    m_tempDirectories.emplace_back(created);
+    return created;
+}
+
+bool LuaBridge::download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) {
+    (void)pluginId;
+    return downloadToPath(url, destinationPath);
 }

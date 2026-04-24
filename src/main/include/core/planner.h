@@ -31,6 +31,7 @@ class Planner {
 	void addRequestToGraph(Graph& graph, const Request& request, bool includeDependencies) const;
 	void addPackageToGraph(Graph& graph, const Package& package) const;
 	Package makeRequestedPackage(const Request& request, const std::string& packageSpecifier) const;
+	Package makeLocalRequestedPackage(const Request& request) const;
 	std::vector<Graph::vertex_descriptor> topologicallySort(const Graph& graph) const;
 
 public:

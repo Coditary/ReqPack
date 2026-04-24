@@ -90,6 +90,46 @@ void Logger::processEvent(const OutputEvent& event) {
 			}
 			std::cout.flush();
 			break;
+		case OutputAction::PLUGIN_STATUS:
+			std::cout << formatMessage(OutputContext{
+				.level = spdlog::level::info,
+				.message = "status=" + std::to_string(event.context.statusCode),
+				.source = event.context.source,
+				.scope = event.context.scope
+			});
+			std::cout << '\n';
+			std::cout.flush();
+			break;
+		case OutputAction::PLUGIN_PROGRESS:
+			std::cout << formatMessage(OutputContext{
+				.level = spdlog::level::info,
+				.message = "progress=" + std::to_string(event.context.progressPercent) + "%",
+				.source = event.context.source,
+				.scope = event.context.scope
+			});
+			std::cout << '\n';
+			std::cout.flush();
+			break;
+		case OutputAction::PLUGIN_EVENT:
+			std::cout << formatMessage(OutputContext{
+				.level = spdlog::level::info,
+				.message = event.context.eventName + ": " + event.context.payload,
+				.source = event.context.source,
+				.scope = event.context.scope
+			});
+			std::cout << '\n';
+			std::cout.flush();
+			break;
+		case OutputAction::PLUGIN_ARTIFACT:
+			std::cout << formatMessage(OutputContext{
+				.level = spdlog::level::info,
+				.message = "artifact: " + event.context.payload,
+				.source = event.context.source,
+				.scope = event.context.scope
+			});
+			std::cout << '\n';
+			std::cout.flush();
+			break;
 		case OutputAction::FLUSH:
 			for (const auto& sink : sinks) {
 				sink->flush();

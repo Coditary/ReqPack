@@ -8,7 +8,12 @@
 namespace {
 
 bool samePackage(const Package& left, const Package& right) {
-	return left.action == right.action && left.system == right.system && left.name == right.name && left.version == right.version;
+	return left.action == right.action &&
+		left.system == right.system &&
+		left.name == right.name &&
+		left.version == right.version &&
+		left.sourcePath == right.sourcePath &&
+		left.localTarget == right.localTarget;
 }
 
 bool actionUsesDesiredStateFilter(const ActionType action) {
@@ -27,6 +32,44 @@ Executer::Executer(Registry* registry, const ReqPackConfig& config) : config(con
 }
 
 Executer::~Executer() {}
+
+std::vector<PackageInfo> Executer::list(const Request& request) const {
+	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+		return {};
+	}
+	IPlugin* plugin = this->registry->getPlugin(request.system);
+	TaskGroup taskGroup{.action = ActionType::LIST, .system = request.system};
+	taskGroup.flags = request.flags;
+	return plugin->list(this->buildPluginContext(plugin, taskGroup));
+}
+
+std::vector<PackageInfo> Executer::search(const Request& request) const {
+	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+		return {};
+	}
+	IPlugin* plugin = this->registry->getPlugin(request.system);
+	TaskGroup taskGroup{.action = ActionType::SEARCH, .system = request.system};
+	taskGroup.flags = request.flags;
+	std::string prompt;
+	for (std::size_t index = 0; index < request.packages.size(); ++index) {
+		if (index > 0) {
+			prompt += ' ';
+		}
+		prompt += request.packages[index];
+	}
+	return plugin->search(this->buildPluginContext(plugin, taskGroup), prompt);
+}
+
+PackageInfo Executer::info(const Request& request) const {
+	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+		return {};
+	}
+	IPlugin* plugin = this->registry->getPlugin(request.system);
+	TaskGroup taskGroup{.action = ActionType::INFO, .system = request.system};
+	taskGroup.flags = request.flags;
+	const std::string packageName = request.packages.empty() ? std::string{} : request.packages.front();
+	return plugin->info(this->buildPluginContext(plugin, taskGroup), packageName);
+}
 
 void Executer::execute(Graph *graph) {
 	if (graph == nullptr) {
@@ -69,7 +112,11 @@ void Executer::execute(Graph *graph) {
 	taskGroups = plannedTaskGroups;
 	if (this->config.execution.useTransactionDb && !taskGroups.empty()) {
 		this->activeRunId.clear();
-		this->activeRunId = this->transactionDatabase->createRun(this->collectPackages(taskGroups));
+		std::vector<std::string> runFlags;
+		if (!taskGroups.empty()) {
+			runFlags = taskGroups.front().flags;
+		}
+		this->activeRunId = this->transactionDatabase->createRun(this->collectPackages(taskGroups), runFlags);
 		if (this->activeRunId.empty()) {
 			return;
 		}
@@ -127,7 +174,11 @@ std::vector<Executer::TaskGroup> Executer::recoverPendingTaskGroups() const {
 	}
 
 	(void)this->transactionDatabase->markRunState(activeRun->id, "recovered");
-	return this->createTaskGroupsFromRecords(pendingItems);
+	std::vector<TaskGroup> recoveredTaskGroups = this->createTaskGroupsFromRecords(pendingItems);
+	for (TaskGroup& taskGroup : recoveredTaskGroups) {
+		taskGroup.flags = activeRun->flags;
+	}
+	return recoveredTaskGroups;
 }
 
 std::vector<TransactionItemRecord> Executer::reconcileRecoveredItems(const std::string& runId, const std::vector<TransactionItemRecord>& items) const {
@@ -202,9 +253,13 @@ std::vector<Executer::TaskGroup> Executer::createTaskGroupsFromRecords(const std
 
 	for (const TransactionItemRecord& record : records) {
 		if (groups.empty() || groups.back().action != record.package.action || groups.back().system != record.package.system) {
-			groups.push_back(TaskGroup{.action = record.package.action, .system = record.package.system});
+			groups.push_back(TaskGroup{.action = record.package.action, .system = record.package.system, .flags = record.package.flags});
 		}
 		groups.back().packages.push_back(record.package);
+		if (record.package.localTarget) {
+			groups.back().usesLocalTarget = true;
+			groups.back().localPath = record.package.sourcePath;
+		}
 	}
 
 	return groups;
@@ -223,10 +278,14 @@ std::vector<Executer::TaskGroup> Executer::createTaskGroups(const Graph& graph) 
 
 	for (const Package& package : this->orderedPackages(graph)) {
 		if (groups.empty() || groups.back().action != package.action || groups.back().system != package.system) {
-			groups.push_back(TaskGroup{.action = package.action, .system = package.system});
+			groups.push_back(TaskGroup{.action = package.action, .system = package.system, .flags = package.flags});
 		}
 
 		groups.back().packages.push_back(package);
+		if (package.localTarget) {
+			groups.back().usesLocalTarget = true;
+			groups.back().localPath = package.sourcePath;
+		}
 	}
 
 	return groups;
@@ -252,6 +311,10 @@ std::vector<Executer::TaskGroup> Executer::filterExecutableTaskGroups(const std:
 		}
 
 		TaskGroup filteredTaskGroup = taskGroup;
+		if (filteredTaskGroup.usesLocalTarget) {
+			filteredTaskGroups.push_back(std::move(filteredTaskGroup));
+			continue;
+		}
 		filteredTaskGroup.packages = plugin->getMissingPackages(taskGroup.packages);
 		if (!filteredTaskGroup.packages.empty()) {
 			filteredTaskGroups.push_back(std::move(filteredTaskGroup));
@@ -290,8 +353,23 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGr
 	return this->executeTaskGroup(taskGroup, this->activeRunId);
 }
 
+PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup& taskGroup) const {
+	if (plugin == nullptr) {
+		return {};
+	}
+
+	return PluginCallContext{
+		.pluginId = plugin->getPluginId(),
+		.pluginDirectory = plugin->getPluginDirectory(),
+		.scriptPath = plugin->getScriptPath(),
+		.bootstrapPath = plugin->getBootstrapPath(),
+		.flags = taskGroup.flags,
+		.host = plugin->getRuntimeHost()
+	};
+}
+
 std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const {
-	if (taskGroup.packages.empty()) {
+	if (taskGroup.packages.empty() && !taskGroup.usesLocalTarget) {
 		return {};
 	}
 
@@ -309,7 +387,7 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGr
 	}
 
 	TaskGroup executableTaskGroup = taskGroup;
-	if (actionUsesDesiredStateFilter(taskGroup.action)) {
+	if (actionUsesDesiredStateFilter(taskGroup.action) && !taskGroup.usesLocalTarget) {
 		IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
 		if (plugin != nullptr) {
 			executableTaskGroup.packages = plugin->getMissingPackages(taskGroup.packages);
@@ -340,14 +418,34 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGr
 }
 
 std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const {
+	if (taskGroup.usesLocalTarget) {
+		if (!this->dispatchTaskGroupToPlugin(taskGroup)) {
+			std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(taskGroup);
+			for (TransactionRecord& record : failureRecords) {
+				record.runId = runId;
+				record.errorMessage = "plugin action failed";
+			}
+			return failureRecords;
+		}
+
+		std::vector<TransactionRecord> successRecords = this->buildSuccessRecords(taskGroup);
+		for (TransactionRecord& record : successRecords) {
+			record.runId = runId;
+		}
+		return successRecords;
+	}
+
 	std::vector<TransactionRecord> records;
 	records.reserve(taskGroup.packages.size());
 
 	for (const Package& package : taskGroup.packages) {
+		TaskGroup singlePackageTaskGroup{.action = taskGroup.action, .system = taskGroup.system, .flags = taskGroup.flags, .localPath = taskGroup.localPath, .usesLocalTarget = taskGroup.usesLocalTarget};
+		singlePackageTaskGroup.packages = {package};
+
 		if (actionUsesDesiredStateFilter(taskGroup.action)) {
 			IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
 			if (plugin != nullptr && plugin->getMissingPackages({package}).empty()) {
-				std::vector<TransactionRecord> successRecords = this->buildSuccessRecords(TaskGroup{.action = taskGroup.action, .system = taskGroup.system, .packages = {package}});
+				std::vector<TransactionRecord> successRecords = this->buildSuccessRecords(singlePackageTaskGroup);
 				for (TransactionRecord& record : successRecords) {
 					record.runId = runId;
 				}
@@ -357,7 +455,7 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 		}
 
 		if (!this->transactionDatabase->updateItemStatus(runId, package, "running")) {
-			std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(TaskGroup{.action = taskGroup.action, .system = taskGroup.system, .packages = {package}});
+			std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(singlePackageTaskGroup);
 			for (TransactionRecord& record : failureRecords) {
 				record.runId = runId;
 				record.errorMessage = "transaction update failed";
@@ -366,7 +464,6 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 			break;
 		}
 
-		const TaskGroup singlePackageTaskGroup{.action = taskGroup.action, .system = taskGroup.system, .packages = {package}};
 		if (!this->dispatchTaskGroupToPlugin(singlePackageTaskGroup)) {
 			std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(singlePackageTaskGroup);
 			for (TransactionRecord& record : failureRecords) {
@@ -394,6 +491,7 @@ void Executer::writeTransactionResults(const std::vector<TransactionRecord>& rec
 	if (this->transactionDatabase == nullptr || this->activeRunId.empty()) {
 		return;
 	}
+	const std::vector<TransactionItemRecord> runItems = this->transactionDatabase->getRunItems(this->activeRunId);
 
 	for (const TransactionRecord& record : records) {
 		Package package;
@@ -401,6 +499,14 @@ void Executer::writeTransactionResults(const std::vector<TransactionRecord>& rec
 		package.system = record.system;
 		package.name = record.packageName;
 		package.version = record.packageVersion;
+		for (const TransactionItemRecord& item : runItems) {
+			if (item.package.action == package.action && item.package.system == package.system && item.package.name == package.name && item.package.version == package.version) {
+				package.sourcePath = item.package.sourcePath;
+				package.localTarget = item.package.localTarget;
+				package.flags = item.package.flags;
+				break;
+			}
+		}
 		(void)this->transactionDatabase->updateItemStatus(this->activeRunId, package, record.status, record.errorMessage);
 	}
 }
@@ -455,16 +561,22 @@ bool Executer::dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const {
 	if (plugin == nullptr) {
 		return false;
 	}
+	const PluginCallContext context = this->buildPluginContext(plugin, taskGroup);
 
 		switch (taskGroup.action) {
 			case ActionType::INSTALL:
 			case ActionType::ENSURE:
-				return plugin->install(taskGroup.packages);
+				if (taskGroup.usesLocalTarget) {
+					return plugin->installLocal(context, taskGroup.localPath);
+				}
+				return plugin->install(context, taskGroup.packages);
 		case ActionType::REMOVE:
-			return plugin->remove(taskGroup.packages);
+			return plugin->remove(context, taskGroup.packages);
 		case ActionType::UPDATE:
-			return plugin->update(taskGroup.packages);
+			return plugin->update(context, taskGroup.packages);
 		case ActionType::SEARCH:
+		case ActionType::LIST:
+		case ActionType::INFO:
 		case ActionType::UNKNOWN:
 		default:
 			return false;

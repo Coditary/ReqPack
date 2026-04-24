@@ -26,6 +26,9 @@ std::filesystem::path requirementsMarkerPath(const ReqPackConfig& config, const 
 }
 
 std::string packageSpecifierFromPackage(const Package& package) {
+	if (package.localTarget && !package.sourcePath.empty()) {
+		return package.sourcePath;
+	}
 	if (package.version.empty()) {
 		return package.name;
 	}
@@ -190,6 +193,10 @@ std::vector<Request> Planner::filterRequestedPackages(const std::vector<Request>
 
 	for (const Request& request : requests) {
 		if (request.action != ActionType::INSTALL || request.packages.empty()) {
+			if (request.action == ActionType::INSTALL && request.usesLocalTarget) {
+				filteredRequests.push_back(request);
+				continue;
+			}
 			filteredRequests.push_back(request);
 			continue;
 		}
@@ -341,6 +348,14 @@ Graph* Planner::buildDependencyDag(const std::vector<Package>& dependencies) con
 
 void Planner::addRequestToGraph(Graph& graph, const Request& request, bool includeDependencies) const {
 	if (request.packages.empty()) {
+		if (request.usesLocalTarget) {
+			const Package package = this->makeLocalRequestedPackage(request);
+			if (includeDependencies) {
+				this->addPackageToGraph(graph, package);
+				return;
+			}
+			(void)findOrAddPackageVertex(graph, package);
+		}
 		return;
 	}
 
@@ -398,6 +413,7 @@ Package Planner::makeRequestedPackage(const Request& request, const std::string&
 	Package package;
 	package.action = request.action;
 	package.system = this->registry->resolvePluginName(request.system);
+	package.flags = request.flags;
 
 	const std::size_t versionSeparator = packageSpecifier.rfind('@');
 	if (versionSeparator == std::string::npos || versionSeparator == 0 || versionSeparator == packageSpecifier.size() - 1) {
@@ -407,6 +423,17 @@ Package Planner::makeRequestedPackage(const Request& request, const std::string&
 
 	package.name = packageSpecifier.substr(0, versionSeparator);
 	package.version = packageSpecifier.substr(versionSeparator + 1);
+	return package;
+}
+
+Package Planner::makeLocalRequestedPackage(const Request& request) const {
+	Package package;
+	package.action = request.action;
+	package.system = this->registry->resolvePluginName(request.system);
+	package.name = std::filesystem::path(request.localPath).filename().string();
+	package.sourcePath = request.localPath;
+	package.localTarget = true;
+	package.flags = request.flags;
 	return package;
 }
 

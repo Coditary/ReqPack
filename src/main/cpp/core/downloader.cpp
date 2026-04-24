@@ -198,6 +198,10 @@ bool Downloader::downloadPlugin(const std::string& system) const {
     return true;
 }
 
+bool Downloader::download(const std::string& source, const std::string& destinationPath) const {
+	return this->download_to_path(source, destinationPath);
+}
+
 bool Downloader::download_to_path(const std::string& source, const std::filesystem::path& targetPath) const {
     std::filesystem::create_directories(targetPath.parent_path());
 

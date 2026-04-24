@@ -16,6 +16,7 @@ struct TransactionRunRecord {
 	std::string state;
 	std::string createdAt;
 	std::string updatedAt;
+	std::vector<std::string> flags;
 };
 
 struct TransactionItemRecord {
@@ -45,7 +46,7 @@ public:
 	bool ensureReady() const;
 	std::optional<TransactionRunRecord> getActiveRun() const;
 	std::vector<TransactionItemRecord> getRunItems(const std::string& runId) const;
-	std::string createRun(const std::vector<Package>& packages) const;
+	std::string createRun(const std::vector<Package>& packages, const std::vector<std::string>& flags = {}) const;
 	bool updateItemStatus(const std::string& runId, const Package& package, const std::string& status, const std::string& errorMessage = {}) const;
 	bool updateItemsStatus(const std::string& runId, const std::vector<Package>& packages, const std::string& status, const std::string& errorMessage = {}) const;
 	bool markRunState(const std::string& runId, const std::string& state) const;

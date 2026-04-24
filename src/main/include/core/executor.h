@@ -27,6 +27,9 @@ class Executer {
 		ActionType action{ActionType::UNKNOWN};
 		std::string system;
 		std::vector<Package> packages;
+		std::vector<std::string> flags;
+		std::string localPath;
+		bool usesLocalTarget{false};
 	};
 
 	Registry* registry;
@@ -46,6 +49,7 @@ class Executer {
 	std::vector<TransactionRecord> executeTransactionalTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const;
 	std::vector<TransactionRecord> executeTaskGroup(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> executeTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const;
+	PluginCallContext buildPluginContext(IPlugin* plugin, const TaskGroup& taskGroup) const;
 	void writeTransactionResults(const std::vector<TransactionRecord>& records) const;
 	void markCommittedTransactions() const;
 	void deleteCommittedTransactions() const;
@@ -59,4 +63,7 @@ public:
 	~Executer();
 
 	void execute(Graph *graph);
+	std::vector<PackageInfo> list(const Request& request) const;
+	std::vector<PackageInfo> search(const Request& request) const;
+	PackageInfo info(const Request& request) const;
 };

@@ -34,7 +34,7 @@ std::uint64_t fnv1aHash(std::string_view value) {
 }
 
 std::string packageToken(const Package& package) {
-	return std::to_string(static_cast<int>(package.action)) + "|" + package.system + "|" + package.name + "|" + package.version;
+	return std::to_string(static_cast<int>(package.action)) + "|" + package.system + "|" + package.name + "|" + package.version + "|" + package.sourcePath + "|" + (package.localTarget ? "1" : "0");
 }
 
 std::string itemIdForPackage(const Package& package) {
@@ -93,6 +93,14 @@ std::string serializeRun(const TransactionRunRecord& run) {
 	stream << "state=" << escapeField(run.state) << '\n';
 	stream << "createdAt=" << escapeField(run.createdAt) << '\n';
 	stream << "updatedAt=" << escapeField(run.updatedAt) << '\n';
+	stream << "flags=";
+	for (std::size_t index = 0; index < run.flags.size(); ++index) {
+		if (index > 0) {
+			stream << ';';
+		}
+		stream << escapeField(run.flags[index]);
+	}
+	stream << '\n';
 	return stream.str();
 }
 
@@ -114,6 +122,14 @@ std::optional<TransactionRunRecord> deserializeRun(const std::string& runId, con
 			run.createdAt = value;
 		} else if (key == "updatedAt") {
 			run.updatedAt = value;
+		} else if (key == "flags") {
+			std::istringstream flags(value);
+			std::string flag;
+			while (std::getline(flags, flag, ';')) {
+				if (!flag.empty()) {
+					run.flags.push_back(flag);
+				}
+			}
 		}
 	}
 	if (run.id.empty() || run.state.empty()) {
@@ -129,6 +145,8 @@ std::string serializeItem(const TransactionItemRecord& item) {
 	stream << "system=" << escapeField(item.package.system) << '\n';
 	stream << "name=" << escapeField(item.package.name) << '\n';
 	stream << "version=" << escapeField(item.package.version) << '\n';
+	stream << "sourcePath=" << escapeField(item.package.sourcePath) << '\n';
+	stream << "localTarget=" << (item.package.localTarget ? "1" : "0") << '\n';
 	stream << "status=" << escapeField(item.status) << '\n';
 	stream << "error=" << escapeField(item.errorMessage) << '\n';
 	return stream.str();
@@ -175,6 +193,10 @@ std::optional<TransactionItemRecord> deserializeItem(const std::string& key, con
 			item.package.name = value;
 		} else if (field == "version") {
 			item.package.version = value;
+		} else if (field == "sourcePath") {
+			item.package.sourcePath = value;
+		} else if (field == "localTarget") {
+			item.package.localTarget = value == "1";
 		} else if (field == "status") {
 			item.status = value;
 		} else if (field == "error") {
@@ -361,7 +383,7 @@ std::vector<TransactionItemRecord> TransactionDatabase::getRunItems(const std::s
 	return items;
 }
 
-std::string TransactionDatabase::createRun(const std::vector<Package>& packages) const {
+std::string TransactionDatabase::createRun(const std::vector<Package>& packages, const std::vector<std::string>& flags) const {
 	if (!this->ensureReady()) {
 		return {};
 	}
@@ -372,7 +394,7 @@ std::string TransactionDatabase::createRun(const std::vector<Package>& packages)
 
 	const std::string timestamp = nowTimestamp();
 	const std::string runId = timestamp + "-" + std::to_string(packages.size());
-	TransactionRunRecord run{.id = runId, .state = "open", .createdAt = timestamp, .updatedAt = timestamp};
+	TransactionRunRecord run{.id = runId, .state = "open", .createdAt = timestamp, .updatedAt = timestamp, .flags = flags};
 
 	std::lock_guard<std::mutex> lock(this->mutex);
 	MDB_txn* transaction = nullptr;

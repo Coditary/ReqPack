@@ -143,10 +143,6 @@ void Registry::materializePluginScript(const RegistryRecord& record) const {
 void Registry::scanDirectory(const std::string& path) {
     (void)this->database.ensureReady();
 
-    for (const RegistryRecord& record : this->database.getAllRecords()) {
-        this->materializePluginScript(record);
-    }
-
     if (!std::filesystem::exists(path)) return;
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
@@ -162,10 +158,8 @@ void Registry::scanDirectory(const std::string& path) {
 
         std::string id = filePath.stem().string();
 
-        if (m_plugins.find(id) == m_plugins.end()) {
-            m_plugins[id] = std::make_unique<LuaBridge>(filePath.string());
-            m_states[id] = PluginState::REGISTERED;
-        }
+		m_plugins[id] = std::make_unique<LuaBridge>(filePath.string(), this->config);
+		m_states[id] = PluginState::REGISTERED;
     }
 }
 

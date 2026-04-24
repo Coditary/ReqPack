@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(ReqPack LANGUAGES CXX)
 enable_language(C)
+enable_testing()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,6 +49,7 @@ set(SOURCES
     src/main/cpp/main.cpp
     src/main/cpp/cli/cli.cpp
     src/main/cpp/output/logger.cpp
+    src/main/cpp/plugins/exec_rules.cpp
     src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/core/configuration.cpp
     src/main/cpp/core/downloader.cpp
@@ -72,6 +74,7 @@ target_link_libraries(ReqPack PRIVATE
 	CLI11::CLI11
 	CURL::libcurl
 	lmdb
+	util
 	${LUA_LIBRARIES}
 	Boost::boost
 	spdlog::spdlog
@@ -79,3 +82,8 @@ target_link_libraries(ReqPack PRIVATE
 )
 
 target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)
+
+add_test(
+    NAME exec-rules-smoke
+    COMMAND zsh "${CMAKE_SOURCE_DIR}/tests/test_exec_rules.sh"
+)

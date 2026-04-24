@@ -17,7 +17,11 @@ int main(int argc, char* argv[]) {
     const ReqPackConfigOverrides configOverrides = cli.parseConfigOverrides(argc, argv);
     const std::filesystem::path configPath = configOverrides.configPath.value_or(default_reqpack_config_path());
     const ReqPackConfig fileConfig = load_config_from_lua(configPath, DEFAULT_REQPACK_CONFIG);
-    const ReqPackConfig config = apply_config_overrides(fileConfig, configOverrides);
+    ReqPackConfig config = apply_config_overrides(fileConfig, configOverrides);
+    const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";
+    if (!configOverrides.pluginDirectory.has_value() && std::filesystem::exists(workspacePluginDirectory)) {
+        config.registry.pluginDirectory = workspacePluginDirectory.string();
+    }
     Logger& logger = Logger::instance();
 
     logger.setLevel(to_string(config.logging.level));

@@ -15,6 +15,10 @@
 enum class OutputAction {
 	LOG,
 	STDOUT,
+	PLUGIN_STATUS,
+	PLUGIN_PROGRESS,
+	PLUGIN_EVENT,
+	PLUGIN_ARTIFACT,
 	FLUSH,
 	STOP
 };
@@ -24,6 +28,10 @@ struct OutputContext {
 	std::string message{};
 	std::string source{};
 	std::string scope{};
+	int statusCode{0};
+	int progressPercent{0};
+	std::string eventName{};
+	std::string payload{};
 };
 
 struct OutputEvent {

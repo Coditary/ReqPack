@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <utility>
 
 #include "output/logger.h"
@@ -17,6 +18,11 @@ std::string to_lower(std::string value) {
         return static_cast<char>(std::tolower(c));
     });
     return value;
+}
+
+bool is_existing_path(const std::string& value) {
+	std::error_code error;
+	return std::filesystem::exists(std::filesystem::path(value), error) && !error;
 }
 
 }  // namespace
@@ -112,6 +118,10 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
         const std::optional<std::pair<std::string, std::string>> scoped_package = split_scoped_package(argument, known_systems);
         if (scoped_package.has_value()) {
             Request& request = ensure_request(scoped_package->first);
+			if (request.usesLocalTarget) {
+				Logger::instance().err("install cannot mix local path and package names for system '" + request.system + "'");
+				return {};
+			}
             request.packages.push_back(scoped_package->second);
             current_system = request.system;
             continue;
@@ -132,6 +142,19 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
         }
 
         Request& request = ensure_request(current_system);
+		if (action == ActionType::INSTALL && is_existing_path(argument)) {
+			if (!request.packages.empty() || (request.usesLocalTarget && request.localPath != argument)) {
+				Logger::instance().err("install cannot mix local path and package names for system '" + current_system + "'");
+				return {};
+			}
+			request.localPath = argument;
+			request.usesLocalTarget = true;
+			continue;
+		}
+		if (request.usesLocalTarget) {
+			Logger::instance().err("install cannot mix local path and package names for system '" + current_system + "'");
+			return {};
+		}
         request.packages.push_back(argument);
     }
 
@@ -160,6 +183,8 @@ void Cli::print_help() {
         "  remove                  Removes requested packages\n"
         "  update                  Updates requested packages\n"
         "  search                  Searches for packages\n"
+        "  list                    Lists packages for a system\n"
+        "  info                    Shows package info for a system\n"
         "  ensure [systems...]     Ensures plugin requirements are installed\n"
         "\nConfig:\n"
         "  --config <path>         Loads config from a custom Lua file\n"
@@ -185,6 +210,12 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "search") {
         return ActionType::SEARCH;
+    }
+    if (normalized_command == "list") {
+        return ActionType::LIST;
+    }
+    if (normalized_command == "info") {
+        return ActionType::INFO;
     }
     if (normalized_command == "ensure") {
         return ActionType::ENSURE;

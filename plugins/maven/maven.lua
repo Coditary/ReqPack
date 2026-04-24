@@ -1,42 +1,11 @@
-plugin = {
-    name = "Apache Maven Manager",
-    version = "1.1.0",
-    author = "OpenCode",
-    description = "Maven plugin with Java and Maven prerequisites via sys"
-}
+plugin = {}
 
 local function trim(value)
-    return (value:gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
-local function getenv(name, fallback)
-    local value = os.getenv(name)
-    if value == nil or trim(value) == "" then
-        return fallback
-    end
-
-    return trim(value)
-end
-
-local function command_exists(name)
-    local handle = io.popen("command -v " .. name .. " 2>/dev/null")
-    if handle == nil then
-        return false
-    end
-
-    local result = handle:read("*a") or ""
-    handle:close()
-    return trim(result) ~= ""
+    return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
 local function shell_quote(value)
     return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
-end
-
-local function sys_call(cmd)
-    print("[Maven-Exec] " .. cmd)
-    local success = os.execute(cmd)
-    return success == true or success == 0
 end
 
 local function split(value, separator)
@@ -51,21 +20,13 @@ local function join(parts, separator)
     return table.concat(parts, separator)
 end
 
-local function path_exists(path)
-    local handle = io.open(path, "r")
-    if handle ~= nil then
-        handle:close()
-        return true
+local function getenv(name, fallback)
+    local result = reqpack.exec.run("printf '%s' \"${" .. name .. ":-}\"")
+    local value = trim(result.stdout or "")
+    if value == "" then
+        return fallback
     end
-
-    local probe = io.popen("test -d " .. shell_quote(path) .. " >/dev/null 2>&1 && printf 1")
-    if probe == nil then
-        return false
-    end
-
-    local result = probe:read("*a") or ""
-    probe:close()
-    return trim(result) == "1"
+    return value
 end
 
 local function maven_repo_dir()
@@ -139,50 +100,44 @@ local function artifact_repo_path(artifact)
     return artifact_repo_dir(artifact) .. "/" .. artifact_filename(artifact)
 end
 
-local function artifact_display_name(artifact)
-    return artifact.groupId .. ":" .. artifact.artifactId
+local function path_exists(path)
+    return reqpack.exec.run("test -e " .. shell_quote(path)).success
 end
 
 local function local_artifact_versions(groupId, artifactId)
     local path = maven_repo_dir() .. "/" .. groupId:gsub("%.", "/") .. "/" .. artifactId
-    local handle = io.popen("ls -1 " .. shell_quote(path) .. " 2>/dev/null")
-    if handle == nil then
-        return {}
-    end
-
+    local result = reqpack.exec.run("ls -1 " .. shell_quote(path) .. " 2>/dev/null")
     local versions = {}
-    for line in handle:lines() do
+    for line in (result.stdout or ""):gmatch("[^\r\n]+") do
         local version = trim(line)
         if version ~= "" then
             table.insert(versions, version)
         end
     end
-    handle:close()
     table.sort(versions)
     return versions
 end
 
 local function search_local_artifacts(prompt)
     local normalized = trim(prompt):lower()
-
     local repo = maven_repo_dir()
-    local handle = io.popen("find " .. shell_quote(repo) .. " -name '*.pom' 2>/dev/null")
-    if handle == nil then
-        return {}
-    end
-
-    local results = {}
-    for line in handle:lines() do
+    local result = reqpack.exec.run("find " .. shell_quote(repo) .. " -name '*.pom' 2>/dev/null")
+    local items = {}
+    for line in (result.stdout or ""):gmatch("[^\r\n]+") do
         local path = trim(line)
         local relative = path:gsub("^" .. repo .. "/?", "")
         local parts = split(relative, "/")
         if #parts >= 4 then
             local version = parts[#parts - 1]
             local artifactId = parts[#parts - 2]
-            local groupId = join({ table.unpack(parts, 1, #parts - 3) }, ".")
+            local groupParts = {}
+            for index = 1, #parts - 3 do
+                table.insert(groupParts, parts[index])
+            end
+            local groupId = join(groupParts, ".")
             local name = groupId .. ":" .. artifactId
             if normalized == "" or name:lower():find(normalized, 1, true) ~= nil then
-                table.insert(results, {
+                table.insert(items, {
                     name = name,
                     version = version,
                     description = "Installed in local Maven repository"
@@ -190,9 +145,7 @@ local function search_local_artifacts(prompt)
             end
         end
     end
-    handle:close()
-
-    return results
+    return items
 end
 
 local function artifact_query_from_name(name)
@@ -223,18 +176,12 @@ local function artifact_query_from_name(name)
     return artifact, nil
 end
 
-function plugin.init()
-    if not command_exists("java") then
-        print("[Lua: Maven] Fehler: java wurde nicht gefunden.")
-        return false
-    end
+function plugin.getName()
+    return "Apache Maven Manager"
+end
 
-    if not command_exists("mvn") then
-        print("[Lua: Maven] Fehler: mvn wurde nicht gefunden.")
-        return false
-    end
-
-    return true
+function plugin.getVersion()
+    return "2.0.0"
 end
 
 function plugin.getCategories()
@@ -248,57 +195,101 @@ function plugin.getRequirements()
     }
 end
 
-function plugin.install(packages)
+function plugin.getMissingPackages(packages)
+    local missing = {}
+    for _, pkg in ipairs(packages or {}) do
+        if pkg.localTarget then
+            table.insert(missing, pkg)
+        else
+            local artifact, err = artifact_from_pkg(pkg)
+            local action = pkg.action
+            if artifact == nil then
+                table.insert(missing, pkg)
+            elseif action == "remove" or action == 2 then
+                if path_exists(artifact_repo_path(artifact)) then
+                    table.insert(missing, pkg)
+                end
+            elseif action == "update" or action == 3 then
+                if not path_exists(artifact_repo_path(artifact)) then
+                    table.insert(missing, pkg)
+                end
+            elseif not path_exists(artifact_repo_path(artifact)) then
+                table.insert(missing, pkg)
+            end
+        end
+    end
+
+    return missing
+end
+
+function plugin.install(context, packages)
     if #packages == 0 then return true end
 
     local commands = {}
     for _, pkg in ipairs(packages) do
         local artifact, err = artifact_from_pkg(pkg)
         if artifact == nil then
-            print("[Lua: Maven] Fehler: " .. err)
+            context.tx.failed(err)
             return false
         end
 
         table.insert(commands, "mvn -q dependency:get -Dtransitive=true -Dartifact=" .. shell_quote(artifact_coordinate(artifact)))
     end
 
-    return sys_call(table.concat(commands, " && "))
+    context.tx.begin_step("install maven artifacts")
+    local result = context.exec.run(table.concat(commands, " && "))
+    if not result.success then
+        context.tx.failed("maven install failed")
+        return false
+    end
+
+    context.events.installed(packages)
+    context.tx.success()
+    return true
 end
 
-function plugin.remove(packages)
+function plugin.installLocal(context, path)
+    context.tx.begin_step("install local maven artifact")
+    local result = context.exec.run("mvn -q install:install-file -Dfile=" .. shell_quote(path) .. " -DgeneratePom=true")
+    if not result.success then
+        context.tx.failed("maven local install failed")
+        return false
+    end
+
+    context.events.installed({ path = path, localTarget = true })
+    context.tx.success()
+    return true
+end
+
+function plugin.remove(context, packages)
     if #packages == 0 then return true end
 
     local paths = {}
     for _, pkg in ipairs(packages) do
         local artifact, err = artifact_from_pkg(pkg)
         if artifact == nil then
-            print("[Lua: Maven] Fehler: " .. err)
+            context.tx.failed(err)
             return false
         end
 
         table.insert(paths, shell_quote(artifact_repo_dir(artifact)))
     end
 
-    return sys_call("rm -rf " .. table.concat(paths, " "))
-end
-
-function plugin.search(prompt)
-    local results = search_local_artifacts(prompt)
-    if #results > 0 then
-        return results
+    context.tx.begin_step("remove maven artifacts")
+    local result = context.exec.run("rm -rf " .. table.concat(paths, " "))
+    if not result.success then
+        context.tx.failed("maven remove failed")
+        return false
     end
 
-    return {
-        {
-            name = prompt,
-            version = "unknown",
-            description = "No local Maven artifacts matched"
-        }
-    }
+    context.events.deleted(packages)
+    context.tx.success()
+    return true
 end
 
-function plugin.update(packages)
-    if #packages == 0 then
+function plugin.update(context, packages)
+    if packages == nil or #packages == 0 then
+        context.log.info("maven update without packages does nothing")
         return true
     end
 
@@ -306,32 +297,56 @@ function plugin.update(packages)
     for _, pkg in ipairs(packages) do
         local artifact, err = artifact_from_pkg(pkg)
         if artifact == nil then
-            print("[Lua: Maven] Fehler: " .. err)
+            context.tx.failed(err)
             return false
         end
 
         table.insert(commands, "mvn -q dependency:get -U -Dtransitive=true -Dartifact=" .. shell_quote(artifact_coordinate(artifact)))
     end
 
-    return sys_call(table.concat(commands, " && "))
-end
+    context.tx.begin_step("update maven artifacts")
+    local result = context.exec.run(table.concat(commands, " && "))
+    if not result.success then
+        context.tx.failed("maven update failed")
+        return false
+    end
 
-function plugin.list()
-    return search_local_artifacts("")
-end
-
-function plugin.shutdown()
+    context.events.updated(packages)
+    context.tx.success()
     return true
 end
 
-function plugin.info(name)
+function plugin.list(context)
+    local items = search_local_artifacts("")
+    context.events.listed(items)
+    return items
+end
+
+function plugin.search(context, prompt)
+    local items = search_local_artifacts(prompt)
+    if #items == 0 then
+        items = {
+            {
+                name = prompt,
+                version = "unknown",
+                description = "No local Maven artifacts matched"
+            }
+        }
+    end
+    context.events.searched(items)
+    return items
+end
+
+function plugin.info(context, name)
     local artifact, err = artifact_query_from_name(name)
     if artifact == nil then
-        return {
+        local item = {
             name = name,
             version = "unknown",
             description = err or "Invalid Maven artifact coordinate"
         }
+        context.events.informed(item)
+        return item
     end
 
     local versions = local_artifact_versions(artifact.groupId, artifact.artifactId)
@@ -344,34 +359,19 @@ function plugin.info(name)
         version = latestVersion
     }
     local repoPath = artifact_repo_path(resolved)
-
-    return {
-        name = artifact_display_name(artifact),
+    local item = {
+        name = artifact.groupId .. ":" .. artifact.artifactId,
         version = latestVersion,
         description = path_exists(repoPath) and ("Installed locally at " .. repoPath) or "Not present in local Maven repository"
     }
+    context.events.informed(item)
+    return item
 end
 
-function plugin.getMissingPackages(packages)
-    local missing = {}
-    for _, pkg in ipairs(packages or {}) do
-        local artifact, err = artifact_from_pkg(pkg)
-        local action = pkg.action
-        if artifact == nil then
-            print("[Lua: Maven] Fehler: " .. err)
-            table.insert(missing, pkg)
-        elseif action == "remove" or action == 2 then
-            if path_exists(artifact_repo_path(artifact)) then
-                table.insert(missing, pkg)
-            end
-        elseif action == "update" or action == 3 then
-            if not path_exists(artifact_repo_path(artifact)) then
-                table.insert(missing, pkg)
-            end
-        elseif not path_exists(artifact_repo_path(artifact)) then
-            table.insert(missing, pkg)
-        end
-    end
+function plugin.init()
+    return reqpack.exec.run("command -v java >/dev/null 2>&1 && command -v mvn >/dev/null 2>&1").success
+end
 
-    return missing
+function plugin.shutdown()
+    return true
 end

@@ -10,6 +10,8 @@ enum class ActionType {
 	REMOVE,
 	UPDATE,
 	SEARCH,
+	LIST,
+	INFO,
 	ENSURE
 };
 
@@ -18,6 +20,8 @@ struct Request {
 	std::string system;
 	std::vector<std::string> packages;
 	std::vector<std::string> flags;
+	std::string localPath;
+	bool usesLocalTarget{false};
 };
 
 struct Package {
@@ -25,6 +29,9 @@ struct Package {
 	std::string system;
 	std::string name;
 	std::string version;
+	std::string sourcePath;
+	bool localTarget{false};
+	std::vector<std::string> flags;
 };
 
 struct PackageInfo {

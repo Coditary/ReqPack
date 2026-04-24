@@ -17,6 +17,7 @@ public:
     Downloader(RegistryDatabase* database, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
 
     bool downloadPlugin(const std::string& system) const;
+    bool download(const std::string& source, const std::string& destinationPath) const;
 
 private:
     bool download_to_path(const std::string& source, const std::filesystem::path& targetPath) const;
