@@ -1,9 +1,8 @@
 #include "core/downloader.h"
+#include "core/downloader_core.h"
 
 #include <curl/curl.h>
 
-#include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -22,28 +21,6 @@ std::string read_file(const std::filesystem::path& path) {
     std::ostringstream buffer;
     buffer << stream.rdbuf();
     return buffer.str();
-}
-
-bool has_non_whitespace(const std::string& value) {
-    return std::any_of(value.begin(), value.end(), [](unsigned char c) {
-        return !std::isspace(c);
-    });
-}
-
-bool looks_like_html_document(const std::string& value) {
-    std::string prefix = value.substr(0, std::min<std::size_t>(value.size(), 512));
-    std::transform(prefix.begin(), prefix.end(), prefix.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-
-    return prefix.find("<!doctype html") != std::string::npos ||
-           prefix.find("<html") != std::string::npos ||
-           prefix.find("<head") != std::string::npos ||
-           prefix.find("<body") != std::string::npos;
-}
-
-bool is_valid_plugin_script(const std::string& script) {
-    return has_non_whitespace(script) && !looks_like_html_document(script);
 }
 
 bool write_file(const std::filesystem::path& path, const std::string& content) {
@@ -183,7 +160,7 @@ bool Downloader::downloadPlugin(const std::string& system) const {
 
     const std::filesystem::path downloadedPath = this->plugin_target_path(resolvedSystem);
     const std::string script = read_file(downloadedPath);
-    if (!is_valid_plugin_script(script)) {
+    if (!downloader_is_valid_plugin_script(script)) {
         std::error_code removeError;
         std::filesystem::remove(downloadedPath, removeError);
         return false;
@@ -205,13 +182,13 @@ bool Downloader::download(const std::string& source, const std::string& destinat
 bool Downloader::download_to_path(const std::string& source, const std::filesystem::path& targetPath) const {
     std::filesystem::create_directories(targetPath.parent_path());
 
-    if (source.find("://") == std::string::npos) {
+    if (!downloader_is_remote_source(source)) {
         std::error_code error;
         std::filesystem::copy_file(source, targetPath, std::filesystem::copy_options::overwrite_existing, error);
         return !error;
     }
 
-    const std::filesystem::path tempPath = targetPath.string() + ".tmp";
+    const std::filesystem::path tempPath = downloader_temp_path_for_target(targetPath);
 
     FILE* file = std::fopen(tempPath.string().c_str(), "wb");
     if (file == nullptr) {
@@ -267,10 +244,7 @@ bool Downloader::ensure_registry_source_file() const {
 }
 
 std::string Downloader::resolve_plugin_name(const std::string& system) const {
-    auto normalized = system;
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
+	auto normalized = downloader_to_lower_copy(system);
 
     if (const std::optional<RegistryRecord> record = this->database->getRecord(normalized)) {
         if (record->alias && !record->source.empty()) {
@@ -288,10 +262,7 @@ std::string Downloader::resolve_plugin_name(const std::string& system) const {
 }
 
 std::optional<RegistryRecord> Downloader::plugin_record_for(const std::string& system) const {
-    auto normalized = system;
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
+	auto normalized = downloader_to_lower_copy(system);
 
     if (this->database == nullptr) {
         return std::nullopt;
@@ -301,7 +272,7 @@ std::optional<RegistryRecord> Downloader::plugin_record_for(const std::string& s
 }
 
 std::filesystem::path Downloader::plugin_target_path(const std::string& system) const {
-    return std::filesystem::path(this->config.registry.pluginDirectory) / system / (system + ".lua");
+	return downloader_plugin_target_path(this->config, system);
 }
 
 std::size_t Downloader::write_to_file(void* contents, std::size_t size, std::size_t nmemb, void* userp) {

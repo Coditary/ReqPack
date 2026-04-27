@@ -13,25 +13,20 @@ Graph* Validator::validate(Graph *graph) {
 		return nullptr;
 	}
 
-	const ValidationPolicy policy = this->loadPolicy();
+	const ValidationPolicy policy = validator_policy_from_config(this->config);
 	const std::vector<ValidationFinding> findings = this->scanGraph(*graph);
 
 	if (policy.generateReport) {
 		this->generateReport(*graph, findings);
 	}
 
-	if (this->exceedsThreshold(findings, policy)) {
-		if (!policy.promptOnUnsafe) {
-			return nullptr;
-		}
-
-		if (!this->requestUserDecision(findings)) {
-			return nullptr;
-		}
+	const ValidationDisposition disposition = validator_disposition(findings, policy);
+	if (disposition == ValidationDisposition::Abort) {
+		return nullptr;
 	}
 
-	if (this->shouldPromptUser(findings, policy) && !this->requestUserDecision(findings)) {
-		return nullptr;
+	if (disposition == ValidationDisposition::Prompt && !this->requestUserDecision(findings)) {
+			return nullptr;
 	}
 
 	return graph;
@@ -47,7 +42,7 @@ std::vector<Package> Validator::collectPackages(const Graph& graph) const {
 	return packages;
 }
 
-std::vector<Validator::ValidationFinding> Validator::scanGraph(const Graph& graph) const {
+std::vector<ValidationFinding> Validator::scanGraph(const Graph& graph) const {
 	std::vector<ValidationFinding> findings;
 
 	for (const Package& package : this->collectPackages(graph)) {
@@ -58,52 +53,23 @@ std::vector<Validator::ValidationFinding> Validator::scanGraph(const Graph& grap
 	return findings;
 }
 
-std::vector<Validator::ValidationFinding> Validator::scanPackage(const Package& package) const {
+std::vector<ValidationFinding> Validator::scanPackage(const Package& package) const {
 	std::vector<ValidationFinding> findings = this->runSnykScan(package);
 	const std::vector<ValidationFinding> owaspFindings = this->runOwaspScan(package);
 	findings.insert(findings.end(), owaspFindings.begin(), owaspFindings.end());
 	return findings;
 }
 
-std::vector<Validator::ValidationFinding> Validator::runSnykScan(const Package& package) const {
+std::vector<ValidationFinding> Validator::runSnykScan(const Package& package) const {
 	(void)package;
 	// Skeleton hook: later this will run a Snyk-backed scan and translate results into findings.
 	return {};
 }
 
-std::vector<Validator::ValidationFinding> Validator::runOwaspScan(const Package& package) const {
+std::vector<ValidationFinding> Validator::runOwaspScan(const Package& package) const {
 	(void)package;
 	// Skeleton hook: later this will run OWASP or similar scanners and translate results into findings.
 	return {};
-}
-
-Validator::ValidationPolicy Validator::loadPolicy() const {
-	ValidationPolicy policy;
-	policy.promptOnUnsafe = this->config.security.promptOnUnsafe ||
-		this->config.security.onUnsafe == UnsafeAction::PROMPT;
-	policy.abortThreshold = to_string(this->config.security.severityThreshold);
-	policy.abortScoreThreshold = this->config.security.scoreThreshold;
-	policy.generateReport = this->config.reports.enabled;
-	return policy;
-}
-
-bool Validator::exceedsThreshold(const std::vector<ValidationFinding>& findings, const ValidationPolicy& policy) const {
-	const int thresholdRank = this->severityRank(policy.abortThreshold);
-	for (const ValidationFinding& finding : findings) {
-		if (this->severityRank(finding.severity) >= thresholdRank) {
-			return true;
-		}
-
-		if (policy.abortScoreThreshold > 0.0 && finding.score >= policy.abortScoreThreshold) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
-bool Validator::shouldPromptUser(const std::vector<ValidationFinding>& findings, const ValidationPolicy& policy) const {
-	return policy.promptOnUnsafe && !findings.empty();
 }
 
 bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findings) const {
@@ -116,24 +82,4 @@ void Validator::generateReport(const Graph& graph, const std::vector<ValidationF
 	(void)graph;
 	(void)findings;
 	// Skeleton hook: later this can emit CycloneDX or similar reports.
-}
-
-int Validator::severityRank(const std::string& severity) const {
-	if (severity == "critical") {
-		return 4;
-	}
-	if (severity == "high") {
-		return 3;
-	}
-	if (severity == "medium") {
-		return 2;
-	}
-	if (severity == "low") {
-		return 1;
-	}
-	if (severity == "unassigned") {
-		return 0;
-	}
-
-	return 0;
 }

@@ -8,6 +8,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v2.13.10
+)
+
 find_package(Lua REQUIRED)
 find_package(CLI11 REQUIRED)
 find_package(CURL REQUIRED)
@@ -21,6 +27,7 @@ FetchContent_Declare(
     GIT_TAG LMDB_0.9.33
 )
 FetchContent_MakeAvailable(lmdb)
+FetchContent_MakeAvailable(Catch2)
 
 add_library(lmdb STATIC
     ${lmdb_SOURCE_DIR}/libraries/liblmdb/mdb.c
@@ -49,25 +56,122 @@ set(SOURCES
     src/main/cpp/main.cpp
     src/main/cpp/cli/cli.cpp
     src/main/cpp/output/logger.cpp
+    src/main/cpp/output/logger_core.cpp
     src/main/cpp/plugins/exec_rules.cpp
+    src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/core/configuration.cpp
     src/main/cpp/core/downloader.cpp
+    src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/registry_database.cpp
+    src/main/cpp/core/registry_database_core.cpp
     src/main/cpp/core/transaction_database.cpp
+    src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/orchestrator.cpp
     src/main/cpp/core/planner.cpp
+    src/main/cpp/core/planner_core.cpp
     src/main/cpp/core/validator.cpp
+    src/main/cpp/core/validator_core.cpp
     src/main/cpp/core/executor.cpp
     src/main/cpp/core/registry.cpp
 )
 
 add_executable(ReqPack ${SOURCES})
 
+add_executable(exec_rules_unit_tests
+    tests/cpp/test_main.cpp
+    tests/unit/plugins/exec_rules/parse_tests.cpp
+    tests/unit/plugins/exec_rules/evaluation_tests.cpp
+    tests/unit/plugins/exec_rules/normalize_tests.cpp
+    src/main/cpp/plugins/exec_rules_core.cpp
+)
+
+add_executable(exec_rules_integration_tests
+    tests/cpp/test_main.cpp
+    tests/integration/plugins/exec_rules/smoke_tests.cpp
+    src/main/cpp/plugins/exec_rules_core.cpp
+)
+
+add_executable(core_integration_tests
+    tests/cpp/test_main.cpp
+    tests/integration/core/executor/service_tests.cpp
+    tests/integration/core/orchestrator/service_tests.cpp
+    tests/integration/core/planner/service_tests.cpp
+    tests/integration/core/registry/service_tests.cpp
+    tests/integration/plugins/lua_bridge/service_tests.cpp
+    src/main/cpp/core/executor.cpp
+    src/main/cpp/core/planner.cpp
+    src/main/cpp/core/planner_core.cpp
+    src/main/cpp/output/logger.cpp
+    src/main/cpp/output/logger_core.cpp
+    src/main/cpp/plugins/exec_rules.cpp
+    src/main/cpp/plugins/exec_rules_core.cpp
+    src/main/cpp/plugins/lua_bridge.cpp
+    src/main/cpp/core/configuration.cpp
+    src/main/cpp/core/downloader.cpp
+    src/main/cpp/core/downloader_core.cpp
+    src/main/cpp/core/registry.cpp
+    src/main/cpp/core/transaction_database.cpp
+    src/main/cpp/core/transaction_database_core.cpp
+    src/main/cpp/core/registry_database.cpp
+    src/main/cpp/core/registry_database_core.cpp
+)
+
+add_dependencies(core_integration_tests ReqPack)
+
+add_executable(core_unit_tests
+    tests/cpp/test_main.cpp
+    tests/unit/core/configuration/parse_tests.cpp
+    tests/unit/core/configuration/cli_tests.cpp
+    tests/unit/core/downloader/core_tests.cpp
+    tests/unit/core/planner/core_tests.cpp
+    tests/unit/core/registry_database/core_tests.cpp
+    tests/unit/core/transaction_database/serialization_tests.cpp
+    tests/unit/core/validator/policy_tests.cpp
+    tests/unit/core/validator/validate_tests.cpp
+    tests/unit/output/logger/format_tests.cpp
+    src/main/cpp/core/configuration.cpp
+    src/main/cpp/core/downloader_core.cpp
+    src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/transaction_database_core.cpp
+    src/main/cpp/core/validator.cpp
+    src/main/cpp/core/validator_core.cpp
+    src/main/cpp/output/logger_core.cpp
+)
+
 target_include_directories(ReqPack PRIVATE 
     ${SOL2_INCLUDE_DIR}
     ${LUA_INCLUDE_DIR}
     src/main/include
+)
+
+target_include_directories(exec_rules_unit_tests PRIVATE
+    ${SOL2_INCLUDE_DIR}
+    ${LUA_INCLUDE_DIR}
+    src/main/include
+    tests/cpp
+)
+
+target_include_directories(exec_rules_integration_tests PRIVATE
+    ${SOL2_INCLUDE_DIR}
+    ${LUA_INCLUDE_DIR}
+    src/main/include
+    tests/cpp
+)
+
+target_include_directories(core_unit_tests PRIVATE
+    ${SOL2_INCLUDE_DIR}
+    ${LUA_INCLUDE_DIR}
+    src/main/include
+    tests/cpp
+)
+
+target_include_directories(core_integration_tests PRIVATE
+    ${SOL2_INCLUDE_DIR}
+    ${LUA_INCLUDE_DIR}
+    src/main/include
+    tests/cpp
 )
 
 target_link_libraries(ReqPack PRIVATE 
@@ -81,9 +185,63 @@ target_link_libraries(ReqPack PRIVATE
 	fmt::fmt
 )
 
-target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)
-
-add_test(
-    NAME exec-rules-smoke
-    COMMAND zsh "${CMAKE_SOURCE_DIR}/tests/test_exec_rules.sh"
+target_link_libraries(exec_rules_unit_tests PRIVATE
+    Catch2::Catch2
+    ${LUA_LIBRARIES}
+    spdlog::spdlog
+    fmt::fmt
 )
+
+target_link_libraries(exec_rules_integration_tests PRIVATE
+    Catch2::Catch2
+    ${LUA_LIBRARIES}
+    spdlog::spdlog
+    fmt::fmt
+)
+
+target_link_libraries(core_unit_tests PRIVATE
+    Catch2::Catch2
+    ${LUA_LIBRARIES}
+    spdlog::spdlog
+    fmt::fmt
+)
+
+target_link_libraries(core_integration_tests PRIVATE
+    Catch2::Catch2
+    CURL::libcurl
+    lmdb
+    util
+    ${LUA_LIBRARIES}
+    Boost::boost
+    spdlog::spdlog
+    fmt::fmt
+)
+
+target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)
+target_compile_definitions(exec_rules_unit_tests PRIVATE
+    SOL_ALL_SAFETIES_ON=1
+    REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
+    REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
+)
+target_compile_definitions(exec_rules_integration_tests PRIVATE
+    SOL_ALL_SAFETIES_ON=1
+    REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
+    REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
+)
+target_compile_definitions(core_unit_tests PRIVATE
+    SOL_ALL_SAFETIES_ON=1
+    REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
+    REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
+)
+target_compile_definitions(core_integration_tests PRIVATE
+    SOL_ALL_SAFETIES_ON=1
+    REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
+    REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
+)
+
+include(CTest)
+include(${catch2_SOURCE_DIR}/contrib/Catch.cmake)
+catch_discover_tests(exec_rules_unit_tests TEST_PREFIX "unit::")
+catch_discover_tests(exec_rules_integration_tests TEST_PREFIX "integration::")
+catch_discover_tests(core_unit_tests TEST_PREFIX "unit::")
+catch_discover_tests(core_integration_tests TEST_PREFIX "integration::")

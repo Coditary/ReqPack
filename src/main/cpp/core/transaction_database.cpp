@@ -1,4 +1,5 @@
 #include "core/transaction_database.h"
+#include "core/transaction_database_core.h"
 
 #include <algorithm>
 #include <chrono>
@@ -31,183 +32,6 @@ std::uint64_t fnv1aHash(std::string_view value) {
 		hash *= 1099511628211ull;
 	}
 	return hash;
-}
-
-std::string packageToken(const Package& package) {
-	return std::to_string(static_cast<int>(package.action)) + "|" + package.system + "|" + package.name + "|" + package.version + "|" + package.sourcePath + "|" + (package.localTarget ? "1" : "0");
-}
-
-std::string itemIdForPackage(const Package& package) {
-	std::ostringstream stream;
-	stream << std::hex << fnv1aHash(packageToken(package));
-	return stream.str();
-}
-
-std::string runKey(const std::string& runId) {
-	return "run:" + runId;
-}
-
-std::string itemPrefix(const std::string& runId) {
-	return "item:" + runId + ":";
-}
-
-std::string itemKey(const std::string& runId, const Package& package) {
-	return itemPrefix(runId) + itemIdForPackage(package);
-}
-
-std::string escapeField(const std::string& value) {
-	std::string escaped;
-	escaped.reserve(value.size());
-	for (char c : value) {
-		if (c == '\\' || c == '\n') {
-			escaped.push_back('\\');
-			escaped.push_back(c == '\n' ? 'n' : c);
-			continue;
-		}
-		escaped.push_back(c);
-	}
-	return escaped;
-}
-
-std::string unescapeField(const std::string& value) {
-	std::string unescaped;
-	unescaped.reserve(value.size());
-	bool escaped = false;
-	for (char c : value) {
-		if (!escaped && c == '\\') {
-			escaped = true;
-			continue;
-		}
-		if (escaped) {
-			unescaped.push_back(c == 'n' ? '\n' : c);
-			escaped = false;
-			continue;
-		}
-		unescaped.push_back(c);
-	}
-	return unescaped;
-}
-
-std::string serializeRun(const TransactionRunRecord& run) {
-	std::ostringstream stream;
-	stream << "state=" << escapeField(run.state) << '\n';
-	stream << "createdAt=" << escapeField(run.createdAt) << '\n';
-	stream << "updatedAt=" << escapeField(run.updatedAt) << '\n';
-	stream << "flags=";
-	for (std::size_t index = 0; index < run.flags.size(); ++index) {
-		if (index > 0) {
-			stream << ';';
-		}
-		stream << escapeField(run.flags[index]);
-	}
-	stream << '\n';
-	return stream.str();
-}
-
-std::optional<TransactionRunRecord> deserializeRun(const std::string& runId, const std::string& payload) {
-	TransactionRunRecord run;
-	run.id = runId;
-	std::istringstream lines(payload);
-	std::string line;
-	while (std::getline(lines, line)) {
-		const std::size_t equals = line.find('=');
-		if (equals == std::string::npos) {
-			continue;
-		}
-		const std::string key = line.substr(0, equals);
-		const std::string value = unescapeField(line.substr(equals + 1));
-		if (key == "state") {
-			run.state = value;
-		} else if (key == "createdAt") {
-			run.createdAt = value;
-		} else if (key == "updatedAt") {
-			run.updatedAt = value;
-		} else if (key == "flags") {
-			std::istringstream flags(value);
-			std::string flag;
-			while (std::getline(flags, flag, ';')) {
-				if (!flag.empty()) {
-					run.flags.push_back(flag);
-				}
-			}
-		}
-	}
-	if (run.id.empty() || run.state.empty()) {
-		return std::nullopt;
-	}
-	return run;
-}
-
-std::string serializeItem(const TransactionItemRecord& item) {
-	std::ostringstream stream;
-	stream << "sequence=" << item.sequence << '\n';
-	stream << "action=" << static_cast<int>(item.package.action) << '\n';
-	stream << "system=" << escapeField(item.package.system) << '\n';
-	stream << "name=" << escapeField(item.package.name) << '\n';
-	stream << "version=" << escapeField(item.package.version) << '\n';
-	stream << "sourcePath=" << escapeField(item.package.sourcePath) << '\n';
-	stream << "localTarget=" << (item.package.localTarget ? "1" : "0") << '\n';
-	stream << "status=" << escapeField(item.status) << '\n';
-	stream << "error=" << escapeField(item.errorMessage) << '\n';
-	return stream.str();
-}
-
-std::optional<TransactionItemRecord> deserializeItem(const std::string& key, const std::string& payload) {
-	const std::size_t itemPrefixPosition = key.find(":");
-	if (itemPrefixPosition == std::string::npos) {
-		return std::nullopt;
-	}
-	const std::size_t runPrefixPosition = key.find(":", itemPrefixPosition + 1);
-	if (runPrefixPosition == std::string::npos || runPrefixPosition + 1 >= key.size()) {
-		return std::nullopt;
-	}
-
-	TransactionItemRecord item;
-	item.runId = key.substr(itemPrefixPosition + 1, runPrefixPosition - itemPrefixPosition - 1);
-	item.itemId = key.substr(runPrefixPosition + 1);
-
-	std::istringstream lines(payload);
-	std::string line;
-	while (std::getline(lines, line)) {
-		const std::size_t equals = line.find('=');
-		if (equals == std::string::npos) {
-			continue;
-		}
-		const std::string field = line.substr(0, equals);
-		const std::string value = unescapeField(line.substr(equals + 1));
-		if (field == "sequence") {
-			try {
-				item.sequence = static_cast<std::size_t>(std::stoull(value));
-			} catch (...) {
-				return std::nullopt;
-			}
-		} else if (field == "action") {
-			try {
-				item.package.action = static_cast<ActionType>(std::stoi(value));
-			} catch (...) {
-				item.package.action = ActionType::UNKNOWN;
-			}
-		} else if (field == "system") {
-			item.package.system = value;
-		} else if (field == "name") {
-			item.package.name = value;
-		} else if (field == "version") {
-			item.package.version = value;
-		} else if (field == "sourcePath") {
-			item.package.sourcePath = value;
-		} else if (field == "localTarget") {
-			item.package.localTarget = value == "1";
-		} else if (field == "status") {
-			item.status = value;
-		} else if (field == "error") {
-			item.errorMessage = value;
-		}
-	}
-
-	if (item.runId.empty() || item.itemId.empty() || item.status.empty()) {
-		return std::nullopt;
-	}
-	return item;
 }
 
 bool loadValue(MDB_txn* transaction, MDB_dbi database, const std::string& key, std::string& value) {
@@ -361,18 +185,18 @@ std::optional<TransactionRunRecord> TransactionDatabase::getActiveRun() const {
 		return std::nullopt;
 	}
 
-	const std::optional<std::string> payload = this->loadString(runKey(activeRunId.value()));
+	const std::optional<std::string> payload = this->loadString(transaction_database_run_key(activeRunId.value()));
 	if (!payload.has_value()) {
 		return std::nullopt;
 	}
 
-	return deserializeRun(activeRunId.value(), payload.value());
+	return transaction_database_deserialize_run(activeRunId.value(), payload.value());
 }
 
 std::vector<TransactionItemRecord> TransactionDatabase::getRunItems(const std::string& runId) const {
 	std::vector<TransactionItemRecord> items;
-	for (const auto& [key, value] : this->loadPrefixedEntries(itemPrefix(runId))) {
-		if (const auto item = deserializeItem(key, value)) {
+	for (const auto& [key, value] : this->loadPrefixedEntries(transaction_database_item_prefix(runId))) {
+		if (const auto item = transaction_database_deserialize_item(key, value)) {
 			items.push_back(item.value());
 		}
 	}
@@ -403,7 +227,7 @@ std::string TransactionDatabase::createRun(const std::vector<Package>& packages,
 	}
 
 	if (!putValue(transaction, this->dbi, std::string(ACTIVE_RUN_KEY), runId) ||
-		!putValue(transaction, this->dbi, runKey(runId), serializeRun(run))) {
+		!putValue(transaction, this->dbi, transaction_database_run_key(runId), transaction_database_serialize_run(run))) {
 		mdb_txn_abort(transaction);
 		return {};
 	}
@@ -412,11 +236,11 @@ std::string TransactionDatabase::createRun(const std::vector<Package>& packages,
 		const Package& package = packages[index];
 		TransactionItemRecord item;
 		item.runId = runId;
-		item.itemId = itemIdForPackage(package);
+		item.itemId = transaction_database_item_id_for_package(package);
 		item.sequence = index;
 		item.package = package;
 		item.status = "planned";
-		if (!putValue(transaction, this->dbi, itemKey(runId, package), serializeItem(item))) {
+		if (!putValue(transaction, this->dbi, transaction_database_item_key(runId, package), transaction_database_serialize_item(item))) {
 			mdb_txn_abort(transaction);
 			return {};
 		}
@@ -445,14 +269,14 @@ bool TransactionDatabase::updateItemsStatus(const std::string& runId, const std:
 	}
 
 	for (const Package& package : packages) {
-		const std::string key = itemKey(runId, package);
+		const std::string key = transaction_database_item_key(runId, package);
 		std::string payload;
 		if (!loadValue(transaction, this->dbi, key, payload)) {
 			mdb_txn_abort(transaction);
 			return false;
 		}
 
-		const std::optional<TransactionItemRecord> item = deserializeItem(key, payload);
+		const std::optional<TransactionItemRecord> item = transaction_database_deserialize_item(key, payload);
 		if (!item.has_value()) {
 			mdb_txn_abort(transaction);
 			return false;
@@ -461,18 +285,18 @@ bool TransactionDatabase::updateItemsStatus(const std::string& runId, const std:
 		TransactionItemRecord updated = item.value();
 		updated.status = status;
 		updated.errorMessage = errorMessage;
-		if (!putValue(transaction, this->dbi, key, serializeItem(updated))) {
+		if (!putValue(transaction, this->dbi, key, transaction_database_serialize_item(updated))) {
 			mdb_txn_abort(transaction);
 			return false;
 		}
 	}
 
 	std::string runPayload;
-	if (loadValue(transaction, this->dbi, runKey(runId), runPayload)) {
-		if (const auto run = deserializeRun(runId, runPayload)) {
+	if (loadValue(transaction, this->dbi, transaction_database_run_key(runId), runPayload)) {
+		if (const auto run = transaction_database_deserialize_run(runId, runPayload)) {
 			TransactionRunRecord updatedRun = run.value();
 			updatedRun.updatedAt = nowTimestamp();
-			if (!putValue(transaction, this->dbi, runKey(runId), serializeRun(updatedRun))) {
+			if (!putValue(transaction, this->dbi, transaction_database_run_key(runId), transaction_database_serialize_run(updatedRun))) {
 				mdb_txn_abort(transaction);
 				return false;
 			}
@@ -494,12 +318,12 @@ bool TransactionDatabase::markRunState(const std::string& runId, const std::stri
 	}
 
 	std::string payload;
-	if (!loadValue(transaction, this->dbi, runKey(runId), payload)) {
+	if (!loadValue(transaction, this->dbi, transaction_database_run_key(runId), payload)) {
 		mdb_txn_abort(transaction);
 		return false;
 	}
 
-	const std::optional<TransactionRunRecord> run = deserializeRun(runId, payload);
+	const std::optional<TransactionRunRecord> run = transaction_database_deserialize_run(runId, payload);
 	if (!run.has_value()) {
 		mdb_txn_abort(transaction);
 		return false;
@@ -508,7 +332,7 @@ bool TransactionDatabase::markRunState(const std::string& runId, const std::stri
 	TransactionRunRecord updatedRun = run.value();
 	updatedRun.state = state;
 	updatedRun.updatedAt = nowTimestamp();
-	if (!putValue(transaction, this->dbi, runKey(runId), serializeRun(updatedRun))) {
+	if (!putValue(transaction, this->dbi, transaction_database_run_key(runId), transaction_database_serialize_run(updatedRun))) {
 		mdb_txn_abort(transaction);
 		return false;
 	}
@@ -532,7 +356,7 @@ bool TransactionDatabase::markRunCommitted(const std::string& runId) const {
 		TransactionItemRecord updatedItem = item;
 		updatedItem.status = "committed";
 		updatedItem.errorMessage.clear();
-		if (!putValue(transaction, this->dbi, itemKey(runId, item.package), serializeItem(updatedItem))) {
+		if (!putValue(transaction, this->dbi, transaction_database_item_key(runId, item.package), transaction_database_serialize_item(updatedItem))) {
 			mdb_txn_abort(transaction);
 			return false;
 		}
@@ -540,15 +364,15 @@ bool TransactionDatabase::markRunCommitted(const std::string& runId) const {
 
 	TransactionRunRecord run{.id = runId, .state = "committed", .createdAt = nowTimestamp(), .updatedAt = nowTimestamp()};
 	std::string runPayload;
-	if (loadValue(transaction, this->dbi, runKey(runId), runPayload)) {
-		if (const auto existingRun = deserializeRun(runId, runPayload)) {
+	if (loadValue(transaction, this->dbi, transaction_database_run_key(runId), runPayload)) {
+		if (const auto existingRun = transaction_database_deserialize_run(runId, runPayload)) {
 			run = existingRun.value();
 			run.state = "committed";
 			run.updatedAt = nowTimestamp();
 		}
 	}
 
-	if (!putValue(transaction, this->dbi, runKey(runId), serializeRun(run))) {
+	if (!putValue(transaction, this->dbi, transaction_database_run_key(runId), transaction_database_serialize_run(run))) {
 		mdb_txn_abort(transaction);
 		return false;
 	}
@@ -562,7 +386,7 @@ bool TransactionDatabase::markRunCommitted(const std::string& runId) const {
 }
 
 bool TransactionDatabase::deleteRun(const std::string& runId) const {
-	const std::vector<std::pair<std::string, std::string>> entries = this->loadPrefixedEntries(itemPrefix(runId));
+	const std::vector<std::pair<std::string, std::string>> entries = this->loadPrefixedEntries(transaction_database_item_prefix(runId));
 	if (!this->ensureReady()) {
 		return false;
 	}
@@ -580,7 +404,7 @@ bool TransactionDatabase::deleteRun(const std::string& runId) const {
 		}
 	}
 
-	if (!deleteValue(transaction, this->dbi, runKey(runId))) {
+	if (!deleteValue(transaction, this->dbi, transaction_database_run_key(runId))) {
 		mdb_txn_abort(transaction);
 		return false;
 	}

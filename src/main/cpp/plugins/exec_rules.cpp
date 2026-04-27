@@ -5,88 +5,24 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <functional>
 #include <optional>
-#include <regex>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <unordered_map>
-#include <utility>
-#include <vector>
 
-#include <fcntl.h>
 #include <pty.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "plugins/exec_rules_core.h"
+
 namespace {
-
-enum class RuleSource {
-    Line,
-    Screen
-};
-
-enum class RunnerMode {
-    Plain,
-    Line,
-    Pty
-};
-
-enum class RuleActionType {
-    Send,
-    State,
-    Log,
-    Status,
-    Progress,
-    BeginStep,
-    Success,
-    Failed,
-    Event,
-    Artifact
-};
-
-struct ParsedRuleAction {
-    RuleActionType type{RuleActionType::Log};
-    std::unordered_map<std::string, std::string> fields;
-};
-
-struct ParsedRule {
-    std::optional<std::string> state;
-    RuleSource source{RuleSource::Line};
-    std::string regexText;
-    std::regex regex;
-    std::vector<ParsedRuleAction> actions;
-    bool repeat{true};
-    bool stop{false};
-};
-
-struct ParsedRuleset {
-    std::string initialState{"default"};
-    std::vector<ParsedRule> rules;
-    bool requiresPty{false};
-};
-
-struct RuleRuntimeState {
-    std::string currentState;
-    std::vector<bool> disabled;
-    std::vector<std::size_t> screenCursor;
-};
-
-struct ActionExecutionContext {
-    Logger& logger;
-    const std::string& pluginId;
-    RuleRuntimeState& runtime;
-    std::optional<int> masterFd;
-};
 
 struct LineAccumulator {
     std::string buffer;
 
     template <typename Callback>
-    bool append(const std::string& text, Callback&& callback) {
-        bool stop = false;
+    void append(const std::string& text, Callback&& callback) {
         std::size_t start = 0;
         while (start < text.size()) {
             const std::size_t newline = text.find('\n', start);
@@ -96,21 +32,20 @@ struct LineAccumulator {
             }
 
             buffer.append(text.substr(start, newline - start));
-            stop = callback(buffer) || stop;
+            callback(buffer);
             buffer.clear();
             start = newline + 1;
         }
-        return stop;
     }
 
     template <typename Callback>
-    bool flush(Callback&& callback) {
+    void flush(Callback&& callback) {
         if (buffer.empty()) {
-            return false;
+            return;
         }
         const std::string line = buffer;
         buffer.clear();
-        return callback(line);
+        callback(line);
     }
 };
 
@@ -120,28 +55,6 @@ std::string to_lower_copy(const std::string& value) {
         return static_cast<char>(std::tolower(c));
     });
     return normalized;
-}
-
-std::string scalar_to_string(const sol::object& value) {
-    if (!value.valid()) {
-        return {};
-    }
-    if (value.is<std::string>()) {
-        return value.as<std::string>();
-    }
-    if (value.is<bool>()) {
-        return value.as<bool>() ? "true" : "false";
-    }
-    if (value.is<int>()) {
-        return std::to_string(value.as<int>());
-    }
-    if (value.is<long long>()) {
-        return std::to_string(value.as<long long>());
-    }
-    if (value.is<double>()) {
-        return std::to_string(value.as<double>());
-    }
-    return {};
 }
 
 void log_plugin_message(Logger& logger, spdlog::level::level_enum level, const std::string& pluginId, const std::string& message) {
@@ -166,372 +79,6 @@ std::string escape_shell_double_quotes(const std::string& value) {
         escaped.push_back(c);
     }
     return escaped;
-}
-
-std::optional<int> numeric_key_to_index(const sol::object& key) {
-    if (key.is<int>()) {
-        return key.as<int>();
-    }
-    if (key.is<double>()) {
-        const double raw = key.as<double>();
-        const int integer = static_cast<int>(raw);
-        if (raw == static_cast<double>(integer)) {
-            return integer;
-        }
-    }
-    return std::nullopt;
-}
-
-std::vector<sol::object> read_array_table(const sol::table& table, const std::string& context) {
-    std::vector<std::pair<int, sol::object>> indexed;
-    indexed.reserve(table.size());
-
-    for (const auto& [key, value] : table) {
-        const std::optional<int> index = numeric_key_to_index(key);
-        if (!index.has_value() || index.value() < 1) {
-            throw std::runtime_error(context + " must be an array-style table.");
-        }
-        indexed.emplace_back(index.value(), value);
-    }
-
-    std::sort(indexed.begin(), indexed.end(), [](const auto& left, const auto& right) {
-        return left.first < right.first;
-    });
-
-    std::vector<sol::object> result;
-    result.reserve(indexed.size());
-
-    int expected = 1;
-    for (const auto& [index, value] : indexed) {
-        if (index != expected) {
-            throw std::runtime_error(context + " must be contiguous and start at index 1.");
-        }
-        result.push_back(value);
-        ++expected;
-    }
-
-    return result;
-}
-
-RuleActionType parse_action_type(const std::string& name) {
-    const std::string normalized = to_lower_copy(name);
-    if (normalized == "send") {
-        return RuleActionType::Send;
-    }
-    if (normalized == "state") {
-        return RuleActionType::State;
-    }
-    if (normalized == "log") {
-        return RuleActionType::Log;
-    }
-    if (normalized == "status") {
-        return RuleActionType::Status;
-    }
-    if (normalized == "progress") {
-        return RuleActionType::Progress;
-    }
-    if (normalized == "begin_step") {
-        return RuleActionType::BeginStep;
-    }
-    if (normalized == "success") {
-        return RuleActionType::Success;
-    }
-    if (normalized == "failed") {
-        return RuleActionType::Failed;
-    }
-    if (normalized == "event") {
-        return RuleActionType::Event;
-    }
-    if (normalized == "artifact") {
-        return RuleActionType::Artifact;
-    }
-    throw std::runtime_error("action type '" + name + "' is unknown.");
-}
-
-bool has_required_field(const ParsedRuleAction& action, const std::string& name) {
-    return action.fields.find(name) != action.fields.end();
-}
-
-void validate_action_fields(const ParsedRuleAction& action) {
-    switch (action.type) {
-        case RuleActionType::Send:
-        case RuleActionType::State:
-            if (!has_required_field(action, "value")) {
-                throw std::runtime_error("action requires field 'value'.");
-            }
-            break;
-        case RuleActionType::Log:
-            if (!has_required_field(action, "message")) {
-                throw std::runtime_error("log action requires field 'message'.");
-            }
-            break;
-        case RuleActionType::Status:
-            if (!has_required_field(action, "code")) {
-                throw std::runtime_error("status action requires field 'code'.");
-            }
-            break;
-        case RuleActionType::Progress:
-            if (!has_required_field(action, "percent")) {
-                throw std::runtime_error("progress action requires field 'percent'.");
-            }
-            break;
-        case RuleActionType::BeginStep:
-            if (!has_required_field(action, "label")) {
-                throw std::runtime_error("begin_step action requires field 'label'.");
-            }
-            break;
-        case RuleActionType::Failed:
-            if (!has_required_field(action, "message")) {
-                throw std::runtime_error("failed action requires field 'message'.");
-            }
-            break;
-        case RuleActionType::Event:
-            if (!has_required_field(action, "name")) {
-                throw std::runtime_error("event action requires field 'name'.");
-            }
-            break;
-        case RuleActionType::Artifact:
-            if (!has_required_field(action, "payload")) {
-                throw std::runtime_error("artifact action requires field 'payload'.");
-            }
-            break;
-        case RuleActionType::Success:
-            break;
-    }
-}
-
-ParsedRuleAction parse_action(const sol::object& object, std::size_t ruleIndex, std::size_t actionIndex) {
-    if (!object.valid() || object.get_type() != sol::type::table) {
-        throw std::runtime_error("rule[" + std::to_string(ruleIndex) + "].actions[" + std::to_string(actionIndex) + "] must be a table.");
-    }
-
-    const sol::table table = object.as<sol::table>();
-    ParsedRuleAction action;
-    bool hasType = false;
-
-    for (const auto& [key, value] : table) {
-        if (!key.is<std::string>()) {
-            throw std::runtime_error("rule[" + std::to_string(ruleIndex) + "].actions[" + std::to_string(actionIndex) + "] keys must be strings.");
-        }
-
-        const std::string name = key.as<std::string>();
-        if (name == "type") {
-            if (!value.is<std::string>()) {
-                throw std::runtime_error("rule[" + std::to_string(ruleIndex) + "].actions[" + std::to_string(actionIndex) + "].type must be a string.");
-            }
-            action.type = parse_action_type(value.as<std::string>());
-            hasType = true;
-            continue;
-        }
-
-        if (!value.valid() || value.get_type() == sol::type::nil) {
-            continue;
-        }
-
-        if (value.get_type() == sol::type::table || value.get_type() == sol::type::userdata || value.get_type() == sol::type::function || value.get_type() == sol::type::thread || value.get_type() == sol::type::lightuserdata) {
-            throw std::runtime_error("rule[" + std::to_string(ruleIndex) + "].actions[" + std::to_string(actionIndex) + "] contains unsupported nested value for field '" + name + "'.");
-        }
-
-        action.fields[name] = scalar_to_string(value);
-    }
-
-    if (!hasType) {
-        throw std::runtime_error("rule[" + std::to_string(ruleIndex) + "].actions[" + std::to_string(actionIndex) + "] is missing field 'type'.");
-    }
-
-    try {
-        validate_action_fields(action);
-    } catch (const std::exception& error) {
-        throw std::runtime_error("rule[" + std::to_string(ruleIndex) + "].actions[" + std::to_string(actionIndex) + "]: " + error.what());
-    }
-
-    return action;
-}
-
-ParsedRule parse_rule(const sol::object& object, std::size_t ruleIndex, bool& requiresPty) {
-    if (!object.valid() || object.get_type() != sol::type::table) {
-        throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "] must be a table.");
-    }
-
-    const sol::table table = object.as<sol::table>();
-    ParsedRule rule;
-    bool hasSource = false;
-    bool hasRegex = false;
-    bool hasActions = false;
-
-    for (const auto& [key, value] : table) {
-        if (!key.is<std::string>()) {
-            throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "] keys must be strings.");
-        }
-
-        const std::string name = key.as<std::string>();
-        if (name == "state") {
-            if (!value.is<std::string>()) {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].state must be a string.");
-            }
-            rule.state = value.as<std::string>();
-            continue;
-        }
-
-        if (name == "source") {
-            if (!value.is<std::string>()) {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].source must be a string.");
-            }
-            const std::string source = to_lower_copy(value.as<std::string>());
-            if (source == "line") {
-                rule.source = RuleSource::Line;
-            } else if (source == "screen") {
-                rule.source = RuleSource::Screen;
-                requiresPty = true;
-            } else {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].source must be 'line' or 'screen'.");
-            }
-            hasSource = true;
-            continue;
-        }
-
-        if (name == "regex") {
-            if (!value.is<std::string>()) {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].regex must be a string.");
-            }
-            rule.regexText = value.as<std::string>();
-            try {
-                rule.regex = std::regex(rule.regexText, std::regex::ECMAScript);
-            } catch (const std::regex_error& error) {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].regex failed to compile: " + std::string(error.what()));
-            }
-            hasRegex = true;
-            continue;
-        }
-
-        if (name == "actions") {
-            if (!value.valid() || value.get_type() != sol::type::table) {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].actions must be an array-style table.");
-            }
-            const std::vector<sol::object> actionObjects = read_array_table(value.as<sol::table>(), "rules.rules[" + std::to_string(ruleIndex) + "].actions");
-            if (actionObjects.empty()) {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].actions must not be empty.");
-            }
-            rule.actions.reserve(actionObjects.size());
-            for (std::size_t actionIndex = 0; actionIndex < actionObjects.size(); ++actionIndex) {
-                ParsedRuleAction action = parse_action(actionObjects[actionIndex], ruleIndex, actionIndex + 1);
-                if (action.type == RuleActionType::Send) {
-                    requiresPty = true;
-                }
-                rule.actions.push_back(std::move(action));
-            }
-            hasActions = true;
-            continue;
-        }
-
-        if (name == "repeat") {
-            if (!value.is<bool>()) {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].repeat must be a boolean.");
-            }
-            rule.repeat = value.as<bool>();
-            continue;
-        }
-
-        if (name == "stop") {
-            if (!value.is<bool>()) {
-                throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "].stop must be a boolean.");
-            }
-            rule.stop = value.as<bool>();
-            continue;
-        }
-
-        throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "] contains unknown key '" + name + "'.");
-    }
-
-    if (!hasSource) {
-        throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "] is missing field 'source'.");
-    }
-    if (!hasRegex) {
-        throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "] is missing field 'regex'.");
-    }
-    if (!hasActions) {
-        throw std::runtime_error("rules.rules[" + std::to_string(ruleIndex) + "] is missing field 'actions'.");
-    }
-
-    return rule;
-}
-
-ParsedRuleset parse_rules(const sol::object& rulesObject) {
-    if (!rulesObject.valid() || rulesObject.get_type() != sol::type::table) {
-        throw std::runtime_error("rules must be a table.");
-    }
-
-    const sol::table table = rulesObject.as<sol::table>();
-    ParsedRuleset ruleset;
-    std::optional<sol::object> ruleArrayObject;
-
-    for (const auto& [key, value] : table) {
-        if (!key.is<std::string>()) {
-            throw std::runtime_error("rules top-level keys must be strings.");
-        }
-
-        const std::string name = key.as<std::string>();
-        if (name == "initial") {
-            if (!value.is<std::string>()) {
-                throw std::runtime_error("rules.initial must be a string.");
-            }
-            ruleset.initialState = value.as<std::string>();
-            continue;
-        }
-
-        if (name == "rules") {
-            ruleArrayObject = value;
-            continue;
-        }
-
-        throw std::runtime_error("rules contains unknown top-level key '" + name + "'.");
-    }
-
-    if (!ruleArrayObject.has_value() || !ruleArrayObject->valid() || ruleArrayObject->get_type() != sol::type::table) {
-        throw std::runtime_error("rules.rules must be an array-style table.");
-    }
-
-    const std::vector<sol::object> ruleObjects = read_array_table(ruleArrayObject->as<sol::table>(), "rules.rules");
-    ruleset.rules.reserve(ruleObjects.size());
-    for (std::size_t index = 0; index < ruleObjects.size(); ++index) {
-        ruleset.rules.push_back(parse_rule(ruleObjects[index], index + 1, ruleset.requiresPty));
-    }
-
-    return ruleset;
-}
-
-std::string substitute_placeholders(const std::string& input, const std::match_results<std::string::const_iterator>& match) {
-    std::string result;
-    result.reserve(input.size());
-
-    for (std::size_t index = 0; index < input.size(); ++index) {
-        if (input[index] == '$' && index + 2 < input.size() && input[index + 1] == '{') {
-            const std::size_t end = input.find('}', index + 2);
-            if (end != std::string::npos) {
-                const std::string token = input.substr(index + 2, end - (index + 2));
-                try {
-                    const std::size_t captureIndex = static_cast<std::size_t>(std::stoul(token));
-                    if (captureIndex < match.size()) {
-                        result.append(match[captureIndex].first, match[captureIndex].second);
-                    }
-                    index = end;
-                    continue;
-                } catch (const std::exception&) {
-                }
-            }
-        }
-        result.push_back(input[index]);
-    }
-
-    return result;
-}
-
-std::string resolve_field(const ParsedRuleAction& action, const std::string& name, const std::match_results<std::string::const_iterator>& match, const std::string& fallback = {}) {
-    const auto it = action.fields.find(name);
-    if (it == action.fields.end()) {
-        return fallback;
-    }
-    return substitute_placeholders(it->second, match);
 }
 
 std::optional<int> parse_int_value(const std::string& value) {
@@ -599,225 +146,99 @@ void emit_artifact_action(Logger& logger, const std::string& pluginId, const std
     logger.emit(OutputAction::PLUGIN_ARTIFACT, OutputContext{.source = "plugin", .scope = pluginId, .payload = payload});
 }
 
-void execute_action(const ParsedRuleAction& action, const std::match_results<std::string::const_iterator>& match, ActionExecutionContext& context) {
+void dispatch_resolved_action(
+    Logger& logger,
+    const std::string& pluginId,
+    const ResolvedExecRuleAction& action,
+    const std::optional<int>& masterFd
+) {
     try {
         switch (action.type) {
-            case RuleActionType::Send: {
-                if (!context.masterFd.has_value()) {
-                    log_rule_warning(context.logger, context.pluginId, "send action skipped because PTY writer is unavailable.");
+            case ExecRuleActionType::Send: {
+                if (!masterFd.has_value()) {
+                    log_rule_warning(logger, pluginId, "send action skipped because PTY writer is unavailable.");
                     return;
                 }
-                const std::string value = resolve_field(action, "value", match);
+                const auto it = action.fields.find("value");
+                const std::string value = it == action.fields.end() ? std::string{} : it->second;
                 if (value.empty()) {
-                    log_rule_warning(context.logger, context.pluginId, "send action resolved to empty value.");
+                    log_rule_warning(logger, pluginId, "send action resolved to empty value.");
                     return;
                 }
-                if (!write_all(context.masterFd.value(), value)) {
-                    log_rule_warning(context.logger, context.pluginId, "send action failed to write to child process.");
+                if (!write_all(masterFd.value(), value)) {
+                    log_rule_warning(logger, pluginId, "send action failed to write to child process.");
                 }
                 return;
             }
-            case RuleActionType::State: {
-                const std::string value = resolve_field(action, "value", match);
-                if (value.empty()) {
-                    log_rule_warning(context.logger, context.pluginId, "state action resolved to empty value.");
-                    return;
+            case ExecRuleActionType::State: {
+                const auto it = action.fields.find("value");
+                if (it == action.fields.end() || it->second.empty()) {
+                    log_rule_warning(logger, pluginId, "state action resolved to empty value.");
                 }
-                context.runtime.currentState = value;
                 return;
             }
-            case RuleActionType::Log: {
-                const std::string level = resolve_field(action, "level", match, "info");
-                const std::string message = resolve_field(action, "message", match);
-                emit_log_action(context.logger, context.pluginId, parse_log_level(level), message);
+            case ExecRuleActionType::Log: {
+                const std::string level = action.fields.contains("level") ? action.fields.at("level") : "info";
+                const std::string message = action.fields.contains("message") ? action.fields.at("message") : std::string{};
+                emit_log_action(logger, pluginId, parse_log_level(level), message);
                 return;
             }
-            case RuleActionType::Status: {
-                const std::string raw = resolve_field(action, "code", match);
+            case ExecRuleActionType::Status: {
+                const std::string raw = action.fields.contains("code") ? action.fields.at("code") : std::string{};
                 const std::optional<int> code = parse_int_value(raw);
                 if (!code.has_value()) {
-                    log_rule_warning(context.logger, context.pluginId, "status action value '" + raw + "' is not an integer.");
+                    log_rule_warning(logger, pluginId, "status action value '" + raw + "' is not an integer.");
                     return;
                 }
-                emit_status_action(context.logger, context.pluginId, code.value());
+                emit_status_action(logger, pluginId, code.value());
                 return;
             }
-            case RuleActionType::Progress: {
-                const std::string raw = resolve_field(action, "percent", match);
+            case ExecRuleActionType::Progress: {
+                const std::string raw = action.fields.contains("percent") ? action.fields.at("percent") : std::string{};
                 const std::optional<int> percent = parse_int_value(raw);
                 if (!percent.has_value()) {
-                    log_rule_warning(context.logger, context.pluginId, "progress action value '" + raw + "' is not an integer.");
+                    log_rule_warning(logger, pluginId, "progress action value '" + raw + "' is not an integer.");
                     return;
                 }
-                emit_progress_action(context.logger, context.pluginId, percent.value());
+                emit_progress_action(logger, pluginId, percent.value());
                 return;
             }
-            case RuleActionType::BeginStep:
-                emit_event_action(context.logger, context.pluginId, "begin_step", resolve_field(action, "label", match));
+            case ExecRuleActionType::BeginStep:
+                emit_event_action(logger, pluginId, "begin_step", action.fields.contains("label") ? action.fields.at("label") : std::string{});
                 return;
-            case RuleActionType::Success:
-                emit_event_action(context.logger, context.pluginId, "success", "ok");
+            case ExecRuleActionType::Success:
+                emit_event_action(logger, pluginId, "success", "ok");
                 return;
-            case RuleActionType::Failed:
-                emit_event_action(context.logger, context.pluginId, "failed", resolve_field(action, "message", match));
+            case ExecRuleActionType::Failed:
+                emit_event_action(logger, pluginId, "failed", action.fields.contains("message") ? action.fields.at("message") : std::string{});
                 return;
-            case RuleActionType::Event: {
-                const std::string name = resolve_field(action, "name", match);
+            case ExecRuleActionType::Event: {
+                const std::string name = action.fields.contains("name") ? action.fields.at("name") : std::string{};
                 if (name.empty()) {
-                    log_rule_warning(context.logger, context.pluginId, "event action resolved to empty name.");
+                    log_rule_warning(logger, pluginId, "event action resolved to empty name.");
                     return;
                 }
-                emit_event_action(context.logger, context.pluginId, name, resolve_field(action, "payload", match));
+                emit_event_action(logger, pluginId, name, action.fields.contains("payload") ? action.fields.at("payload") : std::string{});
                 return;
             }
-            case RuleActionType::Artifact:
-                emit_artifact_action(context.logger, context.pluginId, resolve_field(action, "payload", match));
+            case ExecRuleActionType::Artifact:
+                emit_artifact_action(logger, pluginId, action.fields.contains("payload") ? action.fields.at("payload") : std::string{});
                 return;
         }
     } catch (const std::exception& error) {
-        log_rule_warning(context.logger, context.pluginId, error.what());
+        log_rule_warning(logger, pluginId, error.what());
     }
 }
 
-bool rule_active(const ParsedRule& rule, const RuleRuntimeState& runtime, std::size_t ruleIndex) {
-    if (runtime.disabled[ruleIndex]) {
-        return false;
+void dispatch_evaluation_result(
+    Logger& logger,
+    const std::string& pluginId,
+    const ExecRuleEvaluationResult& result,
+    const std::optional<int>& masterFd
+) {
+    for (const ResolvedExecRuleAction& action : result.actions) {
+        dispatch_resolved_action(logger, pluginId, action, masterFd);
     }
-    return !rule.state.has_value() || rule.state.value() == runtime.currentState;
-}
-
-bool evaluate_line_rules(const ParsedRuleset& ruleset, RuleRuntimeState& runtime, const std::string& line, ActionExecutionContext& actionContext) {
-    for (std::size_t ruleIndex = 0; ruleIndex < ruleset.rules.size(); ++ruleIndex) {
-        const ParsedRule& rule = ruleset.rules[ruleIndex];
-        if (rule.source != RuleSource::Line || !rule_active(rule, runtime, ruleIndex)) {
-            continue;
-        }
-
-        std::match_results<std::string::const_iterator> match;
-        if (!std::regex_search(line.begin(), line.end(), match, rule.regex)) {
-            continue;
-        }
-
-        for (const ParsedRuleAction& action : rule.actions) {
-            execute_action(action, match, actionContext);
-        }
-
-        if (!rule.repeat) {
-            runtime.disabled[ruleIndex] = true;
-        }
-        if (rule.stop) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool evaluate_screen_rules(const ParsedRuleset& ruleset, RuleRuntimeState& runtime, const std::string& transcript, ActionExecutionContext& actionContext) {
-    for (std::size_t ruleIndex = 0; ruleIndex < ruleset.rules.size(); ++ruleIndex) {
-        const ParsedRule& rule = ruleset.rules[ruleIndex];
-        if (rule.source != RuleSource::Screen || !rule_active(rule, runtime, ruleIndex)) {
-            continue;
-        }
-
-        const std::size_t cursor = std::min(runtime.screenCursor[ruleIndex], transcript.size());
-        const auto begin = transcript.cbegin() + static_cast<std::ptrdiff_t>(cursor);
-        std::match_results<std::string::const_iterator> match;
-        if (!std::regex_search(begin, transcript.cend(), match, rule.regex)) {
-            continue;
-        }
-
-        for (const ParsedRuleAction& action : rule.actions) {
-            execute_action(action, match, actionContext);
-        }
-
-        const std::size_t consumed = static_cast<std::size_t>(match.position()) + static_cast<std::size_t>(match.length());
-        runtime.screenCursor[ruleIndex] = cursor + consumed;
-        if (!rule.repeat) {
-            runtime.disabled[ruleIndex] = true;
-        }
-        if (rule.stop) {
-            return true;
-        }
-    }
-    return false;
-}
-
-RunnerMode determine_runner_mode(const ParsedRuleset& ruleset) {
-    if (ruleset.rules.empty()) {
-        return RunnerMode::Plain;
-    }
-    if (ruleset.requiresPty) {
-        return RunnerMode::Pty;
-    }
-    return RunnerMode::Line;
-}
-
-std::string normalize_pty_chunk(const std::string& chunk) {
-    std::string normalized;
-    normalized.reserve(chunk.size());
-
-    for (std::size_t index = 0; index < chunk.size();) {
-        const unsigned char current = static_cast<unsigned char>(chunk[index]);
-        if (current == '\x1b') {
-            if (index + 1 < chunk.size() && chunk[index + 1] == '[') {
-                index += 2;
-                while (index < chunk.size()) {
-                    const unsigned char c = static_cast<unsigned char>(chunk[index]);
-                    if (c >= 0x40 && c <= 0x7e) {
-                        ++index;
-                        break;
-                    }
-                    ++index;
-                }
-                continue;
-            }
-            if (index + 1 < chunk.size() && chunk[index + 1] == ']') {
-                index += 2;
-                while (index < chunk.size()) {
-                    if (chunk[index] == '\a') {
-                        ++index;
-                        break;
-                    }
-                    if (chunk[index] == '\x1b' && index + 1 < chunk.size() && chunk[index + 1] == '\\') {
-                        index += 2;
-                        break;
-                    }
-                    ++index;
-                }
-                continue;
-            }
-            index += std::min<std::size_t>(2, chunk.size() - index);
-            continue;
-        }
-
-        if (chunk[index] == '\r') {
-            normalized.push_back('\n');
-            if (index + 1 < chunk.size() && chunk[index + 1] == '\n') {
-                index += 2;
-            } else {
-                ++index;
-            }
-            continue;
-        }
-
-        if (chunk[index] == '\b') {
-            if (!normalized.empty()) {
-                normalized.pop_back();
-            }
-            ++index;
-            continue;
-        }
-
-        if (current < 0x20 && chunk[index] != '\n' && chunk[index] != '\t') {
-            ++index;
-            continue;
-        }
-
-        normalized.push_back(chunk[index]);
-        ++index;
-    }
-
-    return normalized;
 }
 
 ExecResult run_plain_command(Logger& logger, const std::string& pluginId, const std::string& command) {
@@ -845,7 +266,7 @@ ExecResult run_plain_command(Logger& logger, const std::string& pluginId, const 
     return result;
 }
 
-ExecResult run_line_command(Logger& logger, const std::string& pluginId, const std::string& command, const ParsedRuleset& ruleset) {
+ExecResult run_line_command(Logger& logger, const std::string& pluginId, const std::string& command, const ExecRuleset& ruleset) {
     ExecResult result;
     const std::string wrappedCommand = "zsh -lc \"" + escape_shell_double_quotes(command) + "\" 2>&1";
     FILE* pipe = popen(wrappedCommand.c_str(), "r");
@@ -854,12 +275,7 @@ ExecResult run_line_command(Logger& logger, const std::string& pluginId, const s
         return result;
     }
 
-    RuleRuntimeState runtime{
-        .currentState = ruleset.initialState,
-        .disabled = std::vector<bool>(ruleset.rules.size(), false),
-        .screenCursor = std::vector<std::size_t>(ruleset.rules.size(), 0)
-    };
-    ActionExecutionContext actionContext{.logger = logger, .pluginId = pluginId, .runtime = runtime, .masterFd = std::nullopt};
+    ExecRuleRuntimeState runtime = make_exec_rule_runtime_state(ruleset);
     LineAccumulator lines;
 
     std::array<char, 4096> buffer{};
@@ -868,11 +284,13 @@ ExecResult run_line_command(Logger& logger, const std::string& pluginId, const s
         result.stdoutText += chunk;
         logger.stdout(chunk, pluginId, "exec");
         lines.append(chunk, [&](const std::string& line) {
-            return evaluate_line_rules(ruleset, runtime, line, actionContext);
+            const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_line_input(ruleset, runtime, line);
+            dispatch_evaluation_result(logger, pluginId, evaluation, std::nullopt);
         });
     }
     lines.flush([&](const std::string& line) {
-        return evaluate_line_rules(ruleset, runtime, line, actionContext);
+        const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_line_input(ruleset, runtime, line);
+        dispatch_evaluation_result(logger, pluginId, evaluation, std::nullopt);
     });
 
     const int status = pclose(pipe);
@@ -884,7 +302,7 @@ ExecResult run_line_command(Logger& logger, const std::string& pluginId, const s
     return result;
 }
 
-ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const std::string& command, const ParsedRuleset& ruleset) {
+ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const std::string& command, const ExecRuleset& ruleset) {
     ExecResult result;
 
     int masterFd = -1;
@@ -899,12 +317,7 @@ ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const st
         _exit(127);
     }
 
-    RuleRuntimeState runtime{
-        .currentState = ruleset.initialState,
-        .disabled = std::vector<bool>(ruleset.rules.size(), false),
-        .screenCursor = std::vector<std::size_t>(ruleset.rules.size(), 0)
-    };
-    ActionExecutionContext actionContext{.logger = logger, .pluginId = pluginId, .runtime = runtime, .masterFd = masterFd};
+    ExecRuleRuntimeState runtime = make_exec_rule_runtime_state(ruleset);
     LineAccumulator lines;
     std::string normalizedTranscript;
 
@@ -914,13 +327,15 @@ ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const st
         if (count > 0) {
             const std::string chunk(buffer.data(), static_cast<std::size_t>(count));
             result.stdoutText += chunk;
-            const std::string normalized = normalize_pty_chunk(chunk);
+            const std::string normalized = normalize_exec_rule_pty_chunk(chunk);
             if (!normalized.empty()) {
                 normalizedTranscript += normalized;
                 lines.append(normalized, [&](const std::string& line) {
-                    return evaluate_line_rules(ruleset, runtime, line, actionContext);
+                    const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_line_input(ruleset, runtime, line);
+                    dispatch_evaluation_result(logger, pluginId, evaluation, masterFd);
                 });
-                evaluate_screen_rules(ruleset, runtime, normalizedTranscript, actionContext);
+                const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_screen_input(ruleset, runtime, normalizedTranscript);
+                dispatch_evaluation_result(logger, pluginId, evaluation, masterFd);
             }
             continue;
         }
@@ -942,9 +357,11 @@ ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const st
     }
 
     lines.flush([&](const std::string& line) {
-        return evaluate_line_rules(ruleset, runtime, line, actionContext);
+        const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_line_input(ruleset, runtime, line);
+        dispatch_evaluation_result(logger, pluginId, evaluation, masterFd);
     });
-    evaluate_screen_rules(ruleset, runtime, normalizedTranscript, actionContext);
+    const ExecRuleEvaluationResult finalScreenEvaluation = evaluate_exec_rule_screen_input(ruleset, runtime, normalizedTranscript);
+    dispatch_evaluation_result(logger, pluginId, finalScreenEvaluation, masterFd);
 
     ::close(masterFd);
 
@@ -970,20 +387,20 @@ ExecResult run_plugin_command(Logger& logger, const std::string& pluginId, const
 }
 
 ExecResult run_plugin_command(Logger& logger, const std::string& pluginId, const std::string& command, const sol::object& rules) {
-    ParsedRuleset ruleset;
+    ExecRuleset ruleset;
     try {
-        ruleset = parse_rules(rules);
+        ruleset = parse_exec_rules(rules);
     } catch (const std::exception& error) {
         log_rule_error(logger, pluginId, error.what());
         return ExecResult{.success = false, .exitCode = 1, .stdoutText = {}, .stderrText = error.what()};
     }
 
-    switch (determine_runner_mode(ruleset)) {
-        case RunnerMode::Plain:
+    switch (determine_exec_rule_runner_mode(ruleset)) {
+        case ExecRuleRunnerMode::Plain:
             return run_plain_command(logger, pluginId, command);
-        case RunnerMode::Line:
+        case ExecRuleRunnerMode::Line:
             return run_line_command(logger, pluginId, command, ruleset);
-        case RunnerMode::Pty:
+        case ExecRuleRunnerMode::Pty:
             return run_pty_command(logger, pluginId, command, ruleset);
     }
 

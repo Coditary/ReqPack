@@ -2,6 +2,7 @@
 
 #include "core/configuration.h"
 #include "core/downloader.h"
+#include "core/planner_core.h"
 #include "core/types.h"
 #include "core/registry.h"
 

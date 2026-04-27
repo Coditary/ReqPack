@@ -1,4 +1,5 @@
 #include "core/registry_database.h"
+#include "core/registry_database_core.h"
 
 #include <curl/curl.h>
 
@@ -26,14 +27,6 @@ constexpr std::string_view META_SEPARATOR = "\n---\n";
 constexpr unsigned int LMDB_MAX_DATABASES = 1;
 constexpr std::size_t LMDB_MAP_SIZE = 32 * 1024 * 1024;
 
-std::string to_lower_copy(const std::string& value) {
-    std::string normalized = value;
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return normalized;
-}
-
 std::string read_text_file(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
@@ -49,29 +42,6 @@ bool starts_with(const std::string& value, std::string_view prefix) {
     return value.rfind(prefix, 0) == 0;
 }
 
-std::string strip_query_fragment(const std::string& value) {
-    const std::size_t separator = value.find_first_of("?#");
-    return separator == std::string::npos ? value : value.substr(0, separator);
-}
-
-bool has_non_whitespace(const std::string& value) {
-    return std::any_of(value.begin(), value.end(), [](unsigned char c) {
-        return !std::isspace(c);
-    });
-}
-
-bool looks_like_html_document(const std::string& value) {
-    const std::string prefix = to_lower_copy(value.substr(0, std::min<std::size_t>(value.size(), 512)));
-    return prefix.find("<!doctype html") != std::string::npos ||
-           prefix.find("<html") != std::string::npos ||
-           prefix.find("<head") != std::string::npos ||
-           prefix.find("<body") != std::string::npos;
-}
-
-bool is_valid_plugin_script(const std::string& script) {
-    return has_non_whitespace(script) && !looks_like_html_document(script);
-}
-
 std::optional<std::pair<std::string, std::string>> read_plugin_payload_files(
     const std::filesystem::path& scriptPath,
     const std::filesystem::path& bootstrapPath
@@ -81,7 +51,7 @@ std::optional<std::pair<std::string, std::string>> read_plugin_payload_files(
     }
 
     const std::string script = read_text_file(scriptPath);
-    if (!is_valid_plugin_script(script)) {
+    if (!registry_database_is_valid_plugin_script(script)) {
         return std::nullopt;
     }
 
@@ -111,19 +81,6 @@ std::optional<std::filesystem::path> plugin_bundle_root(const std::filesystem::p
     return std::nullopt;
 }
 
-bool is_git_source(const std::string& source) {
-    const std::string normalized = to_lower_copy(strip_query_fragment(source));
-    return starts_with(normalized, "git+") ||
-           starts_with(normalized, "git@") ||
-           starts_with(normalized, "git://") ||
-           starts_with(normalized, "ssh://") ||
-           normalized.ends_with(".git");
-}
-
-std::string git_source_url(const std::string& source) {
-    return starts_with(source, "git+") ? source.substr(4) : source;
-}
-
 std::uint64_t fnv1a_hash(std::string_view value) {
     std::uint64_t hash = 14695981039346656037ull;
     for (unsigned char c : value) {
@@ -131,12 +88,6 @@ std::uint64_t fnv1a_hash(std::string_view value) {
         hash *= 1099511628211ull;
     }
     return hash;
-}
-
-std::filesystem::path git_repository_cache_path(const ReqPackConfig& config, const std::string& source, const std::string& pluginName) {
-    std::ostringstream stream;
-    stream << std::hex << fnv1a_hash(source);
-    return registry_database_directory(config.registry.databasePath) / "repos" / (pluginName + "-" + stream.str());
 }
 
 bool run_process_quiet(const std::vector<std::string>& arguments) {
@@ -183,7 +134,7 @@ bool run_process_quiet(const std::vector<std::string>& arguments) {
 }
 
 bool sync_git_repository(const ReqPackConfig& config, const std::string& source, const std::string& pluginName) {
-    const std::filesystem::path repositoryPath = git_repository_cache_path(config, source, pluginName);
+    const std::filesystem::path repositoryPath = registry_database_git_repository_cache_path(config, source, pluginName);
 
     std::error_code directoryError;
     std::filesystem::create_directories(repositoryPath.parent_path(), directoryError);
@@ -217,7 +168,7 @@ bool sync_git_repository(const ReqPackConfig& config, const std::string& source,
         "1",
         "--single-branch",
         "--quiet",
-        git_source_url(source),
+        registry_database_git_source_url(source),
         repositoryPath.string()
     });
 }
@@ -242,8 +193,8 @@ std::optional<std::filesystem::path> resolve_bundle_path(const ReqPackConfig& co
         }
     }
 
-    if (is_git_source(source)) {
-        const std::filesystem::path repositoryPath = git_repository_cache_path(config, source, pluginName);
+    if (registry_database_is_git_source(source)) {
+        const std::filesystem::path repositoryPath = registry_database_git_repository_cache_path(config, source, pluginName);
         if (const auto bundleRoot = plugin_bundle_root(repositoryPath, pluginName)) {
             return bundleRoot;
         }
@@ -261,7 +212,7 @@ std::optional<std::pair<std::string, std::string>> fetch_git_plugin_payload(
         return std::nullopt;
     }
 
-    return read_plugin_repository(git_repository_cache_path(config, source, pluginName), pluginName);
+    return read_plugin_repository(registry_database_git_repository_cache_path(config, source, pluginName), pluginName);
 }
 
 std::size_t write_to_string(void* contents, std::size_t size, std::size_t nmemb, void* userp) {
@@ -321,13 +272,13 @@ std::optional<std::pair<std::string, std::string>> fetch_plugin_payload(
         return read_plugin_directory(sourcePath, pluginName);
     }
 
-    if (is_git_source(source)) {
+    if (registry_database_is_git_source(source)) {
         return fetch_git_plugin_payload(config, source, pluginName);
     }
 
     if (source.find("://") == std::string::npos) {
         const std::string script = read_text_file(sourcePath);
-        if (!is_valid_plugin_script(script)) {
+        if (!registry_database_is_valid_plugin_script(script)) {
             return std::nullopt;
         }
 
@@ -339,122 +290,27 @@ std::optional<std::pair<std::string, std::string>> fetch_plugin_payload(
     }
 
     const std::optional<std::string> script = fetch_text(config, source);
-    if (!script.has_value() || !is_valid_plugin_script(script.value())) {
+    if (!script.has_value() || !registry_database_is_valid_plugin_script(script.value())) {
         return std::nullopt;
     }
 
     return std::make_pair(script.value(), std::string{});
 }
 
-std::string escape_field(const std::string& value) {
-    std::string escaped;
-    escaped.reserve(value.size());
-
-    for (char c : value) {
-        if (c == '\\' || c == '\n') {
-            escaped.push_back('\\');
-            escaped.push_back(c == '\n' ? 'n' : c);
-            continue;
-        }
-
-        escaped.push_back(c);
-    }
-
-    return escaped;
-}
-
-std::string unescape_field(const std::string& value) {
-    std::string unescaped;
-    unescaped.reserve(value.size());
-
-    bool escaped = false;
-    for (char c : value) {
-        if (!escaped && c == '\\') {
-            escaped = true;
-            continue;
-        }
-
-        if (escaped) {
-            unescaped.push_back(c == 'n' ? '\n' : c);
-            escaped = false;
-            continue;
-        }
-
-        unescaped.push_back(c);
-    }
-
-    return unescaped;
-}
-
-std::string serialize_record(const RegistryRecord& record) {
-    std::ostringstream stream;
-    stream << "source=" << escape_field(record.source) << '\n';
-    stream << "alias=" << (record.alias ? "1" : "0") << '\n';
-    stream << "description=" << escape_field(record.description) << '\n';
-    stream << "bundleSource=" << (record.bundleSource ? "1" : "0") << '\n';
-    stream << "bundlePath=" << escape_field(record.bundlePath) << '\n';
-    stream << "bootstrap=" << escape_field(record.bootstrapScript) << '\n';
-    stream << META_SEPARATOR;
-    stream << record.script;
-    return stream.str();
-}
-
-std::optional<RegistryRecord> deserialize_record(const std::string& name, const std::string& payload) {
-    const std::size_t separator = payload.find(META_SEPARATOR);
-    if (separator == std::string::npos) {
-        return std::nullopt;
-    }
-
-    RegistryRecord record;
-    record.name = name;
-    record.script = payload.substr(separator + META_SEPARATOR.size());
-
-    std::istringstream headerStream(payload.substr(0, separator));
-    std::string line;
-    while (std::getline(headerStream, line)) {
-        const std::size_t equals = line.find('=');
-        if (equals == std::string::npos) {
-            continue;
-        }
-
-        const std::string key = line.substr(0, equals);
-        const std::string value = unescape_field(line.substr(equals + 1));
-        if (key == "source") {
-            record.source = value;
-        } else if (key == "alias") {
-            record.alias = value == "1";
-        } else if (key == "description") {
-            record.description = value;
-        } else if (key == "bundleSource") {
-            record.bundleSource = value == "1";
-        } else if (key == "bundlePath") {
-            record.bundlePath = value;
-        } else if (key == "bootstrap") {
-            record.bootstrapScript = value;
-        }
-    }
-
-    if (record.source.empty() && !record.alias) {
-        return std::nullopt;
-    }
-
-    return record;
-}
-
 std::optional<RegistryRecord> get_record_from_transaction(MDB_txn* transaction, MDB_dbi database, const std::string& name) {
-    const std::string normalized = to_lower_copy(name);
+    const std::string normalized = registry_database_to_lower_copy(name);
     MDB_val key{normalized.size(), const_cast<char*>(normalized.data())};
     MDB_val value;
     if (mdb_get(transaction, database, &key, &value) != MDB_SUCCESS) {
         return std::nullopt;
     }
 
-    return deserialize_record(normalized, std::string(static_cast<const char*>(value.mv_data), value.mv_size));
+    return registry_database_deserialize_record(normalized, std::string(static_cast<const char*>(value.mv_data), value.mv_size));
 }
 
 bool put_record_into_transaction(MDB_txn* transaction, MDB_dbi database, const RegistryRecord& record) {
-    const std::string payload = serialize_record(record);
-    const std::string normalizedName = to_lower_copy(record.name);
+    const std::string payload = registry_database_serialize_record(record);
+    const std::string normalizedName = registry_database_to_lower_copy(record.name);
     MDB_val key{normalizedName.size(), const_cast<char*>(normalizedName.data())};
     MDB_val value{payload.size(), const_cast<char*>(payload.data())};
     return mdb_put(transaction, database, &key, &value, 0) == MDB_SUCCESS;
@@ -597,7 +453,7 @@ std::vector<RegistryRecord> RegistryDatabase::getAllRecords() const {
     while (result == MDB_SUCCESS) {
         const std::string name(static_cast<const char*>(key.mv_data), key.mv_size);
         const std::string payload(static_cast<const char*>(value.mv_data), value.mv_size);
-        if (const std::optional<RegistryRecord> record = deserialize_record(name, payload)) {
+        if (const std::optional<RegistryRecord> record = registry_database_deserialize_record(name, payload)) {
             records.push_back(record.value());
         }
 
@@ -611,6 +467,10 @@ std::vector<RegistryRecord> RegistryDatabase::getAllRecords() const {
 
 bool RegistryDatabase::cacheScript(const std::string& name, const std::string& script) const {
     if (!this->ensureReady()) {
+        return false;
+    }
+
+    if (!registry_database_is_valid_plugin_script(script)) {
         return false;
     }
 
@@ -649,7 +509,7 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
 
     for (const auto& [name, entry] : sources) {
         RegistryRecord record;
-        record.name = to_lower_copy(name);
+        record.name = registry_database_to_lower_copy(name);
         record.source = entry.source;
         record.alias = entry.alias;
         record.description = entry.description;
