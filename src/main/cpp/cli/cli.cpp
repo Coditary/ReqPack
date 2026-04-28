@@ -234,7 +234,8 @@ void Cli::print_help() {
         "  --registry=<path>       Same as above\n"
         "\nSBOM:\n"
         "  --format <name>         Uses table, json, or cyclonedx-json\n"
-        "  --output <path>         Writes SBOM output to file\n",
+        "  --output <path>         Writes SBOM output to file\n"
+        "  --force                 Overwrites existing output file without prompting\n",
         "cli",
         "help"
     );

@@ -21,6 +21,9 @@
 * 🛡️ **Safe Local Extensions**
   You can register your own package managers locally without worrying about them being overwritten by remote updates.
 
+* 📋 **SBOM Generation**
+  Generate a Software Bill of Materials (SBOM) in CycloneDX format for any set of packages to support supply-chain transparency and compliance workflows.
+
 ---
 
 ## 🍞 Example Usage
@@ -32,6 +35,67 @@ reqpack install java lombok
 ```
 
 ReqPack will detect whether Python or `pip` are installed, download them if missing, then proceed with the installation using its Lua plugin.
+
+---
+
+## 📋 SBOM Generation
+
+ReqPack can generate a **Software Bill of Materials** for any set of packages using the `sbom` command. The output follows the [CycloneDX 1.5](https://cyclonedx.org/) standard and includes component metadata, PURL identifiers, and optional dependency edges.
+
+### Basic Usage
+
+```bash
+# SBOM for specific packages — prints CycloneDX JSON to stdout
+reqpack sbom maven org.junit:junit:4.13 com.google.guava:guava:32.1.3-jre
+
+# Scoped syntax (system:package)
+reqpack sbom maven:org.junit:junit:4.13
+
+# Multiple systems in one invocation
+reqpack sbom maven org.junit:junit pip flask numpy
+```
+
+### Output Formats
+
+| Flag | Value | Description |
+|------|-------|-------------|
+| `--format` | `cyclonedx-json` | CycloneDX 1.5 JSON *(default when `--output` is set)* |
+| `--format` | `json` | ReqPack-native JSON |
+| `--format` | `table` | Tab-separated text table |
+
+### Writing to a File
+
+```bash
+# Write CycloneDX JSON to a file (format inferred automatically)
+reqpack sbom maven org.junit:junit --output bom.json
+
+# Explicit format + output path
+reqpack sbom pip flask --format cyclonedx-json --output reports/sbom.json
+```
+
+### CycloneDX Output Example
+
+```json
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "maven:org.junit:junit@4.13",
+      "name": "org.junit:junit",
+      "version": "4.13",
+      "purl": "pkg:maven/org.junit/junit@4.13",
+      "properties": [
+        { "name": "reqpack:system", "value": "maven" }
+      ]
+    }
+  ]
+}
+```
+
+If `includeDependencyEdges` is enabled in the ReqPack config, a `dependencies` array is appended listing `dependsOn` relationships between components.
 
 ---
 

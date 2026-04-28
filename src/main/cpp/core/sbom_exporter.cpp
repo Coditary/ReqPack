@@ -2,6 +2,7 @@
 
 #include <boost/graph/graph_traits.hpp>
 
+#include <algorithm>
 #include <iostream>
 #include <filesystem>
 #include <fstream>
@@ -269,26 +270,47 @@ bool SbomExporter::exportGraph(const Graph& graph, const Request& request) const
         return true;
     }
 
-    std::error_code error;
-    std::filesystem::create_directories(std::filesystem::path(outputPath).parent_path(), error);
-    if (error) {
-        std::cerr << "failed to create sbom output directory: " << outputPath << '\n';
-        return false;
+    std::filesystem::path filePath(outputPath);
+    if (filePath.is_relative()) {
+        filePath = std::filesystem::current_path() / filePath;
+    }
+    const std::string resolvedOutputPath = filePath.string();
+
+    if (std::filesystem::exists(filePath)) {
+        const bool force = std::find(request.flags.begin(), request.flags.end(), "force") != request.flags.end();
+        if (!force) {
+            std::cerr << resolvedOutputPath << " already exists. Overwrite? [y/N] " << std::flush;
+            std::string answer;
+            if (!std::getline(std::cin, answer) || (answer != "y" && answer != "Y")) {
+                std::cerr << "aborted.\n";
+                return false;
+            }
+        }
     }
 
-    std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+    std::error_code error;
+    const std::filesystem::path parentPath = filePath.parent_path();
+    if (!parentPath.empty()) {
+        std::filesystem::create_directories(parentPath, error);
+        if (error) {
+            std::cerr << "failed to create sbom output directory: " << resolvedOutputPath << '\n';
+            return false;
+        }
+    }
+
+    std::ofstream output(resolvedOutputPath, std::ios::binary | std::ios::trunc);
     if (!output.is_open()) {
-        std::cerr << "failed to open sbom output path: " << outputPath << '\n';
+        std::cerr << "failed to open sbom output path: " << resolvedOutputPath << '\n';
         return false;
     }
 
     output << rendered;
     if (!output.good()) {
-        std::cerr << "failed to write sbom output path: " << outputPath << '\n';
+        std::cerr << "failed to write sbom output path: " << resolvedOutputPath << '\n';
         return false;
     }
 
-    std::cout << outputPath << '\n';
+    std::cout << resolvedOutputPath << '\n';
     std::cout.flush();
     return true;
 }
