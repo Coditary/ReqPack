@@ -1,5 +1,8 @@
 #include "core/executor.h"
 
+#include "output/idisplay.h"
+#include "output/logger.h"
+
 #include <boost/graph/topological_sort.hpp>
 
 #include <algorithm>
@@ -22,6 +25,20 @@ bool actionUsesDesiredStateFilter(const ActionType action) {
 
 bool actionSupportsRecoveryReconciliation(const ActionType action) {
 	return action == ActionType::INSTALL || action == ActionType::ENSURE || action == ActionType::REMOVE || action == ActionType::UPDATE;
+}
+
+DisplayMode displayModeFromAction(ActionType action) {
+	switch (action) {
+		case ActionType::INSTALL: return DisplayMode::INSTALL;
+		case ActionType::ENSURE:  return DisplayMode::ENSURE;
+		case ActionType::REMOVE:  return DisplayMode::REMOVE;
+		case ActionType::UPDATE:  return DisplayMode::UPDATE;
+		case ActionType::SEARCH:  return DisplayMode::SEARCH;
+		case ActionType::LIST:    return DisplayMode::LIST;
+		case ActionType::INFO:    return DisplayMode::INFO;
+		case ActionType::SBOM:    return DisplayMode::SBOM;
+		default:                  return DisplayMode::IDLE;
+	}
 }
 
 }  // namespace
@@ -117,7 +134,37 @@ void Executer::execute(Graph *graph) {
 			return;
 		}
 	}
+
+	// ── Display session begin ─────────────────────────────────────────────────
+	bool sessionBegun = false;
+	if (!taskGroups.empty()) {
+		std::vector<std::string> itemIds;
+		for (const TaskGroup& tg : taskGroups) {
+			if (tg.usesLocalTarget) {
+				itemIds.push_back(tg.system + ":local");
+			} else {
+				for (const Package& pkg : tg.packages) {
+					itemIds.push_back(tg.system + ":" + pkg.name);
+				}
+			}
+		}
+		Logger::instance().displaySessionBegin(displayModeFromAction(taskGroups.front().action), itemIds);
+		sessionBegun = true;
+	}
+
 	const std::vector<TransactionRecord> records = this->executeTaskGroups(taskGroups);
+
+	// ── Display session end ───────────────────────────────────────────────────
+	if (sessionBegun) {
+		int succeeded = 0, failed = 0;
+		for (const TransactionRecord& r : records) {
+			if (r.status == "success") ++succeeded;
+			else ++failed;
+		}
+		Logger::instance().displaySessionEnd(failed == 0, succeeded, failed);
+		Logger::instance().flush();
+	}
+
 	if (this->config.execution.useTransactionDb) {
 		this->writeTransactionResults(records);
 		this->markCommittedTransactions();
@@ -354,13 +401,21 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 		return {};
 	}
 
+	std::string itemId;
+	if (taskGroup.usesLocalTarget) {
+		itemId = taskGroup.system + ":local";
+	} else if (taskGroup.packages.size() == 1) {
+		itemId = taskGroup.system + ":" + taskGroup.packages.front().name;
+	}
+
 	return PluginCallContext{
 		.pluginId = plugin->getPluginId(),
 		.pluginDirectory = plugin->getPluginDirectory(),
 		.scriptPath = plugin->getScriptPath(),
 		.bootstrapPath = plugin->getBootstrapPath(),
 		.flags = taskGroup.flags,
-		.host = plugin->getRuntimeHost()
+		.host = plugin->getRuntimeHost(),
+		.currentItemId = itemId
 	};
 }
 
@@ -438,9 +493,13 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 		TaskGroup singlePackageTaskGroup{.action = taskGroup.action, .system = taskGroup.system, .flags = taskGroup.flags, .localPath = taskGroup.localPath, .usesLocalTarget = taskGroup.usesLocalTarget};
 		singlePackageTaskGroup.packages = {package};
 
+		const std::string itemId = taskGroup.system + ":" + package.name;
+		Logger::instance().displayItemBegin(itemId, package.name);
+
 		if (actionUsesDesiredStateFilter(taskGroup.action)) {
 			IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
 			if (plugin != nullptr && plugin->getMissingPackages({package}).empty()) {
+				Logger::instance().displayItemSuccess(itemId);
 				std::vector<TransactionRecord> successRecords = this->buildSuccessRecords(singlePackageTaskGroup);
 				for (TransactionRecord& record : successRecords) {
 					record.runId = runId;
@@ -451,6 +510,7 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 		}
 
 		if (!this->transactionDatabase->updateItemStatus(runId, package, "running")) {
+			Logger::instance().displayItemFailure(itemId, "transaction update failed");
 			std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(singlePackageTaskGroup);
 			for (TransactionRecord& record : failureRecords) {
 				record.runId = runId;
@@ -461,6 +521,7 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 		}
 
 		if (!this->dispatchTaskGroupToPlugin(singlePackageTaskGroup)) {
+			Logger::instance().displayItemFailure(itemId, "plugin action failed");
 			std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(singlePackageTaskGroup);
 			for (TransactionRecord& record : failureRecords) {
 				record.runId = runId;
@@ -473,6 +534,7 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 			continue;
 		}
 
+		Logger::instance().displayItemSuccess(itemId);
 		std::vector<TransactionRecord> successRecords = this->buildSuccessRecords(singlePackageTaskGroup);
 		for (TransactionRecord& record : successRecords) {
 			record.runId = runId;

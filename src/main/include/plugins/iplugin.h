@@ -52,6 +52,10 @@ struct PluginCallContext {
 	std::string bootstrapPath;
 	std::vector<std::string> flags;
 	IPluginRuntimeHost* host{nullptr};
+	/// Item id used by the display layer (e.g. "dnf:python").
+	/// When non-empty, passed as the first arg to IPluginRuntimeHost callbacks
+	/// so the display can correlate events to the right item row.
+	std::string currentItemId{};
 
 	ExecResult execute(const std::string& command) const {
 		return host != nullptr ? host->execute(pluginId, command) : ExecResult{};
@@ -91,43 +95,43 @@ struct PluginCallContext {
 
 	void emitStatus(int statusCode) const {
 		if (host != nullptr) {
-			host->emitStatus(pluginId, statusCode);
+			host->emitStatus(currentItemId.empty() ? pluginId : currentItemId, statusCode);
 		}
 	}
 
 	void emitProgress(int percent) const {
 		if (host != nullptr) {
-			host->emitProgress(pluginId, percent);
+			host->emitProgress(currentItemId.empty() ? pluginId : currentItemId, percent);
 		}
 	}
 
 	void emitBeginStep(const std::string& label) const {
 		if (host != nullptr) {
-			host->emitBeginStep(pluginId, label);
+			host->emitBeginStep(currentItemId.empty() ? pluginId : currentItemId, label);
 		}
 	}
 
 	void emitCommit() const {
 		if (host != nullptr) {
-			host->emitCommit(pluginId);
+			host->emitCommit(currentItemId.empty() ? pluginId : currentItemId);
 		}
 	}
 
 	void emitSuccess() const {
 		if (host != nullptr) {
-			host->emitSuccess(pluginId);
+			host->emitSuccess(currentItemId.empty() ? pluginId : currentItemId);
 		}
 	}
 
 	void emitFailure(const std::string& message) const {
 		if (host != nullptr) {
-			host->emitFailure(pluginId, message);
+			host->emitFailure(currentItemId.empty() ? pluginId : currentItemId, message);
 		}
 	}
 
 	void emitEvent(const std::string& eventName, const std::string& payload) const {
 		if (host != nullptr) {
-			host->emitEvent(pluginId, eventName, payload);
+			host->emitEvent(currentItemId.empty() ? pluginId : currentItemId, eventName, payload);
 		}
 	}
 

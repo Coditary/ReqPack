@@ -47,6 +47,11 @@ enum class SbomOutputFormat {
     CYCLONEDX_JSON
 };
 
+enum class DisplayRenderer {
+    PLAIN,
+    COLOR
+};
+
 struct LoggingConfig {
     LogLevel level{LogLevel::INFO};
     bool consoleOutput{true};
@@ -146,6 +151,25 @@ struct SbomConfig {
     bool includeDependencyEdges{true};
 };
 
+struct DisplayColorScheme {
+    std::string rule{};
+    std::string header{"bold"};
+    std::string summaryOk{"bold green"};
+    std::string summaryFail{"bold red"};
+    std::string barFill{"green"};
+    std::string barEmpty{};
+    std::string barOuter{};
+    std::string step{"cyan"};
+    std::string successMarker{"bold green"};
+    std::string failureMarker{"bold red"};
+    std::string message{};
+};
+
+struct DisplayConfig {
+    DisplayRenderer renderer{DisplayRenderer::PLAIN};
+    DisplayColorScheme colors{};
+};
+
 struct ReqPackConfig {
     std::string applicationName{"ReqPack"};
     std::string version{"0.1.0"};
@@ -159,6 +183,7 @@ struct ReqPackConfig {
     RegistryConfig registry{};
     InteractionConfig interaction{};
     SbomConfig sbom{};
+    DisplayConfig display{};
 
     std::vector<std::string> enabledScanners{};
     std::vector<std::string> enabledReportFormats{};
@@ -221,6 +246,7 @@ std::optional<ReportFormat> report_format_from_string(const std::string& format)
 std::optional<UnsafeAction> unsafe_action_from_string(const std::string& action);
 std::optional<OsvRefreshMode> osv_refresh_mode_from_string(const std::string& mode);
 std::optional<SbomOutputFormat> sbom_output_format_from_string(const std::string& format);
+std::optional<DisplayRenderer> display_renderer_from_string(const std::string& renderer);
 
 std::filesystem::path reqpack_home_directory();
 std::filesystem::path default_reqpack_config_path();
@@ -325,5 +351,15 @@ inline std::string to_string(SbomOutputFormat format) {
         case SbomOutputFormat::TABLE:
         default:
             return "table";
+    }
+}
+
+inline std::string to_string(DisplayRenderer renderer) {
+    switch (renderer) {
+        case DisplayRenderer::COLOR:
+            return "color";
+        case DisplayRenderer::PLAIN:
+        default:
+            return "plain";
     }
 }

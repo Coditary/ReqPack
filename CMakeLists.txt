@@ -57,6 +57,10 @@ set(SOURCES
     src/main/cpp/cli/cli.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
+    src/main/cpp/output/ansi_color.cpp
+    src/main/cpp/output/plain_display.cpp
+    src/main/cpp/output/color_display.cpp
+    src/main/cpp/output/display_factory.cpp
     src/main/cpp/plugins/exec_rules.cpp
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
@@ -112,6 +116,10 @@ add_executable(core_integration_tests
     src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
+    src/main/cpp/output/ansi_color.cpp
+    src/main/cpp/output/plain_display.cpp
+    src/main/cpp/output/color_display.cpp
+    src/main/cpp/output/display_factory.cpp
     src/main/cpp/plugins/exec_rules.cpp
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp

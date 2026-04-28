@@ -1,6 +1,7 @@
 #include "cli/cli.h"
 #include "core/configuration.h"
 #include "core/orchestrator.h"
+#include "output/display_factory.h"
 #include "output/logger.h"
 #include "plugins/lua_bridge.h"
 
@@ -30,6 +31,10 @@ int main(int argc, char* argv[]) {
     if (config.logging.fileOutput) {
         logger.setFileSink(config.logging.filePath);
     }
+
+    std::unique_ptr<IDisplay> display = create_display(config.display);
+    logger.setDisplay(display.get());
+
     const std::vector<Request> requests = cli.parse(argc, argv, config);
 
     if (requests.empty()) {

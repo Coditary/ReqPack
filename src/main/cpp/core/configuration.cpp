@@ -317,6 +317,18 @@ std::optional<SbomOutputFormat> sbom_output_format_from_string(const std::string
     return std::nullopt;
 }
 
+std::optional<DisplayRenderer> display_renderer_from_string(const std::string& renderer) {
+    const std::string normalized = to_lower(renderer);
+    if (normalized == "plain") {
+        return DisplayRenderer::PLAIN;
+    }
+    if (normalized == "color" || normalized == "colour") {
+        return DisplayRenderer::COLOR;
+    }
+
+    return std::nullopt;
+}
+
 std::filesystem::path reqpack_home_directory() {
     return invoking_user_home_directory() / ".reqpack";
 }
@@ -583,6 +595,26 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
     }
     if (!config.sbom.defaultOutputPath.empty()) {
         config.sbom.defaultOutputPath = expand_user_path(config.sbom.defaultOutputPath).string();
+    }
+
+    const sol::optional<sol::table> display = root["display"];
+    if (display.has_value()) {
+        assign_if_present(display.value(), "renderer", display_renderer_from_string, config.display.renderer);
+
+        const sol::optional<sol::table> colors = display.value()["colors"];
+        if (colors.has_value()) {
+            assign_if_present(colors.value(), "rule",           config.display.colors.rule);
+            assign_if_present(colors.value(), "header",         config.display.colors.header);
+            assign_if_present(colors.value(), "summaryOk",      config.display.colors.summaryOk);
+            assign_if_present(colors.value(), "summaryFail",    config.display.colors.summaryFail);
+            assign_if_present(colors.value(), "barFill",        config.display.colors.barFill);
+            assign_if_present(colors.value(), "barEmpty",       config.display.colors.barEmpty);
+            assign_if_present(colors.value(), "barOuter",       config.display.colors.barOuter);
+            assign_if_present(colors.value(), "step",           config.display.colors.step);
+            assign_if_present(colors.value(), "successMarker",  config.display.colors.successMarker);
+            assign_if_present(colors.value(), "failureMarker",  config.display.colors.failureMarker);
+            assign_if_present(colors.value(), "message",        config.display.colors.message);
+        }
     }
 
     return config;
