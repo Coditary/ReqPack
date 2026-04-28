@@ -200,7 +200,7 @@ std::vector<Executer::TaskGroup> Executer::recoverPendingTaskGroups() const {
 	const std::vector<TransactionItemRecord> items = this->transactionDatabase->getRunItems(activeRun->id);
 	std::vector<TransactionItemRecord> pendingItems;
 	for (const TransactionItemRecord& item : items) {
-		if (item.status == "success" || item.status == "committed") {
+		if (item.status == "success" || item.status == "committed" || item.status == "failed") {
 			continue;
 		}
 		pendingItems.push_back(item);
@@ -576,7 +576,7 @@ void Executer::markCommittedTransactions() const {
 
 	const std::vector<TransactionItemRecord> items = this->transactionDatabase->getRunItems(this->activeRunId);
 	const bool hasIncompleteItem = std::any_of(items.begin(), items.end(), [](const TransactionItemRecord& item) {
-		return item.status != "success" && item.status != "committed";
+		return item.status != "success" && item.status != "committed" && item.status != "failed";
 	});
 	if (hasIncompleteItem) {
 		(void)this->transactionDatabase->markRunState(this->activeRunId, "failed");
