@@ -165,6 +165,7 @@ public:
     
 	virtual std::vector<Package> getRequirements() = 0;
 	virtual std::vector<std::string> getCategories() = 0;
+	virtual std::vector<std::string> getFileExtensions() const { return {}; }
 	virtual std::vector<Package> getMissingPackages(const std::vector<Package>& packages) = 0;
 
     virtual bool install(const PluginCallContext& context, const std::vector<Package>& packages) = 0;

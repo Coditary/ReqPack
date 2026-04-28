@@ -226,6 +226,8 @@ function plugin.getCategories()
     return { "Java", "Build", "Maven" }
 end
 
+plugin.fileExtensions = { ".jar", ".war", ".ear" }
+
 function plugin.getRequirements()
     return {
         { system = "sys", name = getenv("REQPACK_MAVEN_JAVA_PACKAGE", "java-21-openjdk-devel") },

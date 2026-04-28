@@ -53,6 +53,8 @@ function plugin.getCategories()
     return { "System", "RPM", "Fedora Native" }
 end
 
+plugin.fileExtensions = { ".rpm" }
+
 function plugin.getMissingPackages(packages)
     local missing = {}
     for _, pkg in ipairs(packages or {}) do

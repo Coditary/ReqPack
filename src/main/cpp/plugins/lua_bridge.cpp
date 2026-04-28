@@ -300,6 +300,17 @@ LuaBridge::LuaBridge(const std::string& scriptPath, const ReqPackConfig& config)
                 }
             }
         }
+
+        // Read optional plugin.fileExtensions table.
+        const sol::object fileExtObj = m_pluginTable["fileExtensions"];
+        if (fileExtObj.valid() && fileExtObj.get_type() == sol::type::table) {
+            const sol::table extTable = fileExtObj.as<sol::table>();
+            extTable.for_each([this](const sol::object&, const sol::object& val) {
+                if (val.valid() && val.get_type() == sol::type::string) {
+                    m_fileExtensions.push_back(val.as<std::string>());
+                }
+            });
+        }
     }
 
     if (m_name.empty()) {

@@ -50,5 +50,9 @@ public:
     std::vector<std::string> findByCategory(const std::string& category) const;
     std::vector<std::string> getAvailableNames() const;
 
+    // Returns the plugin name (system) that declares the given file extension,
+    // or an empty string if no loaded plugin claims it.
+    std::string resolveSystemForExtension(const std::string& extension) const;
+
     IPlugin* getPlugin(const std::string& name);
 };

@@ -20,6 +20,7 @@ private:
 	std::string m_scriptPath;
 	std::string m_bootstrapPath;
 	std::optional<PluginSecurityMetadata> m_securityMetadata;
+	std::vector<std::string> m_fileExtensions;
 	Logger& m_logger;
     
     sol::table m_pluginTable;
@@ -51,6 +52,7 @@ public:
 	std::string getBootstrapPath() const override { return m_bootstrapPath; }
 	IPluginRuntimeHost* getRuntimeHost() override { return this; }
 	std::optional<PluginSecurityMetadata> getSecurityMetadata() const override { return m_securityMetadata; }
+	std::vector<std::string> getFileExtensions() const override { return m_fileExtensions; }
     
 	std::vector<Package> getRequirements() override;
     std::vector<std::string> getCategories() override;

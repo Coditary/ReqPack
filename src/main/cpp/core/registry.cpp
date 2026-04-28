@@ -267,3 +267,13 @@ std::vector<std::string> Registry::getAvailableNames() const {
     }
     return names;
 }
+
+std::string Registry::resolveSystemForExtension(const std::string& extension) const {
+    for (const auto& [name, plugin] : m_plugins) {
+        const std::vector<std::string> exts = plugin->getFileExtensions();
+        if (std::find(exts.begin(), exts.end(), extension) != exts.end()) {
+            return name;
+        }
+    }
+    return {};
+}

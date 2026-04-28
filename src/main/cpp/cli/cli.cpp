@@ -27,6 +27,10 @@ bool is_existing_path(const std::string& value) {
 	return std::filesystem::exists(std::filesystem::path(value), error) && !error;
 }
 
+bool is_url(const std::string& value) {
+    return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0;
+}
+
 }  // namespace
 
 Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package Manager Interface")) {
@@ -271,9 +275,29 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
             continue;
         }
 
+        // URL detection: handle before scoped-package and system-name checks.
+        if (action == ActionType::INSTALL && is_url(argument)) {
+            if (!current_system.empty()) {
+                Request& request = ensure_request(current_system);
+                if (!request.packages.empty() || (request.usesLocalTarget && request.localPath != argument)) {
+                    Logger::instance().err("install cannot mix local path and package names for system '" + current_system + "'");
+                    return {};
+                }
+                request.localPath = argument;
+                request.usesLocalTarget = true;
+            } else {
+                // No system known yet — system will be resolved from file extension at runtime.
+                Request urlRequest;
+                urlRequest.action = action;
+                urlRequest.localPath = argument;
+                urlRequest.usesLocalTarget = true;
+                requests.push_back(std::move(urlRequest));
+            }
+            continue;
+        }
+
         const std::optional<std::pair<std::string, std::string>> scoped_package = split_scoped_package(argument, known_systems);
-        if (scoped_package.has_value()) {
-            Request& request = ensure_request(scoped_package->first);
+        if (scoped_package.has_value()) {            Request& request = ensure_request(scoped_package->first);
 			if (request.usesLocalTarget) {
 				Logger::instance().err("install cannot mix local path and package names for system '" + request.system + "'");
 				return {};
