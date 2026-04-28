@@ -262,6 +262,44 @@ LuaBridge::LuaBridge(const std::string& scriptPath, const ReqPackConfig& config)
                 m_version = result.get<std::string>();
             }
         }
+
+        sol::protected_function getSecurityMetadata = m_pluginTable["getSecurityMetadata"];
+        if (getSecurityMetadata.valid()) {
+            auto result = getSecurityMetadata();
+            if (result.valid() && result.return_count() > 0) {
+                const sol::object value = result.get<sol::object>();
+                if (value.valid() && value.get_type() == sol::type::table) {
+                    const sol::table metadata = value.as<sol::table>();
+                    PluginSecurityMetadata parsed;
+                    bool hasAnyField = false;
+
+                    if (const sol::optional<std::string> osvEcosystem = metadata["osvEcosystem"]; osvEcosystem.has_value()) {
+                        parsed.osvEcosystem = osvEcosystem.value();
+                        hasAnyField = true;
+                    }
+                    if (const sol::optional<std::string> purlType = metadata["purlType"]; purlType.has_value()) {
+                        parsed.purlType = purlType.value();
+                        hasAnyField = true;
+                    }
+                    if (const sol::optional<std::string> comparatorProfile = metadata["versionComparatorProfile"]; comparatorProfile.has_value()) {
+                        parsed.versionComparator.profile = comparatorProfile.value();
+                        hasAnyField = true;
+                    }
+                    if (const sol::optional<std::string> tokenPattern = metadata["versionTokenPattern"]; tokenPattern.has_value()) {
+                        parsed.versionComparator.tokenPattern = tokenPattern.value();
+                        hasAnyField = true;
+                    }
+                    if (const sol::optional<bool> caseInsensitive = metadata["versionCaseInsensitive"]; caseInsensitive.has_value()) {
+                        parsed.versionComparator.caseInsensitive = caseInsensitive.value();
+                        hasAnyField = true;
+                    }
+
+                    if (hasAnyField) {
+                        m_securityMetadata = parsed;
+                    }
+                }
+            }
+        }
     }
 
     if (m_name.empty()) {

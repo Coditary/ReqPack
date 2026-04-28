@@ -25,6 +25,15 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.backtraceSize = 64;
     overrides.runSnykScan = true;
     overrides.severityThreshold = SeverityLevel::MEDIUM;
+    overrides.osvDatabasePath = "~/osv-db";
+    overrides.osvRefreshMode = OsvRefreshMode::ALWAYS;
+    overrides.osvRefreshIntervalSeconds = 60;
+    overrides.osvOverlayPath = "~/overlay.json";
+    overrides.ignoreVulnerabilityIds = {"CVE-1"};
+    overrides.allowVulnerabilityIds = {"CVE-2"};
+    overrides.onUnresolvedVersion = UnsafeAction::PROMPT;
+    overrides.strictEcosystemMapping = true;
+    overrides.includeWithdrawnInReport = true;
     overrides.reportEnabled = true;
     overrides.reportFormat = ReportFormat::CYCLONEDX;
     overrides.reportOutputPath = "~/reports/bom.json";
@@ -34,6 +43,10 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.pluginDirectory = "~/plugins";
     overrides.autoLoadPlugins = false;
     overrides.interactive = false;
+    overrides.sbomDefaultFormat = SbomOutputFormat::JSON;
+    overrides.sbomDefaultOutputPath = "~/exports/sbom.json";
+    overrides.sbomPrettyPrint = false;
+    overrides.sbomIncludeDependencyEdges = false;
 
     const ReqPackConfig config = apply_config_overrides(base, overrides);
     const std::filesystem::path home = reqpack_user_home();
@@ -46,6 +59,15 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(config.logging.backtraceSize == 64);
     CHECK(config.security.runSnykScan);
     CHECK(config.security.severityThreshold == SeverityLevel::MEDIUM);
+    CHECK(std::filesystem::path(config.security.osvDatabasePath) == home / "osv-db");
+    CHECK(config.security.osvRefreshMode == OsvRefreshMode::ALWAYS);
+    CHECK(config.security.osvRefreshIntervalSeconds == 60);
+    CHECK(std::filesystem::path(config.security.osvOverlayPath) == home / "overlay.json");
+    CHECK(config.security.ignoreVulnerabilityIds == std::vector<std::string>{"CVE-1"});
+    CHECK(config.security.allowVulnerabilityIds == std::vector<std::string>{"CVE-2"});
+    CHECK(config.security.onUnresolvedVersion == UnsafeAction::PROMPT);
+    CHECK(config.security.strictEcosystemMapping);
+    CHECK(config.security.includeWithdrawnInReport);
     CHECK(config.reports.enabled);
     CHECK(config.reports.format == ReportFormat::CYCLONEDX);
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/bom.json");
@@ -55,6 +77,10 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(std::filesystem::path(config.registry.pluginDirectory) == home / "plugins");
     CHECK_FALSE(config.registry.autoLoadPlugins);
     CHECK_FALSE(config.interaction.interactive);
+    CHECK(config.sbom.defaultFormat == SbomOutputFormat::JSON);
+    CHECK(std::filesystem::path(config.sbom.defaultOutputPath) == home / "exports/sbom.json");
+    CHECK_FALSE(config.sbom.prettyPrint);
+    CHECK_FALSE(config.sbom.includeDependencyEdges);
 }
 
 TEST_CASE("configuration consumes CLI flags with positional and inline values", "[unit][configuration][cli]") {
@@ -119,6 +145,37 @@ TEST_CASE("configuration consumes CLI flags with positional and inline values", 
         index = 0;
         CHECK_FALSE(consume_cli_config_flag(unknown, index, overrides));
     }
+
+    SECTION("osv and sbom flags map to expected overrides") {
+        {
+            const std::vector<std::string> arguments{"--osv-refresh", "always"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.osvRefreshMode.has_value());
+            CHECK(overrides.osvRefreshMode.value() == OsvRefreshMode::ALWAYS);
+        }
+
+        {
+            const std::vector<std::string> arguments{"--ignore-vuln", "CVE-2024-1"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            CHECK(overrides.ignoreVulnerabilityIds == std::vector<std::string>{"CVE-2024-1"});
+        }
+
+        {
+            const std::vector<std::string> arguments{"--sbom-format", "json"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.sbomDefaultFormat.has_value());
+            CHECK(overrides.sbomDefaultFormat.value() == SbomOutputFormat::JSON);
+        }
+    }
 }
 
 TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][configuration][cli]") {
@@ -127,6 +184,12 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
         "--dry-run",
         "--registry=/tmp/reqpack-registry",
         "--non-interactive",
+        "--osv-db",
+        "/tmp/osv-db",
+        "--ignore-vuln",
+        "CVE-2024-1",
+        "--sbom-format",
+        "cyclonedx-json",
         "--report-format",
         "json",
     };
@@ -147,6 +210,11 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
     CHECK(overrides.registryPath.value() == "/tmp/reqpack-registry");
     REQUIRE(overrides.interactive.has_value());
     CHECK_FALSE(overrides.interactive.value());
+    REQUIRE(overrides.osvDatabasePath.has_value());
+    CHECK(overrides.osvDatabasePath.value() == "/tmp/osv-db");
+    CHECK(overrides.ignoreVulnerabilityIds == std::vector<std::string>{"CVE-2024-1"});
+    REQUIRE(overrides.sbomDefaultFormat.has_value());
+    CHECK(overrides.sbomDefaultFormat.value() == SbomOutputFormat::CYCLONEDX_JSON);
     REQUIRE(overrides.reportFormat.has_value());
     CHECK(overrides.reportFormat.value() == ReportFormat::JSON);
 }

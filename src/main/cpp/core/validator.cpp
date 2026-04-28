@@ -4,7 +4,8 @@
 
 #include <algorithm>
 
-Validator::Validator(const ReqPackConfig& config) : config(config) {}
+Validator::Validator(PluginMetadataProvider* metadataProvider, const ReqPackConfig& config)
+	: config(config), metadataProvider(metadataProvider), database(config), syncService(&this->database, metadataProvider, config), matcher(metadataProvider, config) {}
 
 Validator::~Validator() {}
 
@@ -14,7 +15,14 @@ Graph* Validator::validate(Graph *graph) {
 	}
 
 	const ValidationPolicy policy = validator_policy_from_config(this->config);
-	const std::vector<ValidationFinding> findings = this->scanGraph(*graph);
+	std::vector<ValidationFinding> findings = this->syncService.ensureReady();
+	const std::vector<ValidationFinding> graphFindings = this->scanGraph(*graph);
+	findings.insert(findings.end(), graphFindings.begin(), graphFindings.end());
+	findings = validator_apply_rules(
+		findings,
+		this->config.security.allowVulnerabilityIds,
+		this->config.security.ignoreVulnerabilityIds
+	);
 
 	if (policy.generateReport) {
 		this->generateReport(*graph, findings);
@@ -43,33 +51,20 @@ std::vector<Package> Validator::collectPackages(const Graph& graph) const {
 }
 
 std::vector<ValidationFinding> Validator::scanGraph(const Graph& graph) const {
-	std::vector<ValidationFinding> findings;
+	VulnerabilityMatcher matcher = this->matcher;
+	matcher.setDatabase(&this->database);
+	matcher.setAdvisories(this->loadAdvisories());
+	return matcher.matchGraph(graph);
+}
 
-	for (const Package& package : this->collectPackages(graph)) {
-		const std::vector<ValidationFinding> packageFindings = this->scanPackage(package);
-		findings.insert(findings.end(), packageFindings.begin(), packageFindings.end());
+std::vector<OsvAdvisory> Validator::loadAdvisories() const {
+	std::vector<OsvAdvisory> advisories;
+	if (!this->config.security.osvOverlayPath.empty()) {
+		const std::vector<OsvAdvisory> overlay = osv_load_advisories_from_path(this->config.security.osvOverlayPath);
+		advisories.insert(advisories.end(), overlay.begin(), overlay.end());
 	}
 
-	return findings;
-}
-
-std::vector<ValidationFinding> Validator::scanPackage(const Package& package) const {
-	std::vector<ValidationFinding> findings = this->runSnykScan(package);
-	const std::vector<ValidationFinding> owaspFindings = this->runOwaspScan(package);
-	findings.insert(findings.end(), owaspFindings.begin(), owaspFindings.end());
-	return findings;
-}
-
-std::vector<ValidationFinding> Validator::runSnykScan(const Package& package) const {
-	(void)package;
-	// Skeleton hook: later this will run a Snyk-backed scan and translate results into findings.
-	return {};
-}
-
-std::vector<ValidationFinding> Validator::runOwaspScan(const Package& package) const {
-	(void)package;
-	// Skeleton hook: later this will run OWASP or similar scanners and translate results into findings.
-	return {};
+	return advisories;
 }
 
 bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findings) const {

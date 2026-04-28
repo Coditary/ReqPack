@@ -104,6 +104,32 @@ std::string Registry::resolvePluginName(const std::string& name) const {
     return normalized;
 }
 
+std::optional<PluginSecurityMetadata> Registry::getPluginSecurityMetadata(const std::string& name) {
+    const std::string resolvedName = this->resolvePluginName(name);
+    if (m_plugins.find(resolvedName) == m_plugins.end()) {
+        if (const std::optional<RegistryRecord> record = this->database.resolveRecord(resolvedName)) {
+            this->materializePluginScript(record.value());
+            this->scanDirectory(this->config.registry.pluginDirectory);
+        }
+    }
+
+    auto it = m_plugins.find(resolvedName);
+    if (it == m_plugins.end() || it->second == nullptr) {
+        return std::nullopt;
+    }
+    return it->second->getSecurityMetadata();
+}
+
+std::vector<std::string> Registry::getKnownPluginNames() {
+    std::vector<std::string> names = this->getAvailableNames();
+    for (const auto& [name, _] : this->config.planner.systemAliases) {
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    return names;
+}
+
 void Registry::materializePluginScript(const RegistryRecord& record) const {
     if (record.script.empty()) {
         return;

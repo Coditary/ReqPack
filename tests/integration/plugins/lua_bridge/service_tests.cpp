@@ -154,6 +154,14 @@ plugin = {}
 
 function plugin.getName() return "query-bridge" end
 function plugin.getVersion() return BOOTSTRAP_LABEL end
+function plugin.getSecurityMetadata()
+  return {
+    osvEcosystem = "demo-osv",
+    purlType = "generic",
+    versionComparatorProfile = "lexicographic",
+    versionTokenPattern = "[0-9]+|[A-Za-z]+",
+  }
+end
 function plugin.getRequirements()
   return {
     {
@@ -300,6 +308,10 @@ TEST_CASE("lua bridge loads bootstrap state and parses query values", "[integrat
     LuaBridge bridge(scriptPath.string(), config);
     CHECK(bridge.getName() == "query-bridge");
     CHECK(bridge.getVersion() == "booted");
+    REQUIRE(bridge.getSecurityMetadata().has_value());
+    CHECK(bridge.getSecurityMetadata()->osvEcosystem == "demo-osv");
+    CHECK(bridge.getSecurityMetadata()->purlType == "generic");
+    CHECK(bridge.getSecurityMetadata()->versionComparator.profile == "lexicographic");
     REQUIRE(bridge.init());
 
     const std::vector<std::string> categories = bridge.getCategories();

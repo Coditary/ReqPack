@@ -184,6 +184,14 @@ function plugin.getVersion()
     return "2.0.0"
 end
 
+function plugin.getSecurityMetadata()
+    return {
+        osvEcosystem = "Maven",
+        purlType = "maven",
+        versionComparatorProfile = "maven-comparable",
+    }
+end
+
 function plugin.getCategories()
     return { "Java", "Build", "Maven" }
 end

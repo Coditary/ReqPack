@@ -62,6 +62,14 @@ TEST_CASE("configuration parses known enum strings and rejects invalid values", 
     REQUIRE(unsafe_action_from_string("fail").has_value());
     CHECK(unsafe_action_from_string("fail").value() == UnsafeAction::ABORT);
     CHECK_FALSE(unsafe_action_from_string("pause").has_value());
+
+    REQUIRE(osv_refresh_mode_from_string("PeRiOdIc").has_value());
+    CHECK(osv_refresh_mode_from_string("PeRiOdIc").value() == OsvRefreshMode::PERIODIC);
+    CHECK_FALSE(osv_refresh_mode_from_string("hourly").has_value());
+
+    REQUIRE(sbom_output_format_from_string("cyclonedx-json").has_value());
+    CHECK(sbom_output_format_from_string("cyclonedx-json").value() == SbomOutputFormat::CYCLONEDX_JSON);
+    CHECK_FALSE(sbom_output_format_from_string("xml").has_value());
 }
 
 TEST_CASE("configuration resolves registry paths for directories and files", "[unit][configuration][path]") {
@@ -178,6 +186,17 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
             security = {
                 severityThreshold = "not-real",
                 onUnsafe = "ask",
+                osvDatabasePath = "~/osv-db",
+                osvOverlayPath = "~/security-overlay.lua",
+                osvRefreshMode = "periodic",
+                osvRefreshIntervalSeconds = 900,
+                strictEcosystemMapping = true,
+                includeWithdrawnInReport = true,
+                ignoreVulnerabilityIds = { "CVE-1", "GHSA-2" },
+                allowVulnerabilityIds = { "CVE-3" },
+                osvEcosystemMap = {
+                    DNF = "Debian",
+                },
             },
             reports = {
                 enabled = true,
@@ -204,6 +223,12 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
             interaction = {
                 interactive = false,
             },
+            sbom = {
+                defaultFormat = "cyclonedx-json",
+                defaultOutputPath = "~/sbom-out.json",
+                prettyPrint = false,
+                includeDependencyEdges = false,
+            },
         }
     )");
 
@@ -215,6 +240,16 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(std::filesystem::path(config.logging.filePath) == home / "logs/reqpack.log");
     CHECK(config.security.severityThreshold == SeverityLevel::HIGH);
     CHECK(config.security.onUnsafe == UnsafeAction::PROMPT);
+    CHECK(std::filesystem::path(config.security.osvDatabasePath) == home / "osv-db");
+    CHECK(std::filesystem::path(config.security.osvOverlayPath) == home / "security-overlay.lua");
+    CHECK(config.security.osvRefreshMode == OsvRefreshMode::PERIODIC);
+    CHECK(config.security.osvRefreshIntervalSeconds == 900);
+    CHECK(config.security.strictEcosystemMapping);
+    CHECK(config.security.includeWithdrawnInReport);
+    CHECK(config.security.ignoreVulnerabilityIds == std::vector<std::string>{"CVE-1", "GHSA-2"});
+    CHECK(config.security.allowVulnerabilityIds == std::vector<std::string>{"CVE-3"});
+    REQUIRE(config.security.osvEcosystemMap.contains("dnf"));
+    CHECK(config.security.osvEcosystemMap.at("dnf") == "Debian");
     CHECK(config.reports.enabled);
     CHECK(config.reports.format == ReportFormat::JSON);
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/reqpack.json");
@@ -227,6 +262,10 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     REQUIRE(config.registry.sources.contains("dnf"));
     CHECK(config.registry.sources.at("dnf").source == "https://example.test/dnf.lua");
     CHECK_FALSE(config.interaction.interactive);
+    CHECK(config.sbom.defaultFormat == SbomOutputFormat::CYCLONEDX_JSON);
+    CHECK(std::filesystem::path(config.sbom.defaultOutputPath) == home / "sbom-out.json");
+    CHECK_FALSE(config.sbom.prettyPrint);
+    CHECK_FALSE(config.sbom.includeDependencyEdges);
 }
 
 TEST_CASE("configuration falls back for missing or invalid lua config files", "[unit][configuration][load]") {

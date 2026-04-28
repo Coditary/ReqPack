@@ -145,6 +145,9 @@ function plugin.getMissingPackages(packages)
   return missing
 end
 function plugin.install(context, packages)
+  if packages[1] ~= nil then
+    context.exec.run("printf '%s' '" .. packages[1].name .. "' > '" .. context.plugin.dir .. "/last-install.txt'")
+  end
   return packages[1] == nil or packages[1].name ~= "fail"
 end
 function plugin.installLocal(context, path) return true end
@@ -413,6 +416,52 @@ TEST_CASE("executor recovers active run, reapplies flags, and commits reconciled
     REQUIRE(recoverItem != nullptr);
     CHECK(recoverItem->status == "committed");
     CHECK(recoverItem->errorMessage.empty());
+}
+
+TEST_CASE("executor continues with current graph after recovering stale active run", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-recovery-continue"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.execution.useTransactionDb = true;
+    config.execution.deleteCommittedTransactions = false;
+
+    add_plugin_script(tempDir.path() / "plugins", "recovery", RECOVERY_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "txn", TRANSACTION_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+
+    TransactionDatabase seedDatabase(config);
+    REQUIRE(seedDatabase.ensureReady());
+
+    const Package alreadyPackage{.action = ActionType::INSTALL, .system = "recovery", .name = "already"};
+    const Package recoverPackage{.action = ActionType::INSTALL, .system = "recovery", .name = "recover"};
+    const std::string recoveredRunId = seedDatabase.createRun({alreadyPackage, recoverPackage}, {"--resume"});
+    REQUIRE_FALSE(recoveredRunId.empty());
+
+    Executer executer(&registry, config);
+    Graph graph = make_linear_graph({
+        Package{.action = ActionType::INSTALL, .system = "txn", .name = "ok"},
+    });
+    executer.execute(&graph);
+
+    TransactionDatabase database(config);
+    REQUIRE(database.ensureReady());
+    CHECK_FALSE(database.getActiveRun().has_value());
+
+    const std::vector<TransactionItemRecord> recoveredItems = database.getRunItems(recoveredRunId);
+    REQUIRE(recoveredItems.size() == 2);
+    const TransactionItemRecord* recoveredItem = find_item(recoveredItems, "recover");
+    REQUIRE(recoveredItem != nullptr);
+    CHECK(recoveredItem->status == "committed");
+
+    const std::filesystem::path markerPath = tempDir.path() / "plugins" / "txn" / "last-install.txt";
+    REQUIRE(std::filesystem::exists(markerPath));
+
+    std::ifstream marker(markerPath, std::ios::binary);
+    REQUIRE(marker.is_open());
+    std::string markerValue;
+    marker >> markerValue;
+    CHECK(markerValue == "ok");
 }
 
 TEST_CASE("executor dispatches local install target through installLocal", "[integration][executor][service]") {

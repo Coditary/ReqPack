@@ -89,7 +89,6 @@ void Executer::execute(Graph *graph) {
 
 	std::vector<TaskGroup> taskGroups;
 	if (this->config.execution.useTransactionDb) {
-		const bool hadActiveRun = this->transactionDatabase->getActiveRun().has_value();
 		const std::vector<TaskGroup> recoveryTaskGroups = this->recoverPendingTaskGroups();
 		const std::string recoveryRunId = this->activeRunId;
 		if (!recoveryTaskGroups.empty() && !recoveryRunId.empty()) {
@@ -99,9 +98,6 @@ void Executer::execute(Graph *graph) {
 			if (this->config.execution.deleteCommittedTransactions) {
 				this->deleteCommittedTransactions();
 			}
-		}
-		if (hadActiveRun) {
-			return;
 		}
 		if (this->transactionDatabase->getActiveRun().has_value()) {
 			return;

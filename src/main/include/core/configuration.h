@@ -35,6 +35,18 @@ enum class UnsafeAction {
     ABORT
 };
 
+enum class OsvRefreshMode {
+    MANUAL,
+    PERIODIC,
+    ALWAYS
+};
+
+enum class SbomOutputFormat {
+    TABLE,
+    JSON,
+    CYCLONEDX_JSON
+};
+
 struct LoggingConfig {
     LogLevel level{LogLevel::INFO};
     bool consoleOutput{true};
@@ -54,6 +66,17 @@ struct SecurityConfig {
     UnsafeAction onUnsafe{UnsafeAction::CONTINUE};
     bool promptOnUnsafe{false};
     bool allowUnassigned{true};
+    std::string osvDatabasePath{"~/.reqpack/osv"};
+    std::string osvFeedUrl{"https://storage.googleapis.com/osv-vulnerabilities"};
+    OsvRefreshMode osvRefreshMode{OsvRefreshMode::MANUAL};
+    long osvRefreshIntervalSeconds{24L * 60L * 60L};
+    std::string osvOverlayPath{};
+    std::vector<std::string> ignoreVulnerabilityIds{};
+    std::vector<std::string> allowVulnerabilityIds{};
+    std::map<std::string, std::string> osvEcosystemMap{};
+    UnsafeAction onUnresolvedVersion{UnsafeAction::CONTINUE};
+    bool strictEcosystemMapping{false};
+    bool includeWithdrawnInReport{false};
 };
 
 struct ReportConfig {
@@ -116,6 +139,13 @@ struct InteractionConfig {
     bool promptBeforeMissingDependencyDownload{false};
 };
 
+struct SbomConfig {
+    SbomOutputFormat defaultFormat{SbomOutputFormat::TABLE};
+    std::string defaultOutputPath{};
+    bool prettyPrint{true};
+    bool includeDependencyEdges{true};
+};
+
 struct ReqPackConfig {
     std::string applicationName{"ReqPack"};
     std::string version{"0.1.0"};
@@ -128,6 +158,7 @@ struct ReqPackConfig {
     DownloaderConfig downloader{};
     RegistryConfig registry{};
     InteractionConfig interaction{};
+    SbomConfig sbom{};
 
     std::vector<std::string> enabledScanners{};
     std::vector<std::string> enabledReportFormats{};
@@ -149,6 +180,16 @@ struct ReqPackConfigOverrides {
     std::optional<double> scoreThreshold;
     std::optional<UnsafeAction> onUnsafe;
     std::optional<bool> promptOnUnsafe;
+    std::optional<std::string> osvDatabasePath;
+    std::optional<std::string> osvFeedUrl;
+    std::optional<OsvRefreshMode> osvRefreshMode;
+    std::optional<long> osvRefreshIntervalSeconds;
+    std::optional<std::string> osvOverlayPath;
+    std::vector<std::string> ignoreVulnerabilityIds{};
+    std::vector<std::string> allowVulnerabilityIds{};
+    std::optional<UnsafeAction> onUnresolvedVersion;
+    std::optional<bool> strictEcosystemMapping;
+    std::optional<bool> includeWithdrawnInReport;
 
     std::optional<bool> reportEnabled;
     std::optional<ReportFormat> reportFormat;
@@ -165,6 +206,11 @@ struct ReqPackConfigOverrides {
     std::optional<bool> autoLoadPlugins;
 
     std::optional<bool> interactive;
+
+    std::optional<SbomOutputFormat> sbomDefaultFormat;
+    std::optional<std::string> sbomDefaultOutputPath;
+    std::optional<bool> sbomPrettyPrint;
+    std::optional<bool> sbomIncludeDependencyEdges;
 };
 
 inline const ReqPackConfig DEFAULT_REQPACK_CONFIG{};
@@ -173,6 +219,8 @@ std::optional<SeverityLevel> severity_level_from_string(const std::string& sever
 std::optional<LogLevel> log_level_from_string(const std::string& level);
 std::optional<ReportFormat> report_format_from_string(const std::string& format);
 std::optional<UnsafeAction> unsafe_action_from_string(const std::string& action);
+std::optional<OsvRefreshMode> osv_refresh_mode_from_string(const std::string& mode);
+std::optional<SbomOutputFormat> sbom_output_format_from_string(const std::string& format);
 
 std::filesystem::path reqpack_home_directory();
 std::filesystem::path default_reqpack_config_path();
@@ -241,5 +289,41 @@ inline std::string to_string(ReportFormat format) {
         case ReportFormat::NONE:
         default:
             return "none";
+    }
+}
+
+inline std::string to_string(UnsafeAction action) {
+    switch (action) {
+        case UnsafeAction::PROMPT:
+            return "prompt";
+        case UnsafeAction::ABORT:
+            return "abort";
+        case UnsafeAction::CONTINUE:
+        default:
+            return "continue";
+    }
+}
+
+inline std::string to_string(OsvRefreshMode mode) {
+    switch (mode) {
+        case OsvRefreshMode::PERIODIC:
+            return "periodic";
+        case OsvRefreshMode::ALWAYS:
+            return "always";
+        case OsvRefreshMode::MANUAL:
+        default:
+            return "manual";
+    }
+}
+
+inline std::string to_string(SbomOutputFormat format) {
+    switch (format) {
+        case SbomOutputFormat::JSON:
+            return "json";
+        case SbomOutputFormat::CYCLONEDX_JSON:
+            return "cyclonedx-json";
+        case SbomOutputFormat::TABLE:
+        default:
+            return "table";
     }
 }

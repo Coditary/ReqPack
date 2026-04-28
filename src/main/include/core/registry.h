@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/configuration.h"
+#include "core/plugin_metadata_provider.h"
 #include "core/registry_database.h"
 
 #include <vector>
@@ -18,7 +19,7 @@ enum class PluginState {
     SHUTDOWN
 };
 
-class Registry {
+class Registry : public PluginMetadataProvider {
 private:
     ReqPackConfig config;
     RegistryDatabase database;
@@ -34,6 +35,8 @@ public:
     RegistryDatabase* getDatabase();
     const RegistryDatabase* getDatabase() const;
     std::string resolvePluginName(const std::string& name) const;
+    std::optional<PluginSecurityMetadata> getPluginSecurityMetadata(const std::string& name);
+    std::vector<std::string> getKnownPluginNames() override;
 
     void scanDirectory(const std::string& directoryPath);
     bool loadPlugin(const std::string& name);

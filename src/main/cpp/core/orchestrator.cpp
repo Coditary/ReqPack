@@ -9,13 +9,15 @@ Orchestrator::Orchestrator(std::vector<Request> requests, const ReqPackConfig& c
 	: config(config), requests(std::move(requests)) {
 	this->registry  = new Registry(this->config);
 	this->planner   = new Planner(this->registry, this->registry->getDatabase(), this->config);
-	this->validator = new Validator(this->config);
+	this->sbomExporter = new SbomExporter(this->registry, this->config);
+	this->validator = new Validator(this->registry, this->config);
 	this->executor  = new Executer(this->registry, this->config);
 }
 
 Orchestrator::~Orchestrator() {
 	delete this->registry;
 	delete this->planner;
+	delete this->sbomExporter;
 	delete this->validator;
 	delete this->executor;
 }
@@ -59,6 +61,14 @@ void Orchestrator::run() {
 	}
 
 	Graph* graph = this->planner->plan(this->requests);
+	if (this->requests.front().action == ActionType::SBOM) {
+		if (graph != nullptr) {
+			(void)this->sbomExporter->exportGraph(*graph, this->requests.front());
+		}
+		delete graph;
+		return;
+	}
 	graph = this->validator->validate(graph);
 	this->executor->execute(graph);
+	delete graph;
 }

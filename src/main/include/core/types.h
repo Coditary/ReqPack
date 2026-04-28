@@ -12,7 +12,8 @@ enum class ActionType {
 	SEARCH,
 	LIST,
 	INFO,
-	ENSURE
+	ENSURE,
+	SBOM
 };
 
 struct Request {
@@ -20,6 +21,8 @@ struct Request {
 	std::string system;
 	std::vector<std::string> packages;
 	std::vector<std::string> flags;
+	std::string outputFormat;
+	std::string outputPath;
 	std::string localPath;
 	bool usesLocalTarget{false};
 };

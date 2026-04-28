@@ -104,6 +104,13 @@ end
 
 function plugin.getName() return REQPACK_PLUGIN_ID end
 function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    osvEcosystem = "demo-osv",
+    purlType = "generic",
+    versionComparatorProfile = "lexicographic",
+  }
+end
 function plugin.getRequirements() return {} end
 function plugin.getCategories() return { "pkg", "orch" } end
 function plugin.getMissingPackages(packages) return copy_packages(packages) end
@@ -199,4 +206,30 @@ TEST_CASE("orchestrator install command plans validates and executes plugin inst
     const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
     REQUIRE(std::filesystem::exists(installMarker));
     CHECK(read_file(installMarker) == "sample");
+}
+
+TEST_CASE("orchestrator sbom command exports planned graph without executing plugin install", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-sbom"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path outputPath = tempDir.path() / "graph.json";
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {
+        "sbom",
+        "apply",
+        "sample",
+        "--output",
+        outputPath.string(),
+    });
+
+    CHECK(output.find(outputPath.string()) != std::string::npos);
+    REQUIRE(std::filesystem::exists(outputPath));
+    const std::string sbom = read_file(outputPath);
+    CHECK(sbom.find("\"bomFormat\": \"CycloneDX\"") != std::string::npos);
+    CHECK(sbom.find("\"name\": \"sample\"") != std::string::npos);
+
+    const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
+    CHECK_FALSE(std::filesystem::exists(installMarker));
 }

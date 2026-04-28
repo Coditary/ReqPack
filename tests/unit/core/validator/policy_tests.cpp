@@ -8,6 +8,7 @@ namespace {
 
 ValidationFinding make_finding(const std::string& severity, double score = 0.0) {
     ValidationFinding finding;
+    finding.id = severity + std::to_string(score);
     finding.severity = severity;
     finding.score = score;
     return finding;
@@ -21,12 +22,16 @@ TEST_CASE("validator derives policy from config", "[unit][validator][policy]") {
     config.security.severityThreshold = SeverityLevel::HIGH;
     config.security.scoreThreshold = 7.5;
     config.reports.enabled = true;
+    config.security.onUnresolvedVersion = UnsafeAction::PROMPT;
+    config.security.strictEcosystemMapping = true;
 
     const ValidationPolicy policy = validator_policy_from_config(config);
     CHECK(policy.promptOnUnsafe);
     CHECK(policy.abortThreshold == "high");
     CHECK(policy.abortScoreThreshold == 7.5);
     CHECK(policy.generateReport);
+    CHECK(policy.unresolvedVersionAction == UnsafeAction::PROMPT);
+    CHECK(policy.strictEcosystemMapping);
 }
 
 TEST_CASE("validator severity ranking matches configured order", "[unit][validator][policy]") {
@@ -78,4 +83,39 @@ TEST_CASE("validator disposition distinguishes continue, prompt, and abort", "[u
     thresholdPromptPolicy.abortThreshold = "medium";
     thresholdPromptPolicy.promptOnUnsafe = true;
     CHECK(validator_disposition(findings, thresholdPromptPolicy) == ValidationDisposition::Prompt);
+}
+
+TEST_CASE("validator rules and typed findings affect blocking behavior", "[unit][validator][policy]") {
+    const ValidationFinding unsupported = ValidationFinding{
+        .id = "dnf",
+        .kind = "unsupported_ecosystem",
+        .severity = "low",
+        .score = 0.0,
+    };
+    const ValidationFinding unresolved = ValidationFinding{
+        .id = "pkg",
+        .kind = "unresolved_version",
+        .severity = "low",
+        .score = 0.0,
+    };
+
+    ValidationPolicy defaultPolicy;
+    CHECK_FALSE(validator_is_blocking_finding(unsupported, defaultPolicy));
+    CHECK_FALSE(validator_is_blocking_finding(unresolved, defaultPolicy));
+
+    ValidationPolicy strictPolicy;
+    strictPolicy.strictEcosystemMapping = true;
+    CHECK(validator_is_blocking_finding(unsupported, strictPolicy));
+
+    ValidationPolicy unresolvedAbortPolicy;
+    unresolvedAbortPolicy.unresolvedVersionAction = UnsafeAction::ABORT;
+    CHECK(validator_is_blocking_finding(unresolved, unresolvedAbortPolicy));
+
+    const std::vector<ValidationFinding> findings{
+        ValidationFinding{.id = "CVE-1", .kind = "vulnerability", .severity = "critical", .score = 9.8},
+        ValidationFinding{.id = "CVE-2", .kind = "vulnerability", .severity = "high", .score = 7.5},
+    };
+    const std::vector<ValidationFinding> filtered = validator_apply_rules(findings, {"CVE-1"}, {});
+    REQUIRE(filtered.size() == 1);
+    CHECK(filtered[0].id == "CVE-2");
 }

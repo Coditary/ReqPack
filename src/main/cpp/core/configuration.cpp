@@ -151,6 +151,38 @@ RegistrySourceMap load_registry_sources_from_table(const sol::table& table) {
     return sources;
 }
 
+std::vector<std::string> load_string_array(const sol::object& object) {
+    std::vector<std::string> values;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return values;
+    }
+
+    for (const auto& [_, value] : object.as<sol::table>()) {
+        if (value.get_type() == sol::type::string) {
+            values.push_back(value.as<std::string>());
+        }
+    }
+
+    return values;
+}
+
+std::map<std::string, std::string> load_string_map(const sol::object& object) {
+    std::map<std::string, std::string> values;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return values;
+    }
+
+    for (const auto& [key, value] : object.as<sol::table>()) {
+        if (key.get_type() != sol::type::string || value.get_type() != sol::type::string) {
+            continue;
+        }
+
+        values[to_lower(key.as<std::string>())] = value.as<std::string>();
+    }
+
+    return values;
+}
+
 void merge_registry_sources(RegistrySourceMap& target, const RegistrySourceMap& source) {
     for (const auto& [name, entry] : source) {
         target[name] = entry;
@@ -250,6 +282,36 @@ std::optional<UnsafeAction> unsafe_action_from_string(const std::string& action)
     }
     if (normalized == "abort" || normalized == "fail") {
         return UnsafeAction::ABORT;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<OsvRefreshMode> osv_refresh_mode_from_string(const std::string& mode) {
+    const std::string normalized = to_lower(mode);
+    if (normalized == "manual") {
+        return OsvRefreshMode::MANUAL;
+    }
+    if (normalized == "periodic") {
+        return OsvRefreshMode::PERIODIC;
+    }
+    if (normalized == "always") {
+        return OsvRefreshMode::ALWAYS;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<SbomOutputFormat> sbom_output_format_from_string(const std::string& format) {
+    const std::string normalized = to_lower(format);
+    if (normalized == "table") {
+        return SbomOutputFormat::TABLE;
+    }
+    if (normalized == "json") {
+        return SbomOutputFormat::JSON;
+    }
+    if (normalized == "cyclonedx-json" || normalized == "cyclonedx") {
+        return SbomOutputFormat::CYCLONEDX_JSON;
     }
 
     return std::nullopt;
@@ -394,6 +456,33 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(security.value(), "allowUnassigned", config.security.allowUnassigned);
         assign_if_present(security.value(), "severityThreshold", severity_level_from_string, config.security.severityThreshold);
         assign_if_present(security.value(), "onUnsafe", unsafe_action_from_string, config.security.onUnsafe);
+        assign_if_present(security.value(), "osvDatabasePath", config.security.osvDatabasePath);
+        assign_if_present(security.value(), "osvFeedUrl", config.security.osvFeedUrl);
+        assign_if_present(security.value(), "osvRefreshMode", osv_refresh_mode_from_string, config.security.osvRefreshMode);
+        assign_if_present(security.value(), "osvRefreshIntervalSeconds", config.security.osvRefreshIntervalSeconds);
+        assign_if_present(security.value(), "osvOverlayPath", config.security.osvOverlayPath);
+        assign_if_present(security.value(), "onUnresolvedVersion", unsafe_action_from_string, config.security.onUnresolvedVersion);
+        assign_if_present(security.value(), "strictEcosystemMapping", config.security.strictEcosystemMapping);
+        assign_if_present(security.value(), "includeWithdrawnInReport", config.security.includeWithdrawnInReport);
+
+        const std::vector<std::string> ignoreIds = load_string_array(security.value()["ignoreVulnerabilityIds"]);
+        if (!ignoreIds.empty()) {
+            config.security.ignoreVulnerabilityIds = ignoreIds;
+        }
+
+        const std::vector<std::string> allowIds = load_string_array(security.value()["allowVulnerabilityIds"]);
+        if (!allowIds.empty()) {
+            config.security.allowVulnerabilityIds = allowIds;
+        }
+
+        const std::map<std::string, std::string> ecosystemMap = load_string_map(security.value()["osvEcosystemMap"]);
+        for (const auto& [system, ecosystem] : ecosystemMap) {
+            config.security.osvEcosystemMap[system] = ecosystem;
+        }
+    }
+    config.security.osvDatabasePath = expand_user_path(config.security.osvDatabasePath).string();
+    if (!config.security.osvOverlayPath.empty()) {
+        config.security.osvOverlayPath = expand_user_path(config.security.osvOverlayPath).string();
     }
 
     const sol::optional<sol::table> reports = root["reports"];
@@ -485,6 +574,17 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(interaction.value(), "promptBeforeMissingDependencyDownload", config.interaction.promptBeforeMissingDependencyDownload);
     }
 
+    const sol::optional<sol::table> sbom = root["sbom"];
+    if (sbom.has_value()) {
+        assign_if_present(sbom.value(), "defaultFormat", sbom_output_format_from_string, config.sbom.defaultFormat);
+        assign_if_present(sbom.value(), "defaultOutputPath", config.sbom.defaultOutputPath);
+        assign_if_present(sbom.value(), "prettyPrint", config.sbom.prettyPrint);
+        assign_if_present(sbom.value(), "includeDependencyEdges", config.sbom.includeDependencyEdges);
+    }
+    if (!config.sbom.defaultOutputPath.empty()) {
+        config.sbom.defaultOutputPath = expand_user_path(config.sbom.defaultOutputPath).string();
+    }
+
     return config;
 }
 
@@ -504,6 +604,16 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.scoreThreshold.has_value()) config.security.scoreThreshold = overrides.scoreThreshold.value();
     if (overrides.onUnsafe.has_value()) config.security.onUnsafe = overrides.onUnsafe.value();
     if (overrides.promptOnUnsafe.has_value()) config.security.promptOnUnsafe = overrides.promptOnUnsafe.value();
+    if (overrides.osvDatabasePath.has_value()) config.security.osvDatabasePath = expand_user_path(overrides.osvDatabasePath.value()).string();
+    if (overrides.osvFeedUrl.has_value()) config.security.osvFeedUrl = overrides.osvFeedUrl.value();
+    if (overrides.osvRefreshMode.has_value()) config.security.osvRefreshMode = overrides.osvRefreshMode.value();
+    if (overrides.osvRefreshIntervalSeconds.has_value()) config.security.osvRefreshIntervalSeconds = overrides.osvRefreshIntervalSeconds.value();
+    if (overrides.osvOverlayPath.has_value()) config.security.osvOverlayPath = expand_user_path(overrides.osvOverlayPath.value()).string();
+    if (overrides.onUnresolvedVersion.has_value()) config.security.onUnresolvedVersion = overrides.onUnresolvedVersion.value();
+    if (overrides.strictEcosystemMapping.has_value()) config.security.strictEcosystemMapping = overrides.strictEcosystemMapping.value();
+    if (overrides.includeWithdrawnInReport.has_value()) config.security.includeWithdrawnInReport = overrides.includeWithdrawnInReport.value();
+    if (!overrides.ignoreVulnerabilityIds.empty()) config.security.ignoreVulnerabilityIds = overrides.ignoreVulnerabilityIds;
+    if (!overrides.allowVulnerabilityIds.empty()) config.security.allowVulnerabilityIds = overrides.allowVulnerabilityIds;
 
     if (overrides.reportEnabled.has_value()) config.reports.enabled = overrides.reportEnabled.value();
     if (overrides.reportFormat.has_value()) config.reports.format = overrides.reportFormat.value();
@@ -520,6 +630,11 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.autoLoadPlugins.has_value()) config.registry.autoLoadPlugins = overrides.autoLoadPlugins.value();
 
     if (overrides.interactive.has_value()) config.interaction.interactive = overrides.interactive.value();
+
+    if (overrides.sbomDefaultFormat.has_value()) config.sbom.defaultFormat = overrides.sbomDefaultFormat.value();
+    if (overrides.sbomDefaultOutputPath.has_value()) config.sbom.defaultOutputPath = expand_user_path(overrides.sbomDefaultOutputPath.value()).string();
+    if (overrides.sbomPrettyPrint.has_value()) config.sbom.prettyPrint = overrides.sbomPrettyPrint.value();
+    if (overrides.sbomIncludeDependencyEdges.has_value()) config.sbom.includeDependencyEdges = overrides.sbomIncludeDependencyEdges.value();
 
     return config;
 }
@@ -614,6 +729,55 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
         }
         return true;
     }
+    if (argument == "--osv-db") {
+        if (require_value(value)) overrides.osvDatabasePath = value;
+        return true;
+    }
+    if (argument == "--osv-feed") {
+        if (require_value(value)) overrides.osvFeedUrl = value;
+        return true;
+    }
+    if (argument == "--osv-refresh") {
+        if (require_value(value)) overrides.osvRefreshMode = osv_refresh_mode_from_string(value);
+        return true;
+    }
+    if (argument == "--osv-refresh-interval") {
+        if (require_value(value)) {
+            try {
+                overrides.osvRefreshIntervalSeconds = std::stol(value);
+            } catch (...) {
+            }
+        }
+        return true;
+    }
+    if (argument == "--osv-overlay") {
+        if (require_value(value)) overrides.osvOverlayPath = value;
+        return true;
+    }
+    if (argument == "--ignore-vuln") {
+        if (require_value(value)) overrides.ignoreVulnerabilityIds.push_back(value);
+        return true;
+    }
+    if (argument == "--allow-vuln") {
+        if (require_value(value)) overrides.allowVulnerabilityIds.push_back(value);
+        return true;
+    }
+    if (argument == "--fail-on-unresolved-version") {
+        overrides.onUnresolvedVersion = UnsafeAction::ABORT;
+        return true;
+    }
+    if (argument == "--prompt-on-unresolved-version") {
+        overrides.onUnresolvedVersion = UnsafeAction::PROMPT;
+        return true;
+    }
+    if (argument == "--strict-ecosystem-mapping") {
+        overrides.strictEcosystemMapping = true;
+        return true;
+    }
+    if (argument == "--include-withdrawn-in-report") {
+        overrides.includeWithdrawnInReport = true;
+        return true;
+    }
     if (argument == "--report") {
         overrides.reportEnabled = true;
         return true;
@@ -660,6 +824,22 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
     if (argument == "--non-interactive") {
         overrides.interactive = false;
+        return true;
+    }
+    if (argument == "--sbom-format") {
+        if (require_value(value)) overrides.sbomDefaultFormat = sbom_output_format_from_string(value);
+        return true;
+    }
+    if (argument == "--sbom-output") {
+        if (require_value(value)) overrides.sbomDefaultOutputPath = value;
+        return true;
+    }
+    if (argument == "--sbom-no-pretty") {
+        overrides.sbomPrettyPrint = false;
+        return true;
+    }
+    if (argument == "--sbom-no-dependency-edges") {
+        overrides.sbomIncludeDependencyEdges = false;
         return true;
     }
 

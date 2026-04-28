@@ -15,11 +15,12 @@ private:
     sol::state m_lua;
     std::string m_name;
     std::string m_version;
-    std::string m_pluginId;
-    std::string m_pluginDirectory;
-    std::string m_scriptPath;
-    std::string m_bootstrapPath;
-    Logger& m_logger;
+	std::string m_pluginId;
+	std::string m_pluginDirectory;
+	std::string m_scriptPath;
+	std::string m_bootstrapPath;
+	std::optional<PluginSecurityMetadata> m_securityMetadata;
+	Logger& m_logger;
     
     sol::table m_pluginTable;
 	ReqPackConfig m_config;
@@ -49,6 +50,7 @@ public:
 	std::string getScriptPath() const override { return m_scriptPath; }
 	std::string getBootstrapPath() const override { return m_bootstrapPath; }
 	IPluginRuntimeHost* getRuntimeHost() override { return this; }
+	std::optional<PluginSecurityMetadata> getSecurityMetadata() const override { return m_securityMetadata; }
     
 	std::vector<Package> getRequirements() override;
     std::vector<std::string> getCategories() override;

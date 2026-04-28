@@ -43,6 +43,8 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
     std::vector<Request> requests;
     std::vector<std::string> global_flags;
     std::unordered_map<std::string, std::size_t> request_index_by_system;
+    std::string sbomOutputFormat;
+    std::string sbomOutputPath;
 
     if (argc < 2) {
         return requests;
@@ -111,6 +113,20 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
         const std::string& argument = requestArguments[i];
 
         if (is_flag(argument)) {
+            if (action == ActionType::SBOM && argument == "--format") {
+                if (i + 1 >= requestArguments.size()) {
+                    return {};
+                }
+                sbomOutputFormat = requestArguments[++i];
+                continue;
+            }
+            if (action == ActionType::SBOM && argument == "--output") {
+                if (i + 1 >= requestArguments.size()) {
+                    return {};
+                }
+                sbomOutputPath = requestArguments[++i];
+                continue;
+            }
             global_flags.push_back(argument.substr(2));
             continue;
         }
@@ -166,6 +182,30 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
 
     for (Request& request : requests) {
         request.flags = global_flags;
+        if (action == ActionType::SBOM) {
+            request.outputPath = sbomOutputPath;
+            if (!sbomOutputFormat.empty()) {
+                request.outputFormat = sbomOutputFormat;
+            } else if (!sbomOutputPath.empty()) {
+                request.outputFormat = to_string(SbomOutputFormat::CYCLONEDX_JSON);
+            } else {
+                request.outputFormat = to_string(config.sbom.defaultFormat);
+            }
+        }
+    }
+
+    if (action == ActionType::SBOM && requests.empty()) {
+        Request request;
+        request.action = action;
+        request.outputPath = sbomOutputPath;
+        if (!sbomOutputFormat.empty()) {
+            request.outputFormat = sbomOutputFormat;
+        } else if (!sbomOutputPath.empty()) {
+            request.outputFormat = to_string(SbomOutputFormat::CYCLONEDX_JSON);
+        } else {
+            request.outputFormat = to_string(config.sbom.defaultFormat);
+        }
+        requests.push_back(std::move(request));
     }
 
     return requests;
@@ -186,11 +226,15 @@ void Cli::print_help() {
         "  list                    Lists packages for a system\n"
         "  info                    Shows package info for a system\n"
         "  ensure [systems...]     Ensures plugin requirements are installed\n"
+        "  sbom                    Exports planned graph as table or JSON\n"
         "\nConfig:\n"
         "  --config <path>         Loads config from a custom Lua file\n"
         "  --config=<path>         Same as above\n"
         "  --registry <path>       Loads registry sources from a custom path\n"
-        "  --registry=<path>       Same as above\n",
+        "  --registry=<path>       Same as above\n"
+        "\nSBOM:\n"
+        "  --format <name>         Uses table, json, or cyclonedx-json\n"
+        "  --output <path>         Writes SBOM output to file\n",
         "cli",
         "help"
     );
@@ -219,6 +263,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "ensure") {
         return ActionType::ENSURE;
+    }
+    if (normalized_command == "sbom") {
+        return ActionType::SBOM;
     }
 
     return ActionType::UNKNOWN;

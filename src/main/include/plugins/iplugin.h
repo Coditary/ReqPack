@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 #include "core/types.h"
+#include "core/version_compare.h"
 
 #define REQPACK_API_VERSION 3
 
@@ -14,6 +16,12 @@ struct ExecResult {
 	int exitCode{1};
 	std::string stdoutText;
 	std::string stderrText;
+};
+
+struct PluginSecurityMetadata {
+	std::string osvEcosystem{};
+	std::string purlType{};
+	VersionComparatorSpec versionComparator{};
 };
 
 class IPluginRuntimeHost {
@@ -147,6 +155,9 @@ public:
 	virtual std::string getScriptPath() const = 0;
 	virtual std::string getBootstrapPath() const = 0;
 	virtual IPluginRuntimeHost* getRuntimeHost() = 0;
+	virtual std::optional<PluginSecurityMetadata> getSecurityMetadata() const {
+		return std::nullopt;
+	}
     
 	virtual std::vector<Package> getRequirements() = 0;
 	virtual std::vector<std::string> getCategories() = 0;

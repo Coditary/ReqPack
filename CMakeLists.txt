@@ -68,10 +68,16 @@ set(SOURCES
     src/main/cpp/core/transaction_database.cpp
     src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/orchestrator.cpp
+    src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/validator.cpp
     src/main/cpp/core/validator_core.cpp
+    src/main/cpp/core/version_compare.cpp
+    src/main/cpp/core/vulnerability_database.cpp
+    src/main/cpp/core/vulnerability_matcher.cpp
+    src/main/cpp/core/vulnerability_sync_service.cpp
     src/main/cpp/core/executor.cpp
     src/main/cpp/core/registry.cpp
 )
@@ -100,8 +106,10 @@ add_executable(core_integration_tests
     tests/integration/core/registry/service_tests.cpp
     tests/integration/plugins/lua_bridge/service_tests.cpp
     src/main/cpp/core/executor.cpp
+    src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
     src/main/cpp/plugins/exec_rules.cpp
@@ -115,6 +123,10 @@ add_executable(core_integration_tests
     src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/version_compare.cpp
+    src/main/cpp/core/vulnerability_database.cpp
+    src/main/cpp/core/vulnerability_matcher.cpp
+    src/main/cpp/core/vulnerability_sync_service.cpp
 )
 
 add_dependencies(core_integration_tests ReqPack)
@@ -126,17 +138,27 @@ add_executable(core_unit_tests
     tests/unit/core/downloader/core_tests.cpp
     tests/unit/core/planner/core_tests.cpp
     tests/unit/core/registry_database/core_tests.cpp
+    tests/unit/core/osv/core_tests.cpp
+    tests/unit/core/sbom/export_tests.cpp
     tests/unit/core/transaction_database/serialization_tests.cpp
     tests/unit/core/validator/policy_tests.cpp
     tests/unit/core/validator/validate_tests.cpp
+    tests/unit/core/version_compare/core_tests.cpp
+    tests/unit/core/vulnerability_database/core_tests.cpp
     tests/unit/output/logger/format_tests.cpp
     src/main/cpp/core/configuration.cpp
     src/main/cpp/core/downloader_core.cpp
+    src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner_core.cpp
     src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/validator.cpp
     src/main/cpp/core/validator_core.cpp
+    src/main/cpp/core/version_compare.cpp
+    src/main/cpp/core/vulnerability_database.cpp
+    src/main/cpp/core/vulnerability_matcher.cpp
+    src/main/cpp/core/vulnerability_sync_service.cpp
     src/main/cpp/output/logger_core.cpp
 )
 
@@ -201,6 +223,8 @@ target_link_libraries(exec_rules_integration_tests PRIVATE
 
 target_link_libraries(core_unit_tests PRIVATE
     Catch2::Catch2
+    CURL::libcurl
+    lmdb
     ${LUA_LIBRARIES}
     spdlog::spdlog
     fmt::fmt

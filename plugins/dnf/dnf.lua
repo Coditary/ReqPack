@@ -42,6 +42,13 @@ function plugin.getVersion()
     return "2.0.0"
 end
 
+function plugin.getSecurityMetadata()
+    return {
+        purlType = "rpm",
+        versionComparatorProfile = "rpm-evr",
+    }
+end
+
 function plugin.getCategories()
     return { "System", "RPM", "Fedora Native" }
 end
