@@ -6,6 +6,7 @@
 #include <iostream>
 #include <utility>
 
+#include "core/manifest_loader.h"
 #include "output/logger.h"
 
 namespace {
@@ -140,6 +141,92 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
 
     if (action == ActionType::UNKNOWN) {
         return requests;
+    }
+
+    // Manifest mode: reqpack install <dir-path>
+    // If the first non-flag argument after the action looks like a filesystem path
+    // and resolves to a directory, load reqpack.lua from it.
+    if (action == ActionType::INSTALL) {
+        for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
+            const std::string& arg = requestArguments[i];
+            if (is_flag(arg)) {
+                continue;
+            }
+
+            // Only treat as a path if it starts with '.' or '/'.
+            // This avoids shadowing system names like "dnf" or "npm".
+            const bool looksLikePath = !arg.empty() && (arg[0] == '.' || arg[0] == '/');
+            if (!looksLikePath) {
+                break;  // first non-flag arg is not a path → normal mode
+            }
+
+            std::error_code fsError;
+            const std::filesystem::path candidatePath =
+                std::filesystem::absolute(std::filesystem::path(arg), fsError);
+
+            if (fsError || !std::filesystem::is_directory(candidatePath, fsError) || fsError) {
+                break;  // path doesn't resolve to a directory → normal mode
+            }
+
+            const std::filesystem::path manifestPath = candidatePath / MANIFEST_FILENAME;
+            if (!std::filesystem::exists(manifestPath)) {
+                Logger::instance().err(
+                    "no " + MANIFEST_FILENAME + " found in '" + candidatePath.string() + "'"
+                );
+                return {};
+            }
+
+            std::vector<ManifestEntry> entries;
+            try {
+                entries = ManifestLoader::load(manifestPath);
+            } catch (const std::exception& e) {
+                Logger::instance().err(
+                    "failed to load manifest '" + manifestPath.string() + "': " + e.what()
+                );
+                return {};
+            }
+
+            if (entries.empty()) {
+                Logger::instance().err(
+                    "manifest '" + manifestPath.string() + "' contains no packages"
+                );
+                return {};
+            }
+
+            // Collect global flags from remaining arguments after the path.
+            for (std::size_t j = i + 1; j < requestArguments.size(); ++j) {
+                if (is_flag(requestArguments[j])) {
+                    global_flags.push_back(requestArguments[j].substr(2));
+                }
+            }
+
+            // Build one Request per system, batching packages for the same system.
+            std::unordered_map<std::string, std::size_t> manifest_index;
+            for (const ManifestEntry& entry : entries) {
+                const std::string normalized = to_lower(entry.system);
+                const auto [it, inserted] = manifest_index.emplace(normalized, requests.size());
+                if (inserted) {
+                    requests.push_back(Request{.action = action, .system = normalized});
+                }
+                Request& req = requests[it->second];
+                // Encode version as name@version when present — plugins can parse this.
+                const std::string pkgSpec =
+                    entry.version.empty() ? entry.name : (entry.name + "@" + entry.version);
+                req.packages.push_back(pkgSpec);
+                // Merge per-entry flags into global flags for this request.
+                for (const std::string& f : entry.flags) {
+                    req.flags.push_back(f);
+                }
+            }
+
+            for (Request& req : requests) {
+                for (const std::string& f : global_flags) {
+                    req.flags.push_back(f);
+                }
+            }
+
+            return requests;
+        }
     }
 
     const std::set<std::string> known_systems = discover_systems(config);
@@ -301,14 +388,27 @@ void Cli::print_command_help(ActionType action) {
                 "Usage: ReqPack install <system> [<package>...] [options]\n"
                 "       ReqPack install <system> <local-path> [options]\n"
                 "       ReqPack install <system1>:<package> <system2>:<package> [options]\n"
+                "       ReqPack install <dir-path> [options]\n"
                 "\n"
                 "Install packages for one or more package managers.\n"
+                "When a directory path is given (e.g. '.', './myproject', '/abs/path'),\n"
+                "ReqPack reads a reqpack.lua manifest from that directory and installs\n"
+                "all packages declared in it.\n"
                 "\n"
                 "Arguments:\n"
                 "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
                 "  <package>               One or more package names to install\n"
                 "  <local-path>            Local path to install from (cannot mix with package names)\n"
                 "  <system>:<package>      Scoped package for a specific system\n"
+                "  <dir-path>              Directory containing a reqpack.lua manifest\n"
+                "\n"
+                "Manifest format (reqpack.lua):\n"
+                "  return {\n"
+                "    packages = {\n"
+                "      { system = \"dnf\",  name = \"curl\" },\n"
+                "      { system = \"npm\",  name = \"express\", version = \"4.18.0\" },\n"
+                "    }\n"
+                "  }\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
@@ -328,7 +428,10 @@ void Cli::print_command_help(ActionType action) {
                 "  ReqPack install apt curl git\n"
                 "  ReqPack install npm express lodash brew jq\n"
                 "  ReqPack install apt:curl npm:express\n"
-                "  ReqPack install brew ./my-formula.rb\n";
+                "  ReqPack install brew ./my-formula.rb\n"
+                "  ReqPack install .\n"
+                "  ReqPack install ./myproject\n"
+                "  ReqPack install /absolute/path/to/project\n";
             break;
         case ActionType::REMOVE:
             help =

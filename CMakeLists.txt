@@ -65,6 +65,7 @@ set(SOURCES
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/core/configuration.cpp
+    src/main/cpp/core/manifest_loader.cpp
     src/main/cpp/core/downloader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/registry_database.cpp
@@ -146,6 +147,7 @@ add_executable(core_unit_tests
     tests/unit/core/configuration/parse_tests.cpp
     tests/unit/core/configuration/cli_tests.cpp
     tests/unit/core/downloader/core_tests.cpp
+    tests/unit/core/manifest_loader/core_tests.cpp
     tests/unit/core/planner/core_tests.cpp
     tests/unit/core/registry_database/core_tests.cpp
     tests/unit/core/osv/core_tests.cpp
@@ -157,6 +159,7 @@ add_executable(core_unit_tests
     tests/unit/core/vulnerability_database/core_tests.cpp
     tests/unit/output/logger/format_tests.cpp
     src/main/cpp/core/configuration.cpp
+    src/main/cpp/core/manifest_loader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner_core.cpp
