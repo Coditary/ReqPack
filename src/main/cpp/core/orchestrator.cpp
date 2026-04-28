@@ -10,6 +10,7 @@ Orchestrator::Orchestrator(std::vector<Request> requests, const ReqPackConfig& c
 	this->registry  = new Registry(this->config);
 	this->planner   = new Planner(this->registry, this->registry->getDatabase(), this->config);
 	this->sbomExporter = new SbomExporter(this->registry, this->config);
+	this->snapshotExporter = new SnapshotExporter(this->config);
 	this->validator = new Validator(this->registry, this->config);
 	this->executor  = new Executer(this->registry, this->config);
 }
@@ -18,6 +19,7 @@ Orchestrator::~Orchestrator() {
 	delete this->registry;
 	delete this->planner;
 	delete this->sbomExporter;
+	delete this->snapshotExporter;
 	delete this->validator;
 	delete this->executor;
 }
@@ -49,6 +51,11 @@ void Orchestrator::run() {
 				Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "outdated");
 			}
 		}
+		return;
+	}
+
+	if (this->requests.front().action == ActionType::SNAPSHOT) {
+		(void)this->snapshotExporter->exportSnapshot(this->requests.front());
 		return;
 	}
 

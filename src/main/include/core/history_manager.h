@@ -49,11 +49,13 @@ class HistoryManager {
     void trimHistoryLog() const;
 
     // Installed-state helpers.
-    std::vector<InstalledEntry> loadInstalledState() const;
     bool saveInstalledState(const std::vector<InstalledEntry>& entries) const;
 
 public:
     explicit HistoryManager(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+
+    // Read the current installed-packages snapshot from installed.json.
+    std::vector<InstalledEntry> loadInstalledState() const;
 
     // Append one event to history.jsonl (only when history.enabled).
     bool appendEvent(const HistoryEntry& entry) const;

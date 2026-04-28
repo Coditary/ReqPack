@@ -77,6 +77,7 @@ set(SOURCES
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
     src/main/cpp/core/sbom_exporter.cpp
+    src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/core/validator.cpp
     src/main/cpp/core/validator_core.cpp
     src/main/cpp/core/version_compare.cpp
@@ -116,6 +117,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
     src/main/cpp/core/sbom_exporter.cpp
+    src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
     src/main/cpp/output/ansi_color.cpp
@@ -165,6 +167,8 @@ add_executable(core_unit_tests
     src/main/cpp/core/planner_core.cpp
     src/main/cpp/core/registry_database_core.cpp
     src/main/cpp/core/sbom_exporter.cpp
+    src/main/cpp/core/snapshot_exporter.cpp
+    src/main/cpp/core/history_manager.cpp
     src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/validator.cpp
     src/main/cpp/core/validator_core.cpp

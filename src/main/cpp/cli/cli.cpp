@@ -72,6 +72,7 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
     std::unordered_map<std::string, std::size_t> request_index_by_system;
     std::string sbomOutputFormat;
     std::string sbomOutputPath;
+    std::string snapshotOutputPath;
 
     if (argc < 2) {
         return requests;
@@ -259,6 +260,13 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
                 sbomOutputPath = requestArguments[++i];
                 continue;
             }
+            if (action == ActionType::SNAPSHOT && argument == "--output") {
+                if (i + 1 >= requestArguments.size()) {
+                    return {};
+                }
+                snapshotOutputPath = requestArguments[++i];
+                continue;
+            }
             global_flags.push_back(argument.substr(2));
             continue;
         }
@@ -324,6 +332,9 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
                 request.outputFormat = to_string(config.sbom.defaultFormat);
             }
         }
+        if (action == ActionType::SNAPSHOT) {
+            request.outputPath = snapshotOutputPath;
+        }
     }
 
     if (action == ActionType::SBOM && requests.empty()) {
@@ -337,6 +348,13 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
         } else {
             request.outputFormat = to_string(config.sbom.defaultFormat);
         }
+        requests.push_back(std::move(request));
+    }
+
+    if (action == ActionType::SNAPSHOT && requests.empty()) {
+        Request request;
+        request.action = action;
+        request.outputPath = snapshotOutputPath;
         requests.push_back(std::move(request));
     }
 
@@ -368,6 +386,7 @@ void Cli::print_help() {
         "  info                    Shows package info for a system\n"
         "  ensure [systems...]     Ensures plugin requirements are installed\n"
         "  sbom                    Exports planned graph as table or JSON\n"
+        "  snapshot                Snapshots installed packages to reqpack.lua\n"
         "\nConfig:\n"
         "  --config <path>         Loads config from a custom Lua file\n"
         "  --config=<path>         Same as above\n"
@@ -603,6 +622,24 @@ void Cli::print_command_help(ActionType action) {
                 "  ReqPack outdated dnf\n"
                 "  ReqPack outdated maven\n";
             break;
+        case ActionType::SNAPSHOT:
+            help =
+                "Usage: ReqPack snapshot [options]\n"
+                "\n"
+                "Snapshot all currently installed packages (tracked by ReqPack history)\n"
+                "into a reqpack.lua manifest. Use 'ReqPack install .' to restore on\n"
+                "another machine.\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --output <path>         Write manifest to file instead of stdout\n"
+                "  --force                 Overwrite existing file without prompting\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack snapshot\n"
+                "  ReqPack snapshot --output reqpack.lua\n"
+                "  ReqPack snapshot --output reqpack.lua --force\n";
+            break;
         default:
             print_help();
             return;
@@ -640,6 +677,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "outdated") {
         return ActionType::OUTDATED;
+    }
+    if (normalized_command == "snapshot") {
+        return ActionType::SNAPSHOT;
     }
 
     return ActionType::UNKNOWN;

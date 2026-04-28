@@ -5,6 +5,7 @@
 #include "core/registry.h"
 #include "core/planner.h"
 #include "core/sbom_exporter.h"
+#include "core/snapshot_exporter.h"
 #include "core/validator.h"
 #include "core/executor.h"
 
@@ -16,6 +17,7 @@ class Orchestrator {
 	Registry*  registry;
 	Planner*   planner;
 	SbomExporter* sbomExporter;
+	SnapshotExporter* snapshotExporter;
 	Validator* validator;
 	Executer*  executor;
 	ReqPackConfig config;
