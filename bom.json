@@ -1,0 +1,48 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "dnf:texlive-xurl",
+      "name": "texlive-xurl",
+      "purl": "pkg:rpm/texlive-xurl",
+      "properties": [
+        {"name": "reqpack:system", "value": "dnf"}
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "dnf:snyk",
+      "name": "snyk",
+      "purl": "pkg:rpm/snyk",
+      "properties": [
+        {"name": "reqpack:system", "value": "dnf"}
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "dnf:python",
+      "name": "python",
+      "purl": "pkg:rpm/python",
+      "properties": [
+        {"name": "reqpack:system", "value": "dnf"}
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "dnf:texlive-xurl",
+      "dependsOn": []
+    },
+    {
+      "ref": "dnf:snyk",
+      "dependsOn": []
+    },
+    {
+      "ref": "dnf:python",
+      "dependsOn": []
+    }
+  ]
+}

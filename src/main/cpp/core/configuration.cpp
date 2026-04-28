@@ -597,6 +597,18 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         config.sbom.defaultOutputPath = expand_user_path(config.sbom.defaultOutputPath).string();
     }
 
+    const sol::optional<sol::table> history = root["history"];
+    if (history.has_value()) {
+        assign_if_present(history.value(), "enabled",        config.history.enabled);
+        assign_if_present(history.value(), "trackInstalled", config.history.trackInstalled);
+        assign_if_present(history.value(), "historyPath",    config.history.historyPath);
+        assign_if_present(history.value(), "maxLines",       config.history.maxLines);
+        assign_if_present(history.value(), "maxSizeMb",      config.history.maxSizeMb);
+    }
+    if (!config.history.historyPath.empty()) {
+        config.history.historyPath = expand_user_path(config.history.historyPath).string();
+    }
+
     const sol::optional<sol::table> display = root["display"];
     if (display.has_value()) {
         assign_if_present(display.value(), "renderer", display_renderer_from_string, config.display.renderer);

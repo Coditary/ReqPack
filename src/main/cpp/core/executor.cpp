@@ -46,6 +46,10 @@ DisplayMode displayModeFromAction(ActionType action) {
 Executer::Executer(Registry* registry, const ReqPackConfig& config) : config(config) {
 	this->registry = registry;
 	this->transactionDatabase = std::make_unique<TransactionDatabase>(config);
+	// Create HistoryManager when at least one tracking feature is active.
+	if (config.history.enabled || config.history.trackInstalled) {
+		this->historyManager = std::make_unique<HistoryManager>(config);
+	}
 }
 
 Executer::~Executer() {}
@@ -153,6 +157,9 @@ void Executer::execute(Graph *graph) {
 	}
 
 	const std::vector<TransactionRecord> records = this->executeTaskGroups(taskGroups);
+
+	// ── History ───────────────────────────────────────────────────────────────
+	this->recordHistory(records);
 
 	// ── Display session end ───────────────────────────────────────────────────
 	if (sessionBegun) {
@@ -598,6 +605,34 @@ void Executer::deleteCommittedTransactions() const {
 
 	(void)this->transactionDatabase->deleteRun(this->activeRunId);
 	this->activeRunId.clear();
+}
+
+void Executer::recordHistory(const std::vector<TransactionRecord>& records) const {
+	if (this->historyManager == nullptr) {
+		return;
+	}
+
+	auto actionToString = [](ActionType action) -> std::string {
+		switch (action) {
+			case ActionType::INSTALL: return "install";
+			case ActionType::ENSURE:  return "ensure";
+			case ActionType::REMOVE:  return "remove";
+			case ActionType::UPDATE:  return "update";
+			default:                  return "unknown";
+		}
+	};
+
+	for (const TransactionRecord& record : records) {
+		HistoryEntry entry;
+		// timestamp filled in by HistoryManager::record()
+		entry.action         = actionToString(record.action);
+		entry.packageName    = record.packageName;
+		entry.packageVersion = record.packageVersion;
+		entry.system         = record.system;
+		entry.status         = record.status;
+		entry.errorMessage   = record.errorMessage;
+		(void)this->historyManager->record(entry);
+	}
 }
 
 std::vector<Package> Executer::orderedPackages(const Graph& graph) const {

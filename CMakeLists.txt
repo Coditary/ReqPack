@@ -83,6 +83,7 @@ set(SOURCES
     src/main/cpp/core/vulnerability_matcher.cpp
     src/main/cpp/core/vulnerability_sync_service.cpp
     src/main/cpp/core/executor.cpp
+    src/main/cpp/core/history_manager.cpp
     src/main/cpp/core/registry.cpp
 )
 
@@ -131,6 +132,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/history_manager.cpp
     src/main/cpp/core/version_compare.cpp
     src/main/cpp/core/vulnerability_database.cpp
     src/main/cpp/core/vulnerability_matcher.cpp

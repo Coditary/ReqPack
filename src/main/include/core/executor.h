@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/configuration.h"
+#include "core/history_manager.h"
 #include "core/registry.h"
 #include "core/transaction_database.h"
 #include "core/types.h"
@@ -34,6 +35,7 @@ class Executer {
 
 	Registry* registry;
 	std::unique_ptr<TransactionDatabase> transactionDatabase;
+	std::unique_ptr<HistoryManager> historyManager;
 	mutable std::string activeRunId;
 
 	void startTransactionDb() const;
@@ -53,6 +55,7 @@ class Executer {
 	void writeTransactionResults(const std::vector<TransactionRecord>& records) const;
 	void markCommittedTransactions() const;
 	void deleteCommittedTransactions() const;
+	void recordHistory(const std::vector<TransactionRecord>& records) const;
 	std::vector<Package> orderedPackages(const Graph& graph) const;
 	bool dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> buildSuccessRecords(const TaskGroup& taskGroup) const;

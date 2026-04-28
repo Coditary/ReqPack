@@ -151,6 +151,26 @@ struct SbomConfig {
     bool includeDependencyEdges{true};
 };
 
+struct HistoryConfig {
+    // Controls history.jsonl – the append-only event log.
+    bool enabled{true};
+
+    // Controls installed.json – the current-state snapshot.
+    // Independent of `enabled`: can be true even when `enabled` is false.
+    bool trackInstalled{true};
+
+    // Directory that holds history.jsonl and installed.json.
+    std::string historyPath{"~/.reqpack/history"};
+
+    // Maximum number of lines kept in history.jsonl.
+    // When exceeded, oldest entries are trimmed.  0 = unlimited.
+    std::size_t maxLines{0};
+
+    // Maximum file size of history.jsonl in megabytes.
+    // When exceeded, oldest entries are trimmed.  0.0 = unlimited.
+    double maxSizeMb{0.0};
+};
+
 struct DisplayColorScheme {
     std::string rule{};
     std::string header{"bold"};
@@ -183,6 +203,7 @@ struct ReqPackConfig {
     RegistryConfig registry{};
     InteractionConfig interaction{};
     SbomConfig sbom{};
+    HistoryConfig history{};
     DisplayConfig display{};
 
     std::vector<std::string> enabledScanners{};
