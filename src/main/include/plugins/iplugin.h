@@ -173,6 +173,8 @@ public:
     virtual bool update(const PluginCallContext& context, const std::vector<Package>& packages) = 0;
 
     virtual std::vector<PackageInfo> list(const PluginCallContext& context) = 0;
+
+    virtual std::vector<PackageInfo> outdated(const PluginCallContext& context) = 0;
     
     virtual std::vector<PackageInfo> search(const PluginCallContext& context, const std::string& prompt) = 0;
     

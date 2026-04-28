@@ -48,6 +48,10 @@ function plugin.list(context)
     return {}
 end
 
+function plugin.outdated(context)
+    return {}
+end
+
 function plugin.search(context, prompt)
     if prompt == "plain" then
         local result = context.exec.run("python3 -c \"print('plain fallback')\"")

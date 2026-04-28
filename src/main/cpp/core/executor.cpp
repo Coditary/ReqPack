@@ -36,6 +36,7 @@ DisplayMode displayModeFromAction(ActionType action) {
 		case ActionType::SEARCH:  return DisplayMode::SEARCH;
 		case ActionType::LIST:    return DisplayMode::LIST;
 		case ActionType::INFO:    return DisplayMode::INFO;
+		case ActionType::OUTDATED: return DisplayMode::LIST;
 		case ActionType::SBOM:    return DisplayMode::SBOM;
 		default:                  return DisplayMode::IDLE;
 	}
@@ -62,6 +63,16 @@ std::vector<PackageInfo> Executer::list(const Request& request) const {
 	TaskGroup taskGroup{.action = ActionType::LIST, .system = request.system};
 	taskGroup.flags = request.flags;
 	return plugin->list(this->buildPluginContext(plugin, taskGroup));
+}
+
+std::vector<PackageInfo> Executer::outdated(const Request& request) const {
+	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+		return {};
+	}
+	IPlugin* plugin = this->registry->getPlugin(request.system);
+	TaskGroup taskGroup{.action = ActionType::OUTDATED, .system = request.system};
+	taskGroup.flags = request.flags;
+	return plugin->outdated(this->buildPluginContext(plugin, taskGroup));
 }
 
 std::vector<PackageInfo> Executer::search(const Request& request) const {

@@ -67,6 +67,7 @@ public:
 
 	void execute(Graph *graph);
 	std::vector<PackageInfo> list(const Request& request) const;
+	std::vector<PackageInfo> outdated(const Request& request) const;
 	std::vector<PackageInfo> search(const Request& request) const;
 	PackageInfo info(const Request& request) const;
 };

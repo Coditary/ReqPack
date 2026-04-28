@@ -364,6 +364,7 @@ void Cli::print_help() {
         "  update                  Updates requested packages\n"
         "  search                  Searches for packages\n"
         "  list                    Lists packages for a system\n"
+        "  outdated                Shows outdated packages for a system\n"
         "  info                    Shows package info for a system\n"
         "  ensure [systems...]     Ensures plugin requirements are installed\n"
         "  sbom                    Exports planned graph as table or JSON\n"
@@ -585,6 +586,23 @@ void Cli::print_command_help(ActionType action) {
                 "  ReqPack sbom --format json\n"
                 "  ReqPack sbom --format cyclonedx-json --output sbom.json\n";
             break;
+        case ActionType::OUTDATED:
+            help =
+                "Usage: ReqPack outdated <system> [options]\n"
+                "\n"
+                "Show packages that have newer versions available.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                Package manager to check (e.g. dnf, maven)\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --non-interactive       Disable all prompts\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack outdated dnf\n"
+                "  ReqPack outdated maven\n";
+            break;
         default:
             print_help();
             return;
@@ -619,6 +637,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "sbom") {
         return ActionType::SBOM;
+    }
+    if (normalized_command == "outdated") {
+        return ActionType::OUTDATED;
     }
 
     return ActionType::UNKNOWN;

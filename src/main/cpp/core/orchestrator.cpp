@@ -43,6 +43,15 @@ void Orchestrator::run() {
 		return;
 	}
 
+	if (this->requests.front().action == ActionType::OUTDATED) {
+		for (const Request& request : this->requests) {
+			for (const PackageInfo& item : this->executor->outdated(request)) {
+				Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "outdated");
+			}
+		}
+		return;
+	}
+
 	if (this->requests.front().action == ActionType::SEARCH) {
 		for (const Request& request : this->requests) {
 			for (const PackageInfo& item : this->executor->search(request)) {

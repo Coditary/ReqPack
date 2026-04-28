@@ -62,6 +62,7 @@ public:
     bool update(const PluginCallContext& context, const std::vector<Package>& packages) override;
 
     std::vector<PackageInfo> list(const PluginCallContext& context) override;
+    std::vector<PackageInfo> outdated(const PluginCallContext& context) override;
     std::vector<PackageInfo> search(const PluginCallContext& context, const std::string& prompt) override;
     PackageInfo info(const PluginCallContext& context, const std::string& packageName) override;
 

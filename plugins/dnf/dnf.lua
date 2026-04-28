@@ -171,6 +171,34 @@ function plugin.list(context)
     return items
 end
 
+function plugin.outdated(context)
+    -- dnf check-update exits 100 when updates available, 0 when none, non-zero on error
+    local result = context.exec.run("dnf check-update --quiet 2>/dev/null; echo \"EXIT:$?\"")
+    local stdout = result.stdout or ""
+    local exit_code = tonumber(stdout:match("EXIT:(%d+)$")) or 1
+    if exit_code ~= 0 and exit_code ~= 100 then
+        context.log.warn("dnf check-update failed with exit code " .. tostring(exit_code))
+        return {}
+    end
+    local items = {}
+    for line in stdout:gmatch("[^\r\n]+") do
+        if line:match("^EXIT:") then break end
+        -- output format: "name.arch    new-version    repo"
+        local name, ver = line:match("^(%S+)%s+(%S+)%s")
+        if name and ver then
+            -- strip architecture suffix (e.g. ".x86_64", ".noarch")
+            local baseName = name:match("^(.-)%.[^.]+$") or name
+            table.insert(items, {
+                name = baseName,
+                version = ver,
+                description = "Update available"
+            })
+        end
+    end
+    context.events.outdated(items)
+    return items
+end
+
 function plugin.search(context, prompt)
     local result = context.exec.run("dnf search " .. shell_quote(prompt) .. " --quiet")
     local items = {}

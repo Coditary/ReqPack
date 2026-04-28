@@ -104,6 +104,36 @@ local function path_exists(path)
     return reqpack.exec.run("test -e " .. shell_quote(path)).success
 end
 
+local function url_encode(s)
+    return (tostring(s or ""):gsub("[^%w%-%.%_%~]", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end))
+end
+
+local function search_maven_central(context, prompt)
+    local normalized = trim(prompt)
+    if normalized == "" then return {} end
+    local url = "https://search.maven.org/solrsearch/select?q=" .. url_encode(normalized) ..
+                "&rows=20&wt=json"
+    local result = context.exec.run("curl -sf --max-time 15 " .. shell_quote(url))
+    if not result.success then return {} end
+    local items = {}
+    -- Parse JSON docs array: each entry looks like {"id":"g:a","g":"..","a":"..","latestVersion":".."}
+    for entry in (result.stdout or ""):gmatch("{[^{}]+}") do
+        local g   = entry:match('"g":"([^"]+)"')
+        local a   = entry:match('"a":"([^"]+)"')
+        local ver = entry:match('"latestVersion":"([^"]+)"')
+        if g and a and ver then
+            table.insert(items, {
+                name        = g .. ":" .. a,
+                version     = ver,
+                description = "Available on Maven Central"
+            })
+        end
+    end
+    return items
+end
+
 local function local_artifact_versions(groupId, artifactId)
     local path = maven_repo_dir() .. "/" .. groupId:gsub("%.", "/") .. "/" .. artifactId
     local result = reqpack.exec.run("ls -1 " .. shell_quote(path) .. " 2>/dev/null")
@@ -333,11 +363,15 @@ end
 function plugin.search(context, prompt)
     local items = search_local_artifacts(prompt)
     if #items == 0 then
+        context.log.info("no local artifacts matched, querying Maven Central...")
+        items = search_maven_central(context, prompt)
+    end
+    if #items == 0 then
         items = {
             {
-                name = prompt,
-                version = "unknown",
-                description = "No local Maven artifacts matched"
+                name        = prompt,
+                version     = "unknown",
+                description = "No Maven artifacts matched locally or on Maven Central"
             }
         }
     end
@@ -374,6 +408,35 @@ function plugin.info(context, name)
     }
     context.events.informed(item)
     return item
+end
+
+function plugin.outdated(context)
+    local installed = search_local_artifacts("")
+    local items = {}
+    for _, pkg in ipairs(installed) do
+        local parts = split(pkg.name, ":")
+        if #parts >= 2 then
+            local g = parts[1]
+            local a = parts[2]
+            local localVersion = pkg.version
+            local url = "https://search.maven.org/solrsearch/select?q=g:" ..
+                        url_encode(g) .. "+AND+a:" .. url_encode(a) ..
+                        "&rows=1&wt=json"
+            local result = context.exec.run("curl -sf --max-time 10 " .. shell_quote(url))
+            if result.success then
+                local latestVersion = (result.stdout or ""):match('"latestVersion":"([^"]+)"')
+                if latestVersion and latestVersion ~= localVersion then
+                    table.insert(items, {
+                        name        = pkg.name,
+                        version     = localVersion,
+                        description = "Newer version available: " .. latestVersion
+                    })
+                end
+            end
+        end
+    end
+    context.events.outdated(items)
+    return items
 end
 
 function plugin.init()

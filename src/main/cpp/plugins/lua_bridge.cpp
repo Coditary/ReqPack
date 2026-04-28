@@ -671,6 +671,24 @@ std::vector<PackageInfo> LuaBridge::list(const PluginCallContext& context) {
     return packageInfoListFromObject(result.get<sol::object>());
 }
 
+std::vector<PackageInfo> LuaBridge::outdated(const PluginCallContext& context) {
+    sol::protected_function func = m_pluginTable["outdated"];
+    if (!func.valid()) {
+        return {};
+    }
+
+    auto result = func(context);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (outdated): ") + err.what());
+        return {};
+    }
+    if (result.return_count() == 0) {
+        return {};
+    }
+    return packageInfoListFromObject(result.get<sol::object>());
+}
+
 std::vector<PackageInfo> LuaBridge::search(const PluginCallContext& context, const std::string& prompt) {
     sol::protected_function func = m_pluginTable["search"];
     if (!func.valid()) {
