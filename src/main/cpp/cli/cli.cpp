@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <iostream>
 #include <utility>
 
 #include "output/logger.h"
@@ -35,6 +36,31 @@ Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package M
     app->usage(USAGE);
 }
 
+bool Cli::handleHelp(int argc, char* argv[]) {
+    bool hasHelp = false;
+    ActionType helpAction = ActionType::UNKNOWN;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (is_help_flag(arg)) {
+            hasHelp = true;
+        } else if (helpAction == ActionType::UNKNOWN) {
+            const ActionType candidate = parse_action(arg);
+            if (candidate != ActionType::UNKNOWN) {
+                helpAction = candidate;
+            }
+        }
+    }
+
+    if (!hasHelp) {
+        return false;
+    }
+
+    pendingHelpAction_ = helpAction;
+    print_help();
+    return true;
+}
+
 std::vector<Request> Cli::parse(int argc, char* argv[]) {
     return this->parse(argc, argv, DEFAULT_REQPACK_CONFIG);
 }
@@ -47,6 +73,25 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
     std::string sbomOutputPath;
 
     if (argc < 2) {
+        return requests;
+    }
+
+    // Pre-scan for help flags BEFORE app->parse() to avoid CLI11 internal state issues
+    bool hasHelpFlag = false;
+    ActionType helpAction = ActionType::UNKNOWN;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (is_help_flag(arg)) {
+            hasHelpFlag = true;
+        } else if (helpAction == ActionType::UNKNOWN) {
+            const ActionType candidate = parse_action(arg);
+            if (candidate != ActionType::UNKNOWN) {
+                helpAction = candidate;
+            }
+        }
+    }
+    if (hasHelpFlag) {
+        pendingHelpAction_ = helpAction;
         return requests;
     }
 
@@ -216,8 +261,16 @@ ReqPackConfigOverrides Cli::parseConfigOverrides(int argc, char* argv[]) const {
 }
 
 void Cli::print_help() {
-    Logger::instance().stdout(
-        app->help() +
+    if (pendingHelpAction_ != ActionType::UNKNOWN) {
+        print_command_help(pendingHelpAction_);
+        return;
+    }
+    std::cout <<
+        PROGRAM_NAME + " - Unified Package Manager Interface\n"
+        "\n" +
+        USAGE + "\n"
+        "\nOptions:\n"
+        "  -h,--help               " + HELP_DESCRIPTION + "\n"
         "\nCommands:\n"
         "  install                 Installs requested packages\n"
         "  remove                  Removes requested packages\n"
@@ -235,10 +288,206 @@ void Cli::print_help() {
         "\nSBOM:\n"
         "  --format <name>         Uses table, json, or cyclonedx-json\n"
         "  --output <path>         Writes SBOM output to file\n"
-        "  --force                 Overwrites existing output file without prompting\n",
-        "cli",
-        "help"
-    );
+        "  --force                 Overwrites existing output file without prompting\n"
+        "\nRun 'ReqPack <command> -h' for command-specific help.\n";
+    std::cout.flush();
+}
+
+void Cli::print_command_help(ActionType action) {
+    std::string help;
+    switch (action) {
+        case ActionType::INSTALL:
+            help =
+                "Usage: ReqPack install <system> [<package>...] [options]\n"
+                "       ReqPack install <system> <local-path> [options]\n"
+                "       ReqPack install <system1>:<package> <system2>:<package> [options]\n"
+                "\n"
+                "Install packages for one or more package managers.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
+                "  <package>               One or more package names to install\n"
+                "  <local-path>            Local path to install from (cannot mix with package names)\n"
+                "  <system>:<package>      Scoped package for a specific system\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --dry-run               Show planned actions without executing them\n"
+                "  --snyk                  Run Snyk vulnerability scan before install\n"
+                "  --owasp                 Run OWASP/OSV vulnerability scan before install\n"
+                "  --prompt-on-unsafe      Prompt before installing vulnerable packages\n"
+                "  --abort-on-unsafe       Abort if vulnerable packages are found\n"
+                "  --severity-threshold    Minimum severity to flag (low/medium/high/critical)\n"
+                "  --score-threshold       Minimum CVSS score to flag (0.0-10.0)\n"
+                "  --fail-on-unresolved-version    Abort if version cannot be resolved\n"
+                "  --prompt-on-unresolved-version  Prompt if version cannot be resolved\n"
+                "  --stop-on-first-failure Stop after the first failing system\n"
+                "  --non-interactive       Disable all prompts (use defaults)\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack install apt curl git\n"
+                "  ReqPack install npm express lodash brew jq\n"
+                "  ReqPack install apt:curl npm:express\n"
+                "  ReqPack install brew ./my-formula.rb\n";
+            break;
+        case ActionType::REMOVE:
+            help =
+                "Usage: ReqPack remove <system> [<package>...] [options]\n"
+                "       ReqPack remove <system1>:<package> <system2>:<package> [options]\n"
+                "\n"
+                "Remove packages from one or more package managers.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
+                "  <package>               One or more package names to remove\n"
+                "  <system>:<package>      Scoped package for a specific system\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --dry-run               Show planned actions without executing them\n"
+                "  --stop-on-first-failure Stop after the first failing system\n"
+                "  --non-interactive       Disable all prompts (use defaults)\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack remove apt curl\n"
+                "  ReqPack remove npm express brew jq\n"
+                "  ReqPack remove apt:curl npm:lodash\n";
+            break;
+        case ActionType::UPDATE:
+            help =
+                "Usage: ReqPack update <system> [<package>...] [options]\n"
+                "       ReqPack update <system1>:<package> <system2>:<package> [options]\n"
+                "\n"
+                "Update packages for one or more package managers.\n"
+                "If no packages are specified, all packages for the system are updated.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
+                "  <package>               One or more package names to update (optional)\n"
+                "  <system>:<package>      Scoped package for a specific system\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --dry-run               Show planned actions without executing them\n"
+                "  --snyk                  Run Snyk vulnerability scan after update\n"
+                "  --owasp                 Run OWASP/OSV vulnerability scan after update\n"
+                "  --prompt-on-unsafe      Prompt before applying vulnerable updates\n"
+                "  --abort-on-unsafe       Abort if vulnerable packages are found\n"
+                "  --severity-threshold    Minimum severity to flag (low/medium/high/critical)\n"
+                "  --score-threshold       Minimum CVSS score to flag (0.0-10.0)\n"
+                "  --stop-on-first-failure Stop after the first failing system\n"
+                "  --non-interactive       Disable all prompts (use defaults)\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack update apt\n"
+                "  ReqPack update npm express brew\n"
+                "  ReqPack update apt:curl npm:express\n";
+            break;
+        case ActionType::SEARCH:
+            help =
+                "Usage: ReqPack search <system> <query> [options]\n"
+                "\n"
+                "Search for packages in a package manager.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                Package manager to search in (e.g. apt, brew, npm)\n"
+                "  <query>                 Search term or package name\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --non-interactive       Disable all prompts\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack search apt curl\n"
+                "  ReqPack search npm react\n"
+                "  ReqPack search brew \"json tool\"\n";
+            break;
+        case ActionType::LIST:
+            help =
+                "Usage: ReqPack list <system> [options]\n"
+                "\n"
+                "List installed packages for a package manager.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                Package manager to list packages for (e.g. apt, brew, npm)\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --non-interactive       Disable all prompts\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack list apt\n"
+                "  ReqPack list npm\n"
+                "  ReqPack list brew\n";
+            break;
+        case ActionType::INFO:
+            help =
+                "Usage: ReqPack info <system> <package> [options]\n"
+                "\n"
+                "Show detailed information about a package.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                Package manager to query (e.g. apt, brew, npm)\n"
+                "  <package>               Package name to get info for\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --non-interactive       Disable all prompts\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack info apt curl\n"
+                "  ReqPack info npm express\n"
+                "  ReqPack info brew jq\n";
+            break;
+        case ActionType::ENSURE:
+            help =
+                "Usage: ReqPack ensure [<system>...] [options]\n"
+                "\n"
+                "Ensure plugin requirements are installed for one or more systems.\n"
+                "If no systems are specified, all known systems are checked.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                One or more package managers to check (optional)\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --dry-run               Show planned actions without executing them\n"
+                "  --stop-on-first-failure Stop after the first failing system\n"
+                "  --non-interactive       Disable all prompts (use defaults)\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack ensure\n"
+                "  ReqPack ensure apt brew\n";
+            break;
+        case ActionType::SBOM:
+            help =
+                "Usage: ReqPack sbom [<system>...] [options]\n"
+                "\n"
+                "Export a Software Bill of Materials (SBOM) for installed packages.\n"
+                "If no systems are specified, all known systems are included.\n"
+                "\n"
+                "Arguments:\n"
+                "  <system>                One or more package managers to include (optional)\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --format <name>         Output format: table, json, cyclonedx-json (default: table)\n"
+                "  --output <path>         Write SBOM output to file instead of stdout\n"
+                "  --force                 Overwrite existing output file without prompting\n"
+                "  --non-interactive       Disable all prompts (use defaults)\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack sbom\n"
+                "  ReqPack sbom apt npm\n"
+                "  ReqPack sbom --format json\n"
+                "  ReqPack sbom --format cyclonedx-json --output sbom.json\n";
+            break;
+        default:
+            print_help();
+            return;
+    }
+    std::cout << help;
+    std::cout.flush();
 }
 
 ActionType Cli::parse_action(const std::string& command) {

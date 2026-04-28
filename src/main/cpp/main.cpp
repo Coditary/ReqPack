@@ -10,6 +10,15 @@
 #include <filesystem>
 
 int main(int argc, char* argv[]) {
+    // Fast path: handle -h/--help before any heavy initialisation.
+    // This avoids CLI11 internal-state issues and the async Logger worker hang.
+    {
+        Cli earlyCliCheck;
+        if (earlyCliCheck.handleHelp(argc, argv)) {
+            return 0;
+        }
+    }
+
     if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
         return 1;
     }
