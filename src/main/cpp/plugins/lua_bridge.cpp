@@ -355,7 +355,7 @@ void LuaBridge::register_context_types() {
         }),
         "events", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table events = m_lua.create_table();
-            const std::array<const char*, 7> names{"installed", "deleted", "updated", "listed", "searched", "informed", "outdated"};
+            const std::array<const char*, 8> names{"installed", "deleted", "updated", "listed", "searched", "informed", "outdated", "unavailable"};
             for (const char* name : names) {
                 events.set_function(name, [this, context, name](sol::object payload) {
                     context.emitEvent(name, serializeLuaPayload(payload));
@@ -555,7 +555,14 @@ std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& p
     return packages;
 }
 
+std::vector<PluginEventRecord> LuaBridge::takeRecentEvents() {
+    std::vector<PluginEventRecord> events = std::move(m_recentEvents);
+    m_recentEvents.clear();
+    return events;
+}
+
 bool LuaBridge::install(const PluginCallContext& context, const std::vector<Package>& packages) {
+    m_recentEvents.clear();
     sol::protected_function func = m_pluginTable["install"];
     if (!func.valid()) {
         return false;
@@ -571,6 +578,7 @@ bool LuaBridge::install(const PluginCallContext& context, const std::vector<Pack
 }
 
 bool LuaBridge::installLocal(const PluginCallContext& context, const std::string& path) {
+    m_recentEvents.clear();
     sol::protected_function func = m_pluginTable["installLocal"];
     if (!func.valid()) {
         return false;
@@ -586,6 +594,7 @@ bool LuaBridge::installLocal(const PluginCallContext& context, const std::string
 }
 
 bool LuaBridge::remove(const PluginCallContext& context, const std::vector<Package>& packages) {
+    m_recentEvents.clear();
     sol::protected_function func = m_pluginTable["remove"];
     if (!func.valid()) {
         return false;
@@ -601,6 +610,7 @@ bool LuaBridge::remove(const PluginCallContext& context, const std::vector<Packa
 }
 
 bool LuaBridge::update(const PluginCallContext& context, const std::vector<Package>& packages) {
+    m_recentEvents.clear();
     sol::protected_function func = m_pluginTable["update"];
     if (!func.valid()) {
         return false;
@@ -811,6 +821,7 @@ void LuaBridge::emitFailure(const std::string& pluginId, const std::string& mess
 }
 
 void LuaBridge::emitEvent(const std::string& pluginId, const std::string& eventName, const std::string& payload) {
+    m_recentEvents.push_back(PluginEventRecord{.name = eventName, .payload = payload});
     m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = pluginId, .scope = m_pluginId, .eventName = eventName, .payload = payload});
 }
 

@@ -21,6 +21,11 @@ local function command_succeeds(cmd)
     return result.success
 end
 
+local function command_stdout(cmd)
+    local result = reqpack.exec.run(cmd)
+    return trim(result.stdout or "")
+end
+
 local function command_exit_code(cmd)
     local result = reqpack.exec.run(cmd)
     return result.exitCode or 1
@@ -28,6 +33,43 @@ end
 
 local function package_installed(name)
     return command_succeeds("rpm -q --quiet " .. shell_quote(name) .. " >/dev/null 2>&1")
+end
+
+local function package_request_installed(pkg)
+    if pkg.version ~= nil and pkg.version ~= "" then
+        return package_installed(package_spec(pkg))
+    end
+
+    return command_succeeds("rpm -q --quiet --whatprovides " .. shell_quote(pkg.name) .. " >/dev/null 2>&1")
+end
+
+local function package_resolvable(pkg)
+    local spec = package_spec(pkg)
+    if command_stdout("dnf repoquery --quiet " .. shell_quote(spec) .. " 2>/dev/null") ~= "" then
+        return true
+    end
+
+    if pkg.version == nil or pkg.version == "" then
+        return command_stdout("dnf repoquery --quiet --whatprovides " .. shell_quote(pkg.name) .. " 2>/dev/null") ~= ""
+    end
+
+    return false
+end
+
+local function package_specs(packages)
+    local names = {}
+    for _, pkg in ipairs(packages or {}) do
+        table.insert(names, package_spec(pkg))
+    end
+    return names
+end
+
+local function shell_join(values)
+    local quoted = {}
+    for _, value in ipairs(values or {}) do
+        table.insert(quoted, shell_quote(value))
+    end
+    return table.concat(quoted, " ")
 end
 
 local function package_has_update(name)
@@ -62,9 +104,9 @@ function plugin.getMissingPackages(packages)
             table.insert(missing, pkg)
         else
             local action = pkg.action
-            local installed = package_installed(package_spec(pkg))
+            local installed = package_request_installed(pkg)
             if action == "remove" or action == 2 then
-                if package_installed(pkg.name) then
+                if installed then
                     table.insert(missing, pkg)
                 end
             elseif action == "update" or action == 3 then
@@ -72,7 +114,7 @@ function plugin.getMissingPackages(packages)
                     if not installed then
                         table.insert(missing, pkg)
                     end
-                elseif package_installed(pkg.name) and package_has_update(pkg.name) then
+                elseif installed and package_has_update(pkg.name) then
                     table.insert(missing, pkg)
                 end
             elseif not installed then
@@ -91,20 +133,42 @@ end
 function plugin.install(context, packages)
     if #packages == 0 then return true end
 
-    local names = {}
+    local installable_packages = {}
+    local unavailable_packages = {}
     for _, pkg in ipairs(packages) do
-        table.insert(names, package_spec(pkg))
+        if package_resolvable(pkg) then
+            table.insert(installable_packages, pkg)
+        else
+            table.insert(unavailable_packages, pkg)
+        end
     end
 
+    local installable_names = package_specs(installable_packages)
+    local unavailable_names = package_specs(unavailable_packages)
+
     context.tx.begin_step("install dnf packages")
-    context.log.info("installing batch: " .. table.concat(names, " "))
-    local result = context.exec.run("sudo dnf install -y " .. table.concat(names, " "))
-    if not result.success then
-        context.tx.failed("dnf install failed")
+    for _, name in ipairs(unavailable_names) do
+        context.events.unavailable(name)
+    end
+    if #unavailable_names > 0 then
+        context.log.warn("unavailable packages skipped from batch: " .. table.concat(unavailable_names, " "))
+    end
+
+    if #installable_names > 0 then
+        context.log.info("installing batch: " .. table.concat(installable_names, " "))
+        local result = context.exec.run("sudo dnf install -y " .. shell_join(installable_names))
+        if not result.success then
+            context.tx.failed("dnf install failed")
+            return false
+        end
+        context.events.installed(installable_names)
+    end
+
+    if #unavailable_names > 0 then
+        context.tx.failed("some dnf packages are unavailable")
         return false
     end
 
-    context.events.installed(names)
     context.tx.success()
     return true
 end
@@ -129,7 +193,7 @@ function plugin.remove(context, packages)
     for _, pkg in ipairs(packages) do table.insert(names, pkg.name) end
 
     context.tx.begin_step("remove dnf packages")
-    local result = context.exec.run("sudo dnf remove -y " .. table.concat(names, " "))
+    local result = context.exec.run("sudo dnf remove -y " .. shell_join(names))
     if not result.success then
         context.tx.failed("dnf remove failed")
         return false
@@ -143,9 +207,7 @@ end
 function plugin.update(context, packages)
     local cmd = "sudo dnf upgrade -y"
     if packages ~= nil and #packages > 0 then
-        local names = {}
-        for _, pkg in ipairs(packages) do table.insert(names, package_spec(pkg)) end
-        cmd = cmd .. " " .. table.concat(names, " ")
+        cmd = cmd .. " " .. shell_join(package_specs(packages))
     end
 
     context.tx.begin_step("update dnf packages")

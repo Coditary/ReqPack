@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <iterator>
+#include <queue>
+#include <set>
 
 namespace {
 
@@ -17,6 +19,13 @@ bool samePackage(const Package& left, const Package& right) {
 		left.version == right.version &&
 		left.sourcePath == right.sourcePath &&
 		left.localTarget == right.localTarget;
+}
+
+std::string packageRequestSpec(const Package& package) {
+	if (package.version.empty()) {
+		return package.name;
+	}
+	return package.name + "-" + package.version;
 }
 
 bool actionUsesDesiredStateFilter(const ActionType action) {
@@ -42,6 +51,58 @@ DisplayMode displayModeFromAction(ActionType action) {
 	}
 }
 
+// Returns true if 'target' is reachable from any vertex in 'sources' via directed edges.
+bool isReachableFromAny(const Graph& graph, const std::set<Graph::vertex_descriptor>& sources, Graph::vertex_descriptor target) {
+	if (sources.empty()) {
+		return false;
+	}
+	std::set<Graph::vertex_descriptor> visited;
+	std::queue<Graph::vertex_descriptor> bfsQueue;
+	for (const Graph::vertex_descriptor src : sources) {
+		if (visited.find(src) == visited.end()) {
+			visited.insert(src);
+			bfsQueue.push(src);
+		}
+	}
+	while (!bfsQueue.empty()) {
+		const Graph::vertex_descriptor v = bfsQueue.front();
+		bfsQueue.pop();
+		if (v == target) {
+			return true;
+		}
+		auto [edgeBegin, edgeEnd] = boost::out_edges(v, graph);
+		for (auto edgeIt = edgeBegin; edgeIt != edgeEnd; ++edgeIt) {
+			const Graph::vertex_descriptor next = boost::target(*edgeIt, graph);
+			if (visited.find(next) == visited.end()) {
+				visited.insert(next);
+				bfsQueue.push(next);
+			}
+		}
+	}
+	return false;
+}
+
+// Returns true if at least one package in 'packages' is transitively reachable from any failed vertex.
+// When true the caller knows the group depends on a failed predecessor.
+bool groupDependsOnFailure(const Graph& graph, const std::vector<Package>& packages, const std::set<Graph::vertex_descriptor>& failedVertices) {
+	if (failedVertices.empty()) {
+		return false;
+	}
+	auto [vBegin, vEnd] = boost::vertices(graph);
+	for (const Package& pkg : packages) {
+		for (auto vIt = vBegin; vIt != vEnd; ++vIt) {
+			const Package& vPkg = graph[*vIt];
+			if (vPkg.system == pkg.system && vPkg.name == pkg.name && vPkg.action == pkg.action) {
+				if (isReachableFromAny(graph, failedVertices, *vIt)) {
+					return true;
+				}
+				break;
+			}
+		}
+	}
+	return false;
+}
+
 }  // namespace
 
 Executer::Executer(Registry* registry, const ReqPackConfig& config) : config(config) {
@@ -54,6 +115,10 @@ Executer::Executer(Registry* registry, const ReqPackConfig& config) : config(con
 }
 
 Executer::~Executer() {}
+
+void Executer::setRequestedItemCount(int count) const {
+	this->requestedItemCount = std::max(0, count);
+}
 
 std::vector<PackageInfo> Executer::list(const Request& request) const {
 	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
@@ -136,7 +201,8 @@ void Executer::execute(Graph *graph) {
 		}
 		this->activeRunId.clear();
 	}
-	const std::vector<TaskGroup> plannedTaskGroups = this->filterExecutableTaskGroups(this->createTaskGroups(*graph));
+	const std::vector<TaskGroup> allTaskGroups = this->createTaskGroups(*graph);
+	const std::vector<TaskGroup> plannedTaskGroups = this->filterExecutableTaskGroups(allTaskGroups);
 	taskGroups = plannedTaskGroups;
 	if (this->config.execution.useTransactionDb && !taskGroups.empty()) {
 		this->activeRunId.clear();
@@ -167,7 +233,7 @@ void Executer::execute(Graph *graph) {
 		sessionBegun = true;
 	}
 
-	const std::vector<TransactionRecord> records = this->executeTaskGroups(taskGroups);
+	const std::vector<TransactionRecord> records = this->executeTaskGroups(taskGroups, graph);
 
 	// ── History ───────────────────────────────────────────────────────────────
 	this->recordHistory(records);
@@ -179,7 +245,14 @@ void Executer::execute(Graph *graph) {
 			if (r.status == "success") ++succeeded;
 			else ++failed;
 		}
-		Logger::instance().displaySessionEnd(failed == 0, succeeded, failed);
+		int planned = this->requestedItemCount;
+		if (planned == 0) {
+			for (const TaskGroup& tg : allTaskGroups) {
+				planned += static_cast<int>(tg.packages.size());
+			}
+		}
+		const int skipped = std::max(0, planned - succeeded - failed);
+		Logger::instance().displaySessionEnd(failed == 0, succeeded, skipped, failed);
 		Logger::instance().flush();
 	}
 
@@ -385,14 +458,27 @@ std::vector<Executer::TaskGroup> Executer::filterExecutableTaskGroups(const std:
 	return filteredTaskGroups;
 }
 
-std::vector<Executer::TransactionRecord> Executer::executeTaskGroups(const std::vector<TaskGroup>& taskGroups) const {
-	return this->executeRecordedTaskGroups(taskGroups, this->activeRunId);
+std::vector<Executer::TransactionRecord> Executer::executeTaskGroups(const std::vector<TaskGroup>& taskGroups, const Graph* graph) const {
+	return this->executeRecordedTaskGroups(taskGroups, this->activeRunId, graph);
 }
 
-std::vector<Executer::TransactionRecord> Executer::executeRecordedTaskGroups(const std::vector<TaskGroup>& taskGroups, const std::string& runId) const {
+std::vector<Executer::TransactionRecord> Executer::executeRecordedTaskGroups(const std::vector<TaskGroup>& taskGroups, const std::string& runId, const Graph* graph) const {
 	std::vector<TransactionRecord> records;
+	std::set<Graph::vertex_descriptor> failedVertices;
 
 	for (const TaskGroup& taskGroup : taskGroups) {
+		if (this->config.execution.stopOnFirstFailure && !failedVertices.empty()) {
+			// When the graph is available use dependency information: only skip
+			// groups whose packages are transitively reachable from a failed vertex.
+			// Without the graph fall back to the original behaviour (stop everything).
+			const bool shouldSkip = (graph == nullptr) || groupDependsOnFailure(*graph, taskGroup.packages, failedVertices);
+			if (shouldSkip) {
+				// Leave the packages in their initial "planned" state in the DB by
+				// not adding any records for this group.
+				continue;
+			}
+		}
+
 		const std::vector<TransactionRecord> groupRecords = this->executeTaskGroup(taskGroup, runId);
 		records.insert(records.end(), groupRecords.begin(), groupRecords.end());
 
@@ -402,7 +488,24 @@ std::vector<Executer::TransactionRecord> Executer::executeRecordedTaskGroups(con
 			});
 
 			if (hasFailure) {
-				break;
+				if (graph == nullptr) {
+					// No graph available (e.g. crash-recovery path): original behaviour.
+					break;
+				}
+				// Record which vertices failed so subsequent groups can be checked.
+				auto [vBegin, vEnd] = boost::vertices(*graph);
+				for (const TransactionRecord& record : groupRecords) {
+					if (record.status != "failed") {
+						continue;
+					}
+					for (auto vIt = vBegin; vIt != vEnd; ++vIt) {
+						const Package& vPkg = (*graph)[*vIt];
+						if (vPkg.system == record.system && vPkg.name == record.packageName && vPkg.action == record.action) {
+							failedVertices.insert(*vIt);
+							break;
+						}
+					}
+				}
 			}
 		}
 	}
@@ -507,57 +610,134 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 	std::vector<TransactionRecord> records;
 	records.reserve(taskGroup.packages.size());
 
-	for (const Package& package : taskGroup.packages) {
-		TaskGroup singlePackageTaskGroup{.action = taskGroup.action, .system = taskGroup.system, .flags = taskGroup.flags, .localPath = taskGroup.localPath, .usesLocalTarget = taskGroup.usesLocalTarget};
-		singlePackageTaskGroup.packages = {package};
-
-		const std::string itemId = taskGroup.system + ":" + package.name;
-		Logger::instance().displayItemBegin(itemId, package.name);
-
-		if (actionUsesDesiredStateFilter(taskGroup.action)) {
-			IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
-			if (plugin != nullptr && plugin->getMissingPackages({package}).empty()) {
-				Logger::instance().displayItemSuccess(itemId);
-				std::vector<TransactionRecord> successRecords = this->buildSuccessRecords(singlePackageTaskGroup);
-				for (TransactionRecord& record : successRecords) {
-					record.runId = runId;
-				}
-				records.insert(records.end(), successRecords.begin(), successRecords.end());
-				continue;
-			}
+	auto appendSuccessRecords = [&](const std::vector<Package>& packages) {
+		if (packages.empty()) {
+			return;
 		}
-
-		if (!this->transactionDatabase->updateItemStatus(runId, package, "running")) {
-			Logger::instance().displayItemFailure(itemId, "transaction update failed");
-			std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(singlePackageTaskGroup);
-			for (TransactionRecord& record : failureRecords) {
-				record.runId = runId;
-				record.errorMessage = "transaction update failed";
-			}
-			records.insert(records.end(), failureRecords.begin(), failureRecords.end());
-			break;
-		}
-
-		if (!this->dispatchTaskGroupToPlugin(singlePackageTaskGroup)) {
-			Logger::instance().displayItemFailure(itemId, "plugin action failed");
-			std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(singlePackageTaskGroup);
-			for (TransactionRecord& record : failureRecords) {
-				record.runId = runId;
-				record.errorMessage = "plugin action failed";
-			}
-			records.insert(records.end(), failureRecords.begin(), failureRecords.end());
-			if (this->config.execution.stopOnFirstFailure) {
-				break;
-			}
-			continue;
-		}
-
-		Logger::instance().displayItemSuccess(itemId);
-		std::vector<TransactionRecord> successRecords = this->buildSuccessRecords(singlePackageTaskGroup);
+		TaskGroup resultTaskGroup = taskGroup;
+		resultTaskGroup.packages = packages;
+		std::vector<TransactionRecord> successRecords = this->buildSuccessRecords(resultTaskGroup);
 		for (TransactionRecord& record : successRecords) {
 			record.runId = runId;
 		}
 		records.insert(records.end(), successRecords.begin(), successRecords.end());
+	};
+
+	auto appendFailureRecords = [&](const std::vector<Package>& packages, const std::string& errorMessage) {
+		if (packages.empty()) {
+			return;
+		}
+		TaskGroup resultTaskGroup = taskGroup;
+		resultTaskGroup.packages = packages;
+		std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(resultTaskGroup);
+		for (TransactionRecord& record : failureRecords) {
+			record.runId = runId;
+			record.errorMessage = errorMessage;
+		}
+		records.insert(records.end(), failureRecords.begin(), failureRecords.end());
+	};
+
+	auto appendFailureRecord = [&](const Package& package, const std::string& errorMessage) {
+		TaskGroup resultTaskGroup = taskGroup;
+		resultTaskGroup.packages = {package};
+		std::vector<TransactionRecord> failureRecords = this->buildFailureRecords(resultTaskGroup);
+		for (TransactionRecord& record : failureRecords) {
+			record.runId = runId;
+			record.errorMessage = errorMessage;
+		}
+		records.insert(records.end(), failureRecords.begin(), failureRecords.end());
+	};
+
+	auto displaySuccess = [&](const std::vector<Package>& packages) {
+		for (const Package& package : packages) {
+			Logger::instance().displayItemSuccess(taskGroup.system + ":" + package.name);
+		}
+	};
+
+	auto displayFailure = [&](const std::vector<Package>& packages, const std::string& reason) {
+		for (const Package& package : packages) {
+			Logger::instance().displayItemFailure(taskGroup.system + ":" + package.name, reason);
+		}
+	};
+
+	auto containsPackage = [](const std::vector<Package>& packages, const Package& candidate) {
+		return std::any_of(packages.begin(), packages.end(), [&](const Package& package) {
+			return samePackage(package, candidate);
+		});
+	};
+
+	for (const Package& package : taskGroup.packages) {
+		Logger::instance().displayItemBegin(taskGroup.system + ":" + package.name, package.name);
+	}
+
+	TaskGroup executableTaskGroup = taskGroup;
+	std::vector<Package> alreadySatisfiedPackages;
+	if (actionUsesDesiredStateFilter(taskGroup.action)) {
+		IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
+		if (plugin != nullptr) {
+			executableTaskGroup.packages = plugin->getMissingPackages(taskGroup.packages);
+			for (const Package& package : taskGroup.packages) {
+				if (!containsPackage(executableTaskGroup.packages, package)) {
+					alreadySatisfiedPackages.push_back(package);
+				}
+			}
+		}
+	}
+
+	displaySuccess(alreadySatisfiedPackages);
+	appendSuccessRecords(alreadySatisfiedPackages);
+
+	if (executableTaskGroup.packages.empty()) {
+		return records;
+	}
+
+	if (!this->transactionDatabase->updateItemsStatus(runId, executableTaskGroup.packages, "running")) {
+		displayFailure(executableTaskGroup.packages, "transaction update failed");
+		appendFailureRecords(executableTaskGroup.packages, "transaction update failed");
+		return records;
+	}
+
+	if (this->dispatchTaskGroupToPlugin(executableTaskGroup)) {
+		displaySuccess(executableTaskGroup.packages);
+		appendSuccessRecords(executableTaskGroup.packages);
+		return records;
+	}
+
+	std::set<std::string> unavailablePackages;
+	if (IPlugin* plugin = this->registry->getPlugin(taskGroup.system); plugin != nullptr) {
+		for (const PluginEventRecord& event : plugin->takeRecentEvents()) {
+			if (event.name == "unavailable" && !event.payload.empty()) {
+				unavailablePackages.insert(event.payload);
+			}
+		}
+	}
+
+	std::vector<Package> succeededPackages;
+	std::vector<Package> failedPackages = executableTaskGroup.packages;
+	if (actionUsesDesiredStateFilter(taskGroup.action)) {
+		IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
+		if (plugin != nullptr) {
+			const std::vector<Package> remainingMissingPackages = plugin->getMissingPackages(executableTaskGroup.packages);
+			succeededPackages.clear();
+			failedPackages.clear();
+			for (const Package& package : executableTaskGroup.packages) {
+				if (containsPackage(remainingMissingPackages, package)) {
+					failedPackages.push_back(package);
+				} else {
+					succeededPackages.push_back(package);
+				}
+			}
+		}
+	}
+
+	displaySuccess(succeededPackages);
+	appendSuccessRecords(succeededPackages);
+	for (const Package& package : failedPackages) {
+		const std::string errorMessage = unavailablePackages.find(packageRequestSpec(package)) != unavailablePackages.end()
+			? "package unavailable"
+			: "plugin action failed";
+		Logger::instance().displayItemFailure(taskGroup.system + ":" + package.name, errorMessage);
+		appendFailureRecord(package, errorMessage);
 	}
 
 	return records;
@@ -593,10 +773,13 @@ void Executer::markCommittedTransactions() const {
 	}
 
 	const std::vector<TransactionItemRecord> items = this->transactionDatabase->getRunItems(this->activeRunId);
-	const bool hasIncompleteItem = std::any_of(items.begin(), items.end(), [](const TransactionItemRecord& item) {
-		return item.status != "success" && item.status != "committed" && item.status != "failed";
+	// Commit only when every item reached a fully-successful terminal state.
+	// Any failed or still-incomplete item means the run must stay active as "failed"
+	// so callers can inspect it and recovery logic can distinguish it from a committed run.
+	const bool shouldCommit = std::all_of(items.begin(), items.end(), [](const TransactionItemRecord& item) {
+		return item.status == "success" || item.status == "committed";
 	});
-	if (hasIncompleteItem) {
+	if (!shouldCommit) {
 		(void)this->transactionDatabase->markRunState(this->activeRunId, "failed");
 		return;
 	}
@@ -647,16 +830,44 @@ void Executer::recordHistory(const std::vector<TransactionRecord>& records) cons
 }
 
 std::vector<Package> Executer::orderedPackages(const Graph& graph) const {
+	const auto numVertices = boost::num_vertices(graph);
+	if (numVertices == 0) {
+		return {};
+	}
+
 	std::vector<Graph::vertex_descriptor> order;
 	boost::topological_sort(graph, std::back_inserter(order));
 	std::reverse(order.begin(), order.end());
+
+	// Compute the topological level for each vertex (longest path from any root).
+	// Vertices at the same level have no dependency between them and can be freely
+	// reordered.  This lets createTaskGroups() batch same-system packages together.
+	std::vector<int> levels(numVertices, 0);
+	for (const Graph::vertex_descriptor v : order) {
+		auto [edgeBegin, edgeEnd] = boost::out_edges(v, graph);
+		for (auto edgeIt = edgeBegin; edgeIt != edgeEnd; ++edgeIt) {
+			const Graph::vertex_descriptor target = boost::target(*edgeIt, graph);
+			if (levels[target] <= levels[v]) {
+				levels[target] = levels[v] + 1;
+			}
+		}
+	}
+
+	// Within the same topological level sort by system name so that same-system
+	// packages become consecutive and createTaskGroups() merges them into a single
+	// TaskGroup (one plugin call instead of many).
+	std::stable_sort(order.begin(), order.end(), [&](const Graph::vertex_descriptor a, const Graph::vertex_descriptor b) {
+		if (levels[a] != levels[b]) {
+			return levels[a] < levels[b];
+		}
+		return graph[a].system < graph[b].system;
+	});
 
 	std::vector<Package> packages;
 	packages.reserve(order.size());
 	for (const Graph::vertex_descriptor vertex : order) {
 		packages.push_back(graph[vertex]);
 	}
-
 	return packages;
 }
 

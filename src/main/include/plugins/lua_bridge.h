@@ -26,6 +26,7 @@ private:
     sol::table m_pluginTable;
 	ReqPackConfig m_config;
 	std::vector<std::string> m_tempDirectories;
+	std::vector<PluginEventRecord> m_recentEvents;
 
 	PluginCallContext makeContext(const std::vector<std::string>& flags) const;
 	void register_context_types();
@@ -57,6 +58,7 @@ public:
 	std::vector<Package> getRequirements() override;
     std::vector<std::string> getCategories() override;
     std::vector<Package> getMissingPackages(const std::vector<Package>& packages) override;
+	std::vector<PluginEventRecord> takeRecentEvents() override;
 
     bool install(const PluginCallContext& context, const std::vector<Package>& packages) override;
     bool installLocal(const PluginCallContext& context, const std::string& path) override;

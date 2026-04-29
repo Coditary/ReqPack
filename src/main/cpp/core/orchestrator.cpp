@@ -58,6 +58,22 @@ Orchestrator::~Orchestrator() {
 	delete this->executor;
 }
 
+int Orchestrator::countRequestedItems() const {
+	int count = 0;
+	for (const Request& request : this->requests) {
+		if (request.action != ActionType::INSTALL && request.action != ActionType::ENSURE &&
+			request.action != ActionType::REMOVE && request.action != ActionType::UPDATE) {
+			continue;
+		}
+		if (request.usesLocalTarget) {
+			++count;
+			continue;
+		}
+		count += static_cast<int>(request.packages.size());
+	}
+	return count;
+}
+
 void Orchestrator::run() {
 	(void)this->registry->getDatabase()->ensureReady();
 	this->registry->scanDirectory(this->config.registry.pluginDirectory);
@@ -165,6 +181,7 @@ void Orchestrator::run() {
 		return;
 	}
 	graph = this->validator->validate(graph);
+	this->executor->setRequestedItemCount(this->countRequestedItems());
 	this->executor->execute(graph);
 	delete graph;
 

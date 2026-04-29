@@ -1,6 +1,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <system_error>
 
 #include <catch2/catch.hpp>
@@ -35,6 +36,16 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
     std::ofstream output(path, std::ios::binary);
     REQUIRE(output.is_open());
     output << content;
+}
+
+std::string read_file(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return {};
+    }
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
 }
 
 ReqPackConfig make_executor_test_config(const std::filesystem::path& root) {
@@ -131,24 +142,72 @@ function plugin.shutdown() return true end
 const char* TRANSACTION_PLUGIN = R"(
 plugin = {}
 
+local function shell_quote(value)
+  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function load_installed(dir)
+  local installed = {}
+  local path = dir .. "/installed.txt"
+  local result = reqpack.exec.run("test -f " .. shell_quote(path) .. " && cat " .. shell_quote(path))
+  if result.success and result.stdout ~= nil then
+    for line in string.gmatch(result.stdout, "[^\r\n]+") do
+      if line ~= "" then installed[line] = true end
+    end
+  end
+  return installed
+end
+
+local function save_installed(dir, installed)
+  local names = {}
+  for name, present in pairs(installed) do
+    if present then
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  local content = table.concat(names, "\n")
+  if #content > 0 then content = content .. "\n" end
+  reqpack.exec.run("printf '%s' " .. shell_quote(content) .. " > " .. shell_quote(dir .. "/installed.txt"))
+end
+
+local function record_call(dir, names)
+  local line = table.concat(names, ",")
+  reqpack.exec.run("printf '%s\\n' " .. shell_quote(line) .. " >> " .. shell_quote(dir .. "/calls.txt"))
+  reqpack.exec.run("printf '%s' " .. shell_quote(line) .. " > " .. shell_quote(dir .. "/last-install.txt"))
+end
+
 function plugin.getName() return "txn-plugin" end
 function plugin.getVersion() return "1.0.0" end
 function plugin.getRequirements() return {} end
 function plugin.getCategories() return { "pkg", "txn" } end
 function plugin.getMissingPackages(packages)
+  local installed = load_installed(REQPACK_PLUGIN_DIR)
   local missing = {}
   for _, package in ipairs(packages) do
-    if package.name ~= "already" then
+    if package.name ~= "already" and not installed[package.name] then
       missing[#missing + 1] = package
     end
   end
   return missing
 end
 function plugin.install(context, packages)
-  if packages[1] ~= nil then
-    context.exec.run("printf '%s' '" .. packages[1].name .. "' > '" .. context.plugin.dir .. "/last-install.txt'")
+  local names = {}
+  local installed = load_installed(context.plugin.dir)
+  local should_fail = false
+  for _, package in ipairs(packages) do
+    names[#names + 1] = package.name
+    if package.name == "fail" then
+      should_fail = true
+    else
+      installed[package.name] = true
+    end
   end
-  return packages[1] == nil or packages[1].name ~= "fail"
+  if #names > 0 then
+    record_call(context.plugin.dir, names)
+    save_installed(context.plugin.dir, installed)
+  end
+  return not should_fail
 end
 function plugin.installLocal(context, path) return true end
 function plugin.remove(context, packages) return true end
@@ -223,6 +282,43 @@ function plugin.getMissingPackages(packages)
 end
 function plugin.install(context, packages)
   return REQPACK_PLUGIN_ID ~= "stopper"
+end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)";
+
+const char* PARTIAL_BATCH_PLUGIN = R"(
+plugin = { installed = {} }
+
+function plugin.getName() return "partial-batch-plugin" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "batch" } end
+function plugin.getMissingPackages(packages)
+  local missing = {}
+  for _, package in ipairs(packages) do
+    if not plugin.installed[package.name] then
+      missing[#missing + 1] = package
+    end
+  end
+  return missing
+end
+function plugin.install(context, packages)
+  local should_fail = false
+  for _, package in ipairs(packages) do
+    if package.name == "missing" then
+      context.events.unavailable(package.name)
+      should_fail = true
+    else
+      plugin.installed[package.name] = true
+    end
+  end
+  return not should_fail
 end
 function plugin.installLocal(context, path) return true end
 function plugin.remove(context, packages) return true end
@@ -354,6 +450,8 @@ TEST_CASE("executor records transactional package results and leaves failed run 
     });
 
     executer.execute(&graph);
+
+    CHECK(read_file(tempDir.path() / "plugins" / "txn" / "calls.txt") == "ok,fail\n");
 
     TransactionDatabase database(config);
     REQUIRE(database.ensureReady());
@@ -537,4 +635,44 @@ TEST_CASE("executor stopOnFirstFailure prevents later task groups from running",
     REQUIRE(secondItem != nullptr);
     CHECK(secondItem->status == "planned");
     CHECK(secondItem->errorMessage.empty());
+}
+
+TEST_CASE("executor keeps partial batch success and marks unavailable packages precisely", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-partial-batch"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.execution.useTransactionDb = true;
+    config.execution.deleteCommittedTransactions = false;
+
+    add_plugin_script(tempDir.path() / "plugins", "batcher", PARTIAL_BATCH_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Graph graph = make_linear_graph({
+        Package{.action = ActionType::INSTALL, .system = "batcher", .name = "ok"},
+        Package{.action = ActionType::INSTALL, .system = "batcher", .name = "missing"},
+    });
+
+    executer.execute(&graph);
+
+    TransactionDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    const std::optional<TransactionRunRecord> activeRun = database.getActiveRun();
+    REQUIRE(activeRun.has_value());
+    CHECK(activeRun->state == "failed");
+
+    const std::vector<TransactionItemRecord> items = database.getRunItems(activeRun->id);
+    REQUIRE(items.size() == 2);
+
+    const TransactionItemRecord* okItem = find_item(items, "ok");
+    REQUIRE(okItem != nullptr);
+    CHECK(okItem->status == "success");
+    CHECK(okItem->errorMessage.empty());
+
+    const TransactionItemRecord* missingItem = find_item(items, "missing");
+    REQUIRE(missingItem != nullptr);
+    CHECK(missingItem->status == "failed");
+    CHECK(missingItem->errorMessage == "package unavailable");
 }

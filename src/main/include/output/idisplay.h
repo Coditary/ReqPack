@@ -68,8 +68,9 @@ public:
 	/// Called once when the command finishes (success or partial/full failure).
 	/// @param success    True when every item succeeded.
 	/// @param succeeded  Number of items that completed successfully.
+	/// @param skipped    Number of items that were skipped.
 	/// @param failed     Number of items that failed.
-	virtual void onSessionEnd(bool success, int succeeded, int failed) = 0;
+	virtual void onSessionEnd(bool success, int succeeded, int skipped, int failed) = 0;
 
 	// ── Per-item ──────────────────────────────────────────────────────────────
 

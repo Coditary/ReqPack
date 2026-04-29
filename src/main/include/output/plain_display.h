@@ -47,7 +47,7 @@ public:
 
 	void onSessionBegin(DisplayMode mode,
 	                    const std::vector<std::string>& items) override;
-	void onSessionEnd(bool success, int succeeded, int failed) override;
+	void onSessionEnd(bool success, int succeeded, int skipped, int failed) override;
 
 	void onItemBegin(const std::string& itemId,
 	                 const std::string& label) override;

@@ -152,13 +152,16 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 			// payload = "<succeeded>:<failed>"
 			bool ok        = (ctx.statusCode == 0);
 			int  succeeded = 0;
+			int  skipped   = 0;
 			int  failed    = 0;
-			auto sep = ctx.payload.find(':');
-			if (sep != std::string::npos) {
-				succeeded = std::stoi(ctx.payload.substr(0, sep));
-				failed    = std::stoi(ctx.payload.substr(sep + 1));
+			auto firstSep = ctx.payload.find(':');
+			auto secondSep = firstSep == std::string::npos ? std::string::npos : ctx.payload.find(':', firstSep + 1);
+			if (firstSep != std::string::npos && secondSep != std::string::npos) {
+				succeeded = std::stoi(ctx.payload.substr(0, firstSep));
+				skipped   = std::stoi(ctx.payload.substr(firstSep + 1, secondSep - firstSep - 1));
+				failed    = std::stoi(ctx.payload.substr(secondSep + 1));
 			}
-			d->onSessionEnd(ok, succeeded, failed);
+			d->onSessionEnd(ok, succeeded, skipped, failed);
 			break;
 		}
 
@@ -359,10 +362,11 @@ void Logger::displaySessionBegin(DisplayMode                    mode,
 	                         .displayMode = static_cast<int>(mode)});
 }
 
-void Logger::displaySessionEnd(bool success, int succeeded, int failed) {
+void Logger::displaySessionEnd(bool success, int succeeded, int skipped, int failed) {
 	this->emit(OutputAction::DISPLAY_SESSION_END,
 	           OutputContext{.statusCode = success ? 0 : 1,
 	                         .payload   = std::to_string(succeeded) + ":" +
+	                                      std::to_string(skipped) + ":" +
 	                                      std::to_string(failed)});
 }
 

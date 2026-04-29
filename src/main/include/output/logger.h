@@ -167,7 +167,7 @@ public:
 	                          const std::vector<std::string>& items);
 
 	/// Signal end of a top-level command.
-	void displaySessionEnd(bool success, int succeeded, int failed);
+	void displaySessionEnd(bool success, int succeeded, int skipped, int failed);
 
 	// ── Display item helpers ──────────────────────────────────────────────────
 

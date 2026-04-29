@@ -24,6 +24,11 @@ struct PluginSecurityMetadata {
 	VersionComparatorSpec versionComparator{};
 };
 
+struct PluginEventRecord {
+	std::string name;
+	std::string payload;
+};
+
 class IPluginRuntimeHost {
 public:
 	virtual ~IPluginRuntimeHost() = default;
@@ -167,6 +172,9 @@ public:
 	virtual std::vector<std::string> getCategories() = 0;
 	virtual std::vector<std::string> getFileExtensions() const { return {}; }
 	virtual std::vector<Package> getMissingPackages(const std::vector<Package>& packages) = 0;
+	virtual std::vector<PluginEventRecord> takeRecentEvents() {
+		return {};
+	}
 
     virtual bool install(const PluginCallContext& context, const std::vector<Package>& packages) = 0;
     virtual bool installLocal(const PluginCallContext& context, const std::string& path) = 0;

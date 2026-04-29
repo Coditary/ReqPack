@@ -28,5 +28,6 @@ public:
 	Orchestrator(std::vector<Request> requests, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
 	~Orchestrator();
 
+	int countRequestedItems() const;
 	void run();
 };

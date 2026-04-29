@@ -37,6 +37,7 @@ class Executer {
 	std::unique_ptr<TransactionDatabase> transactionDatabase;
 	std::unique_ptr<HistoryManager> historyManager;
 	mutable std::string activeRunId;
+	mutable int requestedItemCount{0};
 
 	void startTransactionDb() const;
 	bool canWriteToVirtualFileSystem() const;
@@ -46,8 +47,8 @@ class Executer {
 	std::vector<Package> collectPackages(const std::vector<TaskGroup>& taskGroups) const;
 	std::vector<TaskGroup> createTaskGroups(const Graph& graph) const;
 	std::vector<TaskGroup> filterExecutableTaskGroups(const std::vector<TaskGroup>& taskGroups) const;
-	std::vector<TransactionRecord> executeTaskGroups(const std::vector<TaskGroup>& taskGroups) const;
-	std::vector<TransactionRecord> executeRecordedTaskGroups(const std::vector<TaskGroup>& taskGroups, const std::string& runId) const;
+	std::vector<TransactionRecord> executeTaskGroups(const std::vector<TaskGroup>& taskGroups, const Graph* graph = nullptr) const;
+	std::vector<TransactionRecord> executeRecordedTaskGroups(const std::vector<TaskGroup>& taskGroups, const std::string& runId, const Graph* graph = nullptr) const;
 	std::vector<TransactionRecord> executeTransactionalTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const;
 	std::vector<TransactionRecord> executeTaskGroup(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> executeTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const;
@@ -65,6 +66,7 @@ public:
 	Executer(Registry* registry, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
 	~Executer();
 
+	void setRequestedItemCount(int count) const;
 	void execute(Graph *graph);
 	std::vector<PackageInfo> list(const Request& request) const;
 	std::vector<PackageInfo> outdated(const Request& request) const;

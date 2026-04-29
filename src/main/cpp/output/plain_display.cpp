@@ -133,14 +133,15 @@ void PlainDisplay::onSessionBegin(DisplayMode                    mode,
 	std::cout.flush();
 }
 
-void PlainDisplay::onSessionEnd(bool success, int succeeded, int failed) {
+void PlainDisplay::onSessionEnd(bool success, int succeeded, int skipped, int failed) {
 	std::lock_guard<std::mutex> lock(mtx);
 
 	printRule();
 	const std::string label = modeLabel(currentMode);
-	if (succeeded > 0 || failed > 0) {
+	if (succeeded > 0 || skipped > 0 || failed > 0) {
 		const std::string summary = label + " done:  " +
 		                            std::to_string(succeeded) + " ok,  " +
+		                            std::to_string(skipped) + " skipped,  " +
 		                            std::to_string(failed) + " failed";
 		if (failed > 0) {
 			std::cout << "  " << decorateSummaryFail(summary) << '\n';
