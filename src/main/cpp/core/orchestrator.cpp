@@ -62,7 +62,8 @@ int Orchestrator::countRequestedItems() const {
 	int count = 0;
 	for (const Request& request : this->requests) {
 		if (request.action != ActionType::INSTALL && request.action != ActionType::ENSURE &&
-			request.action != ActionType::REMOVE && request.action != ActionType::UPDATE) {
+			request.action != ActionType::REMOVE && request.action != ActionType::UPDATE &&
+			request.action != ActionType::LIST && request.action != ActionType::OUTDATED) {
 			continue;
 		}
 		if (request.usesLocalTarget) {

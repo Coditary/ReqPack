@@ -797,36 +797,44 @@ void LuaBridge::logError(const std::string& pluginId, const std::string& message
 }
 
 void LuaBridge::emitStatus(const std::string& pluginId, int statusCode) {
-    m_logger.emit(OutputAction::PLUGIN_STATUS, OutputContext{.source = pluginId, .scope = m_pluginId, .statusCode = statusCode});
+    const bool hasItemId = pluginId.find(':') != std::string::npos;
+    m_logger.emit(OutputAction::PLUGIN_STATUS, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .statusCode = statusCode});
 }
 
 void LuaBridge::emitProgress(const std::string& pluginId, int percent) {
-    m_logger.emit(OutputAction::PLUGIN_PROGRESS, OutputContext{.source = pluginId, .scope = m_pluginId, .progressPercent = std::clamp(percent, 0, 100)});
+    const bool hasItemId = pluginId.find(':') != std::string::npos;
+    m_logger.emit(OutputAction::PLUGIN_PROGRESS, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .progressPercent = std::clamp(percent, 0, 100)});
 }
 
 void LuaBridge::emitBeginStep(const std::string& pluginId, const std::string& label) {
-    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = pluginId, .scope = m_pluginId, .eventName = "begin_step", .payload = label});
+    const bool hasItemId = pluginId.find(':') != std::string::npos;
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = "begin_step", .payload = label});
 }
 
 void LuaBridge::emitCommit(const std::string& pluginId) {
-    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = pluginId, .scope = m_pluginId, .eventName = "commit", .payload = "committed"});
+    const bool hasItemId = pluginId.find(':') != std::string::npos;
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = "commit", .payload = "committed"});
 }
 
 void LuaBridge::emitSuccess(const std::string& pluginId) {
-    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = pluginId, .scope = m_pluginId, .eventName = "success", .payload = "ok"});
+    const bool hasItemId = pluginId.find(':') != std::string::npos;
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = "success", .payload = "ok"});
 }
 
 void LuaBridge::emitFailure(const std::string& pluginId, const std::string& message) {
-    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = pluginId, .scope = m_pluginId, .eventName = "failed", .payload = message});
+    const bool hasItemId = pluginId.find(':') != std::string::npos;
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = "failed", .payload = message});
 }
 
 void LuaBridge::emitEvent(const std::string& pluginId, const std::string& eventName, const std::string& payload) {
+    const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_recentEvents.push_back(PluginEventRecord{.name = eventName, .payload = payload});
-    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = pluginId, .scope = m_pluginId, .eventName = eventName, .payload = payload});
+    m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = eventName, .payload = payload});
 }
 
 void LuaBridge::registerArtifact(const std::string& pluginId, const std::string& payload) {
-    m_logger.emit(OutputAction::PLUGIN_ARTIFACT, OutputContext{.source = pluginId, .scope = m_pluginId, .payload = payload});
+    const bool hasItemId = pluginId.find(':') != std::string::npos;
+    m_logger.emit(OutputAction::PLUGIN_ARTIFACT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .payload = payload});
 }
 
 ExecResult LuaBridge::execute(const std::string& pluginId, const std::string& command) {

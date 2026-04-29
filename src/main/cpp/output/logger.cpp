@@ -39,6 +39,10 @@ std::string joinPipe(const std::vector<std::string>& v) {
 	return out;
 }
 
+bool should_render_plugin_callback_as_raw_stdout(const OutputContext& context) {
+	return context.source == "plugin" || context.source.find(':') == std::string::npos;
+}
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,7 +201,7 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 
 		// ── STDOUT → display message ──────────────────────────────────────────
 		case OutputAction::STDOUT:
-			d->onMessage(ctx.message, ctx.source);
+			d->onMessage(logger_format_message(ctx));
 			break;
 
 		default:
@@ -212,6 +216,11 @@ void Logger::processEvent(const OutputEvent& event) {
 		// ── Spdlog ───────────────────────────────────────────────────────────
 		case OutputAction::LOG:
 			logger->log(event.context.level, logger_render_output_event(event));
+			if (d != nullptr &&
+			    event.context.level < spdlog::level::warn &&
+			    (!event.context.source.empty() || !event.context.scope.empty())) {
+				d->onMessage(logger_format_message(event.context));
+			}
 			if (event.context.level == spdlog::level::critical) {
 				logger->dump_backtrace();
 			}
@@ -235,7 +244,7 @@ void Logger::processEvent(const OutputEvent& event) {
 		case OutputAction::PLUGIN_PROGRESS:
 		case OutputAction::PLUGIN_EVENT:
 		case OutputAction::PLUGIN_ARTIFACT:
-			if (d != nullptr) {
+			if (d != nullptr && !should_render_plugin_callback_as_raw_stdout(event.context)) {
 				routeToDisplay(event);
 			} else {
 				std::cout << logger_render_output_event(event) << '\n';

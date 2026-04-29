@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <sstream>
 #include <iostream>
 #include <utility>
 
@@ -42,6 +43,7 @@ Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package M
 }
 
 bool Cli::handleHelp(int argc, char* argv[]) {
+    pendingHelpAction_ = ActionType::UNKNOWN;
     bool hasHelp = false;
     ActionType helpAction = ActionType::UNKNOWN;
 
@@ -71,15 +73,9 @@ std::vector<Request> Cli::parse(int argc, char* argv[]) {
 }
 
 std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& config) {
-    std::vector<Request> requests;
-    std::vector<std::string> global_flags;
-    std::unordered_map<std::string, std::size_t> request_index_by_system;
-    std::string sbomOutputFormat;
-    std::string sbomOutputPath;
-    std::string snapshotOutputPath;
-
+    pendingHelpAction_ = ActionType::UNKNOWN;
     if (argc < 2) {
-        return requests;
+        return {};
     }
 
     // Pre-scan for help flags BEFORE app->parse() to avoid CLI11 internal state issues
@@ -98,17 +94,46 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
     }
     if (hasHelpFlag) {
         pendingHelpAction_ = helpAction;
-        return requests;
+        return {};
     }
 
     try {
         app->parse(argc, argv);
     } catch (const CLI::ParseError&) {
-        return requests;
+        return {};
     }
 
     const std::vector<std::string> arguments = app->remaining();
+    return parse(arguments, config);
+}
+
+std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const ReqPackConfig& config) {
+    pendingHelpAction_ = ActionType::UNKNOWN;
+    std::vector<Request> requests;
+    std::vector<std::string> global_flags;
+    std::unordered_map<std::string, std::size_t> request_index_by_system;
+    std::string sbomOutputFormat;
+    std::string sbomOutputPath;
+    std::string snapshotOutputPath;
+
     if (arguments.empty()) {
+        return requests;
+    }
+
+    bool hasHelpFlag = false;
+    ActionType helpAction = ActionType::UNKNOWN;
+    for (const std::string& argument : arguments) {
+        if (is_help_flag(argument)) {
+            hasHelpFlag = true;
+        } else if (helpAction == ActionType::UNKNOWN) {
+            const ActionType candidate = parse_action(argument);
+            if (candidate != ActionType::UNKNOWN) {
+                helpAction = candidate;
+            }
+        }
+    }
+    if (hasHelpFlag) {
+        pendingHelpAction_ = helpAction;
         return requests;
     }
 
@@ -132,6 +157,13 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
 
     if (requestArguments.empty()) {
         return requests;
+    }
+
+    if (!requestArguments.empty() && to_lower(requestArguments.front()) == to_lower(PROGRAM_NAME)) {
+        requestArguments.erase(requestArguments.begin());
+        if (requestArguments.empty()) {
+            return requests;
+        }
     }
 
     std::size_t actionIndex = requestArguments.size();
@@ -344,6 +376,12 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
         }
     }
 
+    if ((action == ActionType::LIST || action == ActionType::OUTDATED) && requests.empty()) {
+        for (const std::string& system : discover_primary_systems(config)) {
+            requests.push_back(Request{.action = action, .system = system});
+        }
+    }
+
     for (Request& request : requests) {
         request.flags = global_flags;
         if (action == ActionType::SBOM) {
@@ -411,6 +449,7 @@ void Cli::print_help() {
         "  ensure [systems...]     Ensures plugin requirements are installed\n"
         "  sbom                    Exports planned graph as table or JSON\n"
         "  snapshot                Snapshots installed packages to reqpack.lua\n"
+        "  serve                   Reads commands from stdin and keeps process running\n"
         "\nConfig:\n"
         "  --config <path>         Loads config from a custom Lua file\n"
         "  --config=<path>         Same as above\n"
@@ -433,11 +472,14 @@ void Cli::print_command_help(ActionType action) {
                 "       ReqPack install <system> <local-path> [options]\n"
                 "       ReqPack install <system1>:<package> <system2>:<package> [options]\n"
                 "       ReqPack install <dir-path> [options]\n"
+                "       ReqPack install --stdin [options]\n"
                 "\n"
                 "Install packages for one or more package managers.\n"
                 "When a directory path is given (e.g. '.', './myproject', '/abs/path'),\n"
                 "ReqPack reads a reqpack.lua manifest from that directory and installs\n"
                 "all packages declared in it.\n"
+                "When --stdin is given, ReqPack reads full install commands from stdin\n"
+                "until EOF, then executes them as one combined install batch.\n"
                 "\n"
                 "Arguments:\n"
                 "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
@@ -456,6 +498,7 @@ void Cli::print_command_help(ActionType action) {
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
+                "  --stdin                 Read install commands from stdin until EOF\n"
                 "  --dry-run               Show planned actions without executing them\n"
                 "  --snyk                  Run Snyk vulnerability scan before install\n"
                 "  --owasp                 Run OWASP/OSV vulnerability scan before install\n"
@@ -475,7 +518,8 @@ void Cli::print_command_help(ActionType action) {
                 "  ReqPack install brew ./my-formula.rb\n"
                 "  ReqPack install .\n"
                 "  ReqPack install ./myproject\n"
-                "  ReqPack install /absolute/path/to/project\n";
+                "  ReqPack install /absolute/path/to/project\n"
+                "  printf 'install dnf curl\\ninstall npm express\\n' | ReqPack install --stdin\n";
             break;
         case ActionType::REMOVE:
             help =
@@ -551,18 +595,20 @@ void Cli::print_command_help(ActionType action) {
             break;
         case ActionType::LIST:
             help =
-                "Usage: ReqPack list <system> [options]\n"
+                "Usage: ReqPack list [<system>] [options]\n"
                 "\n"
                 "List installed packages for a package manager.\n"
+                "If no system is specified, all known primary systems are queried.\n"
                 "\n"
                 "Arguments:\n"
-                "  <system>                Package manager to list packages for (e.g. apt, brew, npm)\n"
+                "  <system>                Package manager to list packages for (optional)\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
+                "  ReqPack list\n"
                 "  ReqPack list apt\n"
                 "  ReqPack list npm\n"
                 "  ReqPack list brew\n";
@@ -631,18 +677,20 @@ void Cli::print_command_help(ActionType action) {
             break;
         case ActionType::OUTDATED:
             help =
-                "Usage: ReqPack outdated <system> [options]\n"
+                "Usage: ReqPack outdated [<system>] [options]\n"
                 "\n"
                 "Show packages that have newer versions available.\n"
+                "If no system is specified, all known primary systems are queried.\n"
                 "\n"
                 "Arguments:\n"
-                "  <system>                Package manager to check (e.g. dnf, maven)\n"
+                "  <system>                Package manager to check (optional)\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
+                "  ReqPack outdated\n"
                 "  ReqPack outdated dnf\n"
                 "  ReqPack outdated maven\n";
             break;
@@ -663,6 +711,21 @@ void Cli::print_command_help(ActionType action) {
                 "  ReqPack snapshot\n"
                 "  ReqPack snapshot --output reqpack.lua\n"
                 "  ReqPack snapshot --output reqpack.lua --force\n";
+            break;
+        case ActionType::SERVE:
+            help =
+                "Usage: ReqPack serve --stdin [options]\n"
+                "\n"
+                "Read full ReqPack commands from stdin line by line and execute each\n"
+                "command immediately while process stays alive until EOF.\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --stdin                 Read commands from stdin\n"
+                "  --non-interactive       Disable all prompts\n"
+                "\n"
+                "Examples:\n"
+                "  printf 'install dnf curl\\nlist dnf\\n' | ReqPack serve --stdin\n";
             break;
         default:
             print_help();
@@ -704,6 +767,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "snapshot") {
         return ActionType::SNAPSHOT;
+    }
+    if (normalized_command == "serve") {
+        return ActionType::SERVE;
     }
 
     return ActionType::UNKNOWN;

@@ -91,6 +91,23 @@ std::string run_reqpack(const std::filesystem::path& workspace, const std::files
     return run_command_capture(command);
 }
 
+std::string run_reqpack_with_stdin(
+    const std::filesystem::path& workspace,
+    const std::filesystem::path& configPath,
+    const std::vector<std::string>& arguments,
+    const std::string& stdinContent
+) {
+    std::string command = "cd " + escape_shell_arg(workspace.string()) +
+        " && printf %s " + escape_shell_arg(stdinContent) +
+        " | " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " --config " + escape_shell_arg(configPath.string());
+    for (const std::string& argument : arguments) {
+        command += " " + escape_shell_arg(argument);
+    }
+    command += " 2>&1";
+    return run_command_capture(command);
+}
+
 const char* ORCHESTRATOR_PLUGIN = R"(
 plugin = {}
 
@@ -232,4 +249,78 @@ TEST_CASE("orchestrator sbom command exports planned graph without executing plu
 
     const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
     CHECK_FALSE(std::filesystem::exists(installMarker));
+}
+
+TEST_CASE("reqpack install stdin batches install commands until eof", "[integration][orchestrator][stdin]") {
+    TempDir tempDir{"reqpack-orchestrator-install-stdin"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    osvEcosystem = "demo-osv",
+    purlType = "generic",
+    versionComparatorProfile = "lexicographic",
+  }
+end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages)
+  local path = context.plugin.dir .. "/state/install.txt"
+  context.exec.run("mkdir -p '" .. context.plugin.dir .. "/state'")
+  for _, package in ipairs(packages) do
+    context.exec.run("printf '%s\\n' '" .. package.name .. "' >> '" .. path .. "'")
+  end
+  return true
+end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.outdated(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return {} end
+function plugin.shutdown() return true end
+)");
+
+    const std::string output = run_reqpack_with_stdin(
+        tempDir.path(),
+        configPath,
+        {"install", "--stdin"},
+        "install apply alpha\ninstall apply beta\n"
+    );
+    (void)output;
+
+    const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
+    REQUIRE(std::filesystem::exists(installMarker));
+    const std::string installed = read_file(installMarker);
+    CHECK(installed.find("alpha\n") != std::string::npos);
+    CHECK(installed.find("beta\n") != std::string::npos);
+}
+
+TEST_CASE("reqpack serve stdin executes commands line by line and continues after parse errors", "[integration][orchestrator][stdin]") {
+    TempDir tempDir{"reqpack-orchestrator-serve-stdin"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    const std::string output = run_reqpack_with_stdin(
+        tempDir.path(),
+        configPath,
+        {"serve", "--stdin"},
+        "install apply alpha\ninstall \"broken\nlist apply\n"
+    );
+
+    const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
+    REQUIRE(std::filesystem::exists(installMarker));
+    CHECK(read_file(installMarker) == "alpha");
+    CHECK(output.find("stdin line 2: invalid command syntax") != std::string::npos);
+    CHECK(output.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
 }

@@ -4,7 +4,9 @@
 #include <string>
 #include <vector>
 
+#include "cli/cli.h"
 #include "core/configuration.h"
+#include "test_helpers.h"
 
 namespace {
 
@@ -217,4 +219,36 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
     CHECK(overrides.sbomDefaultFormat.value() == SbomOutputFormat::CYCLONEDX_JSON);
     REQUIRE(overrides.reportFormat.has_value());
     CHECK(overrides.reportFormat.value() == ReportFormat::JSON);
+}
+
+TEST_CASE("cli parses token vectors and defaults list and outdated to all systems", "[unit][cli][parse]") {
+    Cli cli;
+    ReqPackConfig config = DEFAULT_REQPACK_CONFIG;
+    config.registry.pluginDirectory = (repo_root() / "plugins").string();
+
+    SECTION("token vector install parse") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "dnf", "curl", "git"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::INSTALL);
+        CHECK(requests.front().system == "dnf");
+        CHECK(requests.front().packages == std::vector<std::string>{"curl", "git"});
+    }
+
+    SECTION("list without system targets all known systems") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"list"}, config);
+        REQUIRE_FALSE(requests.empty());
+        for (const Request& request : requests) {
+            CHECK(request.action == ActionType::LIST);
+            CHECK_FALSE(request.system.empty());
+        }
+    }
+
+    SECTION("outdated without system targets all known systems") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"outdated"}, config);
+        REQUIRE_FALSE(requests.empty());
+        for (const Request& request : requests) {
+            CHECK(request.action == ActionType::OUTDATED);
+            CHECK_FALSE(request.system.empty());
+        }
+    }
 }

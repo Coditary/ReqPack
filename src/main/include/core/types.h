@@ -15,7 +15,8 @@ enum class ActionType {
 	ENSURE,
 	SBOM,
 	OUTDATED,
-	SNAPSHOT
+	SNAPSHOT,
+	SERVE
 };
 
 struct Request {

@@ -26,9 +26,11 @@ public:
 
     std::vector<Request> parse(int argc, char* argv[]);
     std::vector<Request> parse(int argc, char* argv[], const ReqPackConfig& config);
+    std::vector<Request> parse(const std::vector<std::string>& arguments, const ReqPackConfig& config);
     ReqPackConfigOverrides parseConfigOverrides(int argc, char* argv[]) const;
 
     void print_help();
+    void print_command_help(ActionType action);
 
 private:
     std::unique_ptr<CLI::App> app;
@@ -43,6 +45,4 @@ private:
     );
     static std::set<std::string> discover_primary_systems(const ReqPackConfig& config);
     static std::set<std::string> discover_systems(const ReqPackConfig& config);
-
-    void print_command_help(ActionType action);
 };

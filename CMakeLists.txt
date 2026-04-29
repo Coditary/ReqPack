@@ -162,10 +162,12 @@ add_executable(core_unit_tests
     tests/unit/core/vulnerability_database/core_tests.cpp
     tests/unit/output/logger/format_tests.cpp
     src/main/cpp/core/configuration.cpp
+    src/main/cpp/cli/cli.cpp
     src/main/cpp/core/manifest_loader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
     src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/snapshot_exporter.cpp
@@ -177,6 +179,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/vulnerability_database.cpp
     src/main/cpp/core/vulnerability_matcher.cpp
     src/main/cpp/core/vulnerability_sync_service.cpp
+    src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
 )
 
@@ -241,9 +244,12 @@ target_link_libraries(exec_rules_integration_tests PRIVATE
 
 target_link_libraries(core_unit_tests PRIVATE
     Catch2::Catch2
+    CLI11::CLI11
     CURL::libcurl
     lmdb
+    util
     ${LUA_LIBRARIES}
+    Boost::boost
     spdlog::spdlog
     fmt::fmt
 )
