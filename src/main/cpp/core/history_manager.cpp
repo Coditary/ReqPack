@@ -1,18 +1,27 @@
 #include "core/history_manager.h"
 
+#include <lmdb.h>
+
 #include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <optional>
 #include <sstream>
+#include <string_view>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace {
+
+constexpr unsigned int INSTALLED_STATE_MAX_DATABASES = 1;
+constexpr std::size_t INSTALLED_STATE_MAP_SIZE = 8 * 1024 * 1024;
+constexpr std::string_view INSTALLED_STATE_KEY_PREFIX = "pkg:";
+constexpr std::string_view INSTALLED_STATE_INITIALIZED_KEY = "meta:initialized";
 
 std::string utc_timestamp_now() {
     const auto now  = std::chrono::system_clock::now();
@@ -43,6 +52,41 @@ std::string escape_json(const std::string& s) {
 
 std::string jstr(const std::string& key, const std::string& value) {
     return "\"" + escape_json(key) + "\":\"" + escape_json(value) + "\"";
+}
+
+std::string escape_field(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char c : value) {
+        if (c == '\\' || c == '\n') {
+            escaped.push_back('\\');
+            escaped.push_back(c == '\n' ? 'n' : c);
+            continue;
+        }
+        escaped.push_back(c);
+    }
+    return escaped;
+}
+
+std::string unescape_field(const std::string& value) {
+    std::string unescaped;
+    unescaped.reserve(value.size());
+
+    bool escaped = false;
+    for (char c : value) {
+        if (!escaped && c == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (escaped) {
+            unescaped.push_back(c == 'n' ? '\n' : c);
+            escaped = false;
+            continue;
+        }
+        unescaped.push_back(c);
+    }
+
+    return unescaped;
 }
 
 // Extract the value of a JSON string field from a flat (single-line) JSON object.
@@ -107,6 +151,345 @@ bool write_all_lines(const std::filesystem::path& path, const std::vector<std::s
     return file.good();
 }
 
+bool starts_with(const std::string& value, std::string_view prefix) {
+    return value.rfind(prefix, 0) == 0;
+}
+
+std::vector<InstalledEntry> read_legacy_installed_state(const std::filesystem::path& path) {
+    std::vector<InstalledEntry> entries;
+    if (!std::filesystem::exists(path)) {
+        return entries;
+    }
+
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        return entries;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.find("\"name\"") == std::string::npos) {
+            continue;
+        }
+        InstalledEntry entry;
+        entry.name        = extract_json_string(line, "name");
+        entry.version     = extract_json_string(line, "version");
+        entry.system      = extract_json_string(line, "manager");
+        entry.installedAt = extract_json_string(line, "installedAt");
+        if (!entry.name.empty() && !entry.system.empty()) {
+            entries.push_back(std::move(entry));
+        }
+    }
+    return entries;
+}
+
+std::string serialize_installed_entry(const InstalledEntry& entry) {
+    std::ostringstream stream;
+    stream << "name=" << escape_field(entry.name) << '\n';
+    stream << "version=" << escape_field(entry.version) << '\n';
+    stream << "system=" << escape_field(entry.system) << '\n';
+    stream << "installedAt=" << escape_field(entry.installedAt);
+    return stream.str();
+}
+
+std::optional<InstalledEntry> deserialize_installed_entry(const std::string& payload) {
+    InstalledEntry entry;
+    std::istringstream stream(payload);
+    std::string line;
+    while (std::getline(stream, line)) {
+        const std::size_t equals = line.find('=');
+        if (equals == std::string::npos) {
+            continue;
+        }
+
+        const std::string key = line.substr(0, equals);
+        const std::string value = unescape_field(line.substr(equals + 1));
+        if (key == "name") {
+            entry.name = value;
+        } else if (key == "version") {
+            entry.version = value;
+        } else if (key == "system") {
+            entry.system = value;
+        } else if (key == "installedAt") {
+            entry.installedAt = value;
+        }
+    }
+
+    if (entry.name.empty() || entry.system.empty()) {
+        return std::nullopt;
+    }
+    return entry;
+}
+
+std::string installed_state_key(const std::string& system, const std::string& name) {
+    return std::string(INSTALLED_STATE_KEY_PREFIX) + escape_field(system) + '\n' + escape_field(name);
+}
+
+struct InstalledStateEnvironment {
+    MDB_env* env{nullptr};
+    MDB_dbi dbi{0};
+    bool dbiOpen{false};
+
+    InstalledStateEnvironment() = default;
+    InstalledStateEnvironment(const InstalledStateEnvironment&) = delete;
+    InstalledStateEnvironment& operator=(const InstalledStateEnvironment&) = delete;
+
+    InstalledStateEnvironment(InstalledStateEnvironment&& other) noexcept
+        : env(other.env), dbi(other.dbi), dbiOpen(other.dbiOpen) {
+        other.env = nullptr;
+        other.dbi = 0;
+        other.dbiOpen = false;
+    }
+
+    InstalledStateEnvironment& operator=(InstalledStateEnvironment&& other) noexcept {
+        if (this != &other) {
+            close();
+            env = other.env;
+            dbi = other.dbi;
+            dbiOpen = other.dbiOpen;
+            other.env = nullptr;
+            other.dbi = 0;
+            other.dbiOpen = false;
+        }
+        return *this;
+    }
+
+    ~InstalledStateEnvironment() {
+        close();
+    }
+
+    explicit operator bool() const {
+        return env != nullptr && dbiOpen;
+    }
+
+    void close() {
+        if (env != nullptr) {
+            if (dbiOpen) {
+                mdb_dbi_close(env, dbi);
+            }
+            mdb_env_close(env);
+            env = nullptr;
+            dbi = 0;
+            dbiOpen = false;
+        }
+    }
+};
+
+InstalledStateEnvironment open_installed_state_environment(
+    const std::filesystem::path& dbDirectory,
+    bool createIfMissing
+) {
+    InstalledStateEnvironment environment;
+    if (!createIfMissing && !std::filesystem::exists(dbDirectory)) {
+        return environment;
+    }
+
+    if (createIfMissing) {
+        std::error_code directoryError;
+        std::filesystem::create_directories(dbDirectory, directoryError);
+        if (directoryError) {
+            return environment;
+        }
+    }
+
+    if (mdb_env_create(&environment.env) != MDB_SUCCESS) {
+        environment.env = nullptr;
+        return environment;
+    }
+
+    mdb_env_set_maxdbs(environment.env, INSTALLED_STATE_MAX_DATABASES);
+    mdb_env_set_mapsize(environment.env, INSTALLED_STATE_MAP_SIZE);
+    if (mdb_env_open(environment.env, dbDirectory.string().c_str(), 0, 0664) != MDB_SUCCESS) {
+        environment.close();
+        return environment;
+    }
+
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(environment.env, nullptr, 0, &transaction) != MDB_SUCCESS) {
+        environment.close();
+        return environment;
+    }
+
+    if (mdb_dbi_open(transaction, nullptr, MDB_CREATE, &environment.dbi) != MDB_SUCCESS) {
+        mdb_txn_abort(transaction);
+        environment.close();
+        return environment;
+    }
+    environment.dbiOpen = true;
+
+    if (mdb_txn_commit(transaction) != MDB_SUCCESS) {
+        environment.close();
+        return environment;
+    }
+
+    return environment;
+}
+
+std::optional<std::string> read_value(MDB_txn* transaction, MDB_dbi dbi, const std::string& key) {
+    MDB_val keyValue{key.size(), const_cast<char*>(key.data())};
+    MDB_val value;
+    if (mdb_get(transaction, dbi, &keyValue, &value) != MDB_SUCCESS) {
+        return std::nullopt;
+    }
+    return std::string(static_cast<const char*>(value.mv_data), value.mv_size);
+}
+
+bool put_value(MDB_txn* transaction, MDB_dbi dbi, const std::string& key, const std::string& value) {
+    MDB_val keyValue{key.size(), const_cast<char*>(key.data())};
+    MDB_val dataValue{value.size(), const_cast<char*>(value.data())};
+    return mdb_put(transaction, dbi, &keyValue, &dataValue, 0) == MDB_SUCCESS;
+}
+
+bool delete_value(MDB_txn* transaction, MDB_dbi dbi, const std::string& key) {
+    MDB_val keyValue{key.size(), const_cast<char*>(key.data())};
+    const int result = mdb_del(transaction, dbi, &keyValue, nullptr);
+    return result == MDB_SUCCESS || result == MDB_NOTFOUND;
+}
+
+bool ensure_legacy_installed_state_imported(
+    const InstalledStateEnvironment& environment,
+    const std::filesystem::path& legacyPath
+) {
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(environment.env, nullptr, 0, &transaction) != MDB_SUCCESS) {
+        return false;
+    }
+
+    if (read_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY)).has_value()) {
+        mdb_txn_abort(transaction);
+        return true;
+    }
+
+    if (!std::filesystem::exists(legacyPath)) {
+        mdb_txn_abort(transaction);
+        return true;
+    }
+
+    const std::vector<InstalledEntry> legacyEntries = read_legacy_installed_state(legacyPath);
+    for (const InstalledEntry& entry : legacyEntries) {
+        if (!put_value(transaction, environment.dbi, installed_state_key(entry.system, entry.name), serialize_installed_entry(entry))) {
+            mdb_txn_abort(transaction);
+            return false;
+        }
+    }
+
+    if (!put_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY), "1")) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
+    return mdb_txn_commit(transaction) == MDB_SUCCESS;
+}
+
+std::vector<InstalledEntry> read_installed_entries(const InstalledStateEnvironment& environment) {
+    std::vector<InstalledEntry> entries;
+
+    MDB_txn* transaction = nullptr;
+    MDB_cursor* cursor = nullptr;
+    if (mdb_txn_begin(environment.env, nullptr, MDB_RDONLY, &transaction) != MDB_SUCCESS) {
+        return entries;
+    }
+
+    if (mdb_cursor_open(transaction, environment.dbi, &cursor) != MDB_SUCCESS) {
+        mdb_txn_abort(transaction);
+        return entries;
+    }
+
+    MDB_val key;
+    MDB_val value;
+    int result = mdb_cursor_get(cursor, &key, &value, MDB_FIRST);
+    while (result == MDB_SUCCESS) {
+        const std::string keyString(static_cast<const char*>(key.mv_data), key.mv_size);
+        if (starts_with(keyString, INSTALLED_STATE_KEY_PREFIX)) {
+            const std::string payload(static_cast<const char*>(value.mv_data), value.mv_size);
+            if (const std::optional<InstalledEntry> entry = deserialize_installed_entry(payload)) {
+                entries.push_back(entry.value());
+            }
+        }
+
+        result = mdb_cursor_get(cursor, &key, &value, MDB_NEXT);
+    }
+
+    mdb_cursor_close(cursor);
+    mdb_txn_abort(transaction);
+    return entries;
+}
+
+std::vector<InstalledEntry> load_installed_state_database(
+    const std::filesystem::path& dbDirectory,
+    const std::filesystem::path& legacyPath
+) {
+    const bool shouldOpenStore = std::filesystem::exists(dbDirectory) || std::filesystem::exists(legacyPath);
+    if (!shouldOpenStore) {
+        return {};
+    }
+
+    InstalledStateEnvironment environment = open_installed_state_environment(dbDirectory, true);
+    if (!environment) {
+        return {};
+    }
+    if (!ensure_legacy_installed_state_imported(environment, legacyPath)) {
+        return {};
+    }
+
+    return read_installed_entries(environment);
+}
+
+bool upsert_installed_state_database(
+    const std::filesystem::path& dbDirectory,
+    const std::filesystem::path& legacyPath,
+    const InstalledEntry& entry
+) {
+    InstalledStateEnvironment environment = open_installed_state_environment(dbDirectory, true);
+    if (!environment) {
+        return false;
+    }
+    if (!ensure_legacy_installed_state_imported(environment, legacyPath)) {
+        return false;
+    }
+
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(environment.env, nullptr, 0, &transaction) != MDB_SUCCESS) {
+        return false;
+    }
+
+    if (!put_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY), "1") ||
+        !put_value(transaction, environment.dbi, installed_state_key(entry.system, entry.name), serialize_installed_entry(entry))) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
+    return mdb_txn_commit(transaction) == MDB_SUCCESS;
+}
+
+bool remove_installed_state_database(
+    const std::filesystem::path& dbDirectory,
+    const std::filesystem::path& legacyPath,
+    const std::string& system,
+    const std::string& name
+) {
+    InstalledStateEnvironment environment = open_installed_state_environment(dbDirectory, true);
+    if (!environment) {
+        return false;
+    }
+    if (!ensure_legacy_installed_state_imported(environment, legacyPath)) {
+        return false;
+    }
+
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(environment.env, nullptr, 0, &transaction) != MDB_SUCCESS) {
+        return false;
+    }
+
+    if (!put_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY), "1") ||
+        !delete_value(transaction, environment.dbi, installed_state_key(system, name))) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
+    return mdb_txn_commit(transaction) == MDB_SUCCESS;
+}
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,8 +510,12 @@ std::filesystem::path HistoryManager::historyLogPath() const {
     return historyDir() / "history.jsonl";
 }
 
-std::filesystem::path HistoryManager::installedStatePath() const {
+std::filesystem::path HistoryManager::legacyInstalledStatePath() const {
     return historyDir() / "installed.json";
+}
+
+std::filesystem::path HistoryManager::installedStateDatabasePath() const {
+    return historyDir();
 }
 
 bool HistoryManager::ensureDirectory() const {
@@ -254,63 +641,11 @@ void HistoryManager::trimHistoryLog() const {
     (void)write_all_lines(path, lines);
 }
 
-// ── Installed-state helpers ───────────────────────────────────────────────────
+// ── Installed-state storage ───────────────────────────────────────────────────
 
 std::vector<InstalledEntry> HistoryManager::loadInstalledState() const {
-    std::vector<InstalledEntry> entries;
-    const std::filesystem::path path = installedStatePath();
-    if (!std::filesystem::exists(path)) {
-        return entries;
-    }
-
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        return entries;
-    }
-
-    // File is a JSON array written by saveInstalledState, one object per line.
-    // We identify object lines by the presence of "name": and extract fields.
-    std::string line;
-    while (std::getline(file, line)) {
-        if (line.find("\"name\"") == std::string::npos) {
-            continue;
-        }
-        InstalledEntry entry;
-        entry.name        = extract_json_string(line, "name");
-        entry.version     = extract_json_string(line, "version");
-        entry.system      = extract_json_string(line, "manager");
-        entry.installedAt = extract_json_string(line, "installedAt");
-        if (!entry.name.empty() && !entry.system.empty()) {
-            entries.push_back(std::move(entry));
-        }
-    }
-    return entries;
-}
-
-bool HistoryManager::saveInstalledState(const std::vector<InstalledEntry>& entries) const {
-    const std::filesystem::path path = installedStatePath();
-    std::ofstream file(path, std::ios::trunc);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    // Pretty-printed JSON array; each object on one line for easy grep/parsing.
-    file << "[\n";
-    for (std::size_t i = 0; i < entries.size(); ++i) {
-        const InstalledEntry& e = entries[i];
-        file << "  {";
-        file << jstr("name",        e.name)        << ',';
-        file << jstr("version",     e.version)     << ',';
-        file << jstr("manager",     e.system)      << ',';
-        file << jstr("installedAt", e.installedAt);
-        file << '}';
-        if (i + 1 < entries.size()) {
-            file << ',';
-        }
-        file << '\n';
-    }
-    file << "]\n";
-    return file.good();
+    std::lock_guard<std::mutex> lock(mutex);
+    return load_installed_state_database(installedStateDatabasePath(), legacyInstalledStatePath());
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -360,41 +695,20 @@ bool HistoryManager::updateInstalledState(const HistoryEntry& entry) const {
     }
 
     std::lock_guard<std::mutex> lock(mutex);
-    if (!ensureDirectory()) {
-        return false;
-    }
-
-    std::vector<InstalledEntry> entries = loadInstalledState();
-
     if (isRemove) {
-        entries.erase(
-            std::remove_if(entries.begin(), entries.end(), [&](const InstalledEntry& e) {
-                return e.system == entry.system && e.name == entry.packageName;
-            }),
-            entries.end()
-        );
-    } else {
-        // Install or update: upsert.
-        bool found = false;
-        for (InstalledEntry& e : entries) {
-            if (e.system == entry.system && e.name == entry.packageName) {
-                e.version     = entry.packageVersion;
-                e.installedAt = entry.timestamp;
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            entries.push_back(InstalledEntry{
-                .name        = entry.packageName,
-                .version     = entry.packageVersion,
-                .system      = entry.system,
-                .installedAt = entry.timestamp
-            });
-        }
+        return remove_installed_state_database(installedStateDatabasePath(), legacyInstalledStatePath(), entry.system, entry.packageName);
     }
 
-    return saveInstalledState(entries);
+    return upsert_installed_state_database(
+        installedStateDatabasePath(),
+        legacyInstalledStatePath(),
+        InstalledEntry{
+            .name        = entry.packageName,
+            .version     = entry.packageVersion,
+            .system      = entry.system,
+            .installedAt = entry.timestamp
+        }
+    );
 }
 
 bool HistoryManager::record(const HistoryEntry& entry) const {

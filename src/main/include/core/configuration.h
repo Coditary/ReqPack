@@ -155,11 +155,11 @@ struct HistoryConfig {
     // Controls history.jsonl – the append-only event log.
     bool enabled{true};
 
-    // Controls installed.json – the current-state snapshot.
+    // Controls installed-state tracking – current-state snapshot storage.
     // Independent of `enabled`: can be true even when `enabled` is false.
     bool trackInstalled{true};
 
-    // Directory that holds history.jsonl and installed.json.
+    // Directory that holds history.jsonl and installed-state data.
     std::string historyPath{"~/.reqpack/history"};
 
     // Maximum number of lines kept in history.jsonl.

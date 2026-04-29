@@ -27,16 +27,17 @@ struct InstalledEntry {
     std::string installedAt;    // ISO-8601 UTC timestamp of last install/update
 };
 
-// Manages ~/.reqpack/history/history.jsonl  (append-only event log, guarded by history.enabled)
-// and      ~/.reqpack/history/installed.json (installed state snapshot, guarded by history.trackInstalled).
-// Both files are controlled independently via HistoryConfig.
+// Manages ~/.reqpack/history/history.jsonl (append-only event log, guarded by history.enabled)
+// and an LMDB-backed installed-state snapshot under ~/.reqpack/history/ (guarded by history.trackInstalled).
+// Legacy ~/.reqpack/history/installed.json is imported once on first access when present.
 class HistoryManager {
     ReqPackConfig config;
     mutable std::mutex mutex;
 
     std::filesystem::path historyDir() const;
     std::filesystem::path historyLogPath() const;
-    std::filesystem::path installedStatePath() const;
+    std::filesystem::path legacyInstalledStatePath() const;
+    std::filesystem::path installedStateDatabasePath() const;
 
     bool ensureDirectory() const;
 
@@ -48,19 +49,16 @@ class HistoryManager {
     // Keeps the newest entries.  No-op when both limits are 0.
     void trimHistoryLog() const;
 
-    // Installed-state helpers.
-    bool saveInstalledState(const std::vector<InstalledEntry>& entries) const;
-
 public:
     explicit HistoryManager(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
 
-    // Read the current installed-packages snapshot from installed.json.
+    // Read the current installed-packages snapshot from installed-state storage.
     std::vector<InstalledEntry> loadInstalledState() const;
 
     // Append one event to history.jsonl (only when history.enabled).
     bool appendEvent(const HistoryEntry& entry) const;
 
-    // Update installed.json (only when history.trackInstalled).
+    // Update installed-state snapshot (only when history.trackInstalled).
     bool updateInstalledState(const HistoryEntry& entry) const;
 
     // Convenience: fill timestamp, then call appendEvent + updateInstalledState

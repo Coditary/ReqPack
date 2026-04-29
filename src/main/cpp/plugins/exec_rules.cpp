@@ -8,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <pty.h>
 #include <sys/types.h>
@@ -241,64 +242,94 @@ void dispatch_evaluation_result(
     }
 }
 
-ExecResult run_plain_command(Logger& logger, const std::string& pluginId, const std::string& command) {
+bool read_fd_to_result(Logger& logger, const std::string& pluginId, int fd, ExecResult& result, const std::function<void(const std::string&)>& onChunk) {
+    std::array<char, 4096> buffer{};
+    for (;;) {
+        const ssize_t count = ::read(fd, buffer.data(), buffer.size());
+        if (count > 0) {
+            const std::string chunk(buffer.data(), static_cast<std::size_t>(count));
+            result.stdoutText += chunk;
+            logger.stdout(chunk, pluginId, "exec");
+            onChunk(chunk);
+            continue;
+        }
+        if (count == 0) {
+            return true;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        result.stderrText = std::string("read failed: ") + std::strerror(errno);
+        return false;
+    }
+}
+
+ExecResult run_shell_command(Logger& logger, const std::string& pluginId, const std::string& command, const std::function<void(const std::string&)>& onChunk) {
     ExecResult result;
-    const std::string wrappedCommand = "zsh -lc \"" + escape_shell_double_quotes(command) + "\" 2>&1";
-    FILE* pipe = popen(wrappedCommand.c_str(), "r");
-    if (pipe == nullptr) {
-        result.stderrText = "failed to open process";
+
+    int pipeFds[2] = {-1, -1};
+    if (::pipe(pipeFds) != 0) {
+        result.stderrText = std::string("failed to create pipe: ") + std::strerror(errno);
         return result;
     }
 
-    std::array<char, 4096> buffer{};
-    while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-        const std::string chunk(buffer.data());
-        result.stdoutText += chunk;
-        logger.stdout(chunk, pluginId, "exec");
+    const pid_t child = fork();
+    if (child < 0) {
+        ::close(pipeFds[0]);
+        ::close(pipeFds[1]);
+        result.stderrText = std::string("failed to fork: ") + std::strerror(errno);
+        return result;
     }
 
-    const int status = pclose(pipe);
+    if (child == 0) {
+        ::close(pipeFds[0]);
+        ::dup2(pipeFds[1], STDOUT_FILENO);
+        ::dup2(pipeFds[1], STDERR_FILENO);
+        ::close(pipeFds[1]);
+        execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
+        _exit(127);
+    }
+
+    ::close(pipeFds[1]);
+    (void)read_fd_to_result(logger, pluginId, pipeFds[0], result, onChunk);
+    ::close(pipeFds[0]);
+
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) {
+            result.stderrText = std::string("waitpid failed: ") + std::strerror(errno);
+            result.exitCode = 1;
+            result.success = false;
+            return result;
+        }
+    }
+
     result.exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : status;
-    result.success = result.exitCode == 0;
+    result.success = result.stderrText.empty() && result.exitCode == 0;
     if (!result.success && result.stderrText.empty()) {
         result.stderrText = result.stdoutText;
     }
     return result;
 }
 
-ExecResult run_line_command(Logger& logger, const std::string& pluginId, const std::string& command, const ExecRuleset& ruleset) {
-    ExecResult result;
-    const std::string wrappedCommand = "zsh -lc \"" + escape_shell_double_quotes(command) + "\" 2>&1";
-    FILE* pipe = popen(wrappedCommand.c_str(), "r");
-    if (pipe == nullptr) {
-        result.stderrText = "failed to open process";
-        return result;
-    }
+ExecResult run_plain_command(Logger& logger, const std::string& pluginId, const std::string& command) {
+    return run_shell_command(logger, pluginId, command, [](const std::string&) {});
+}
 
+ExecResult run_line_command(Logger& logger, const std::string& pluginId, const std::string& command, const ExecRuleset& ruleset) {
     ExecRuleRuntimeState runtime = make_exec_rule_runtime_state(ruleset);
     LineAccumulator lines;
 
-    std::array<char, 4096> buffer{};
-    while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-        const std::string chunk(buffer.data());
-        result.stdoutText += chunk;
-        logger.stdout(chunk, pluginId, "exec");
+    ExecResult result = run_shell_command(logger, pluginId, command, [&](const std::string& chunk) {
         lines.append(chunk, [&](const std::string& line) {
             const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_line_input(ruleset, runtime, line);
             dispatch_evaluation_result(logger, pluginId, evaluation, std::nullopt);
         });
-    }
+    });
     lines.flush([&](const std::string& line) {
         const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_line_input(ruleset, runtime, line);
         dispatch_evaluation_result(logger, pluginId, evaluation, std::nullopt);
     });
-
-    const int status = pclose(pipe);
-    result.exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : status;
-    result.success = result.exitCode == 0;
-    if (!result.success && result.stderrText.empty()) {
-        result.stderrText = result.stdoutText;
-    }
     return result;
 }
 
@@ -313,7 +344,7 @@ ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const st
     }
 
     if (child == 0) {
-        execlp("zsh", "zsh", "-lc", command.c_str(), static_cast<char*>(nullptr));
+        execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
         _exit(127);
     }
 

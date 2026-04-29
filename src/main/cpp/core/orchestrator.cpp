@@ -181,7 +181,7 @@ void Orchestrator::run() {
 		return;
 	}
 	graph = this->validator->validate(graph);
-	this->executor->setRequestedItemCount(this->countRequestedItems());
+	this->executor->setRequestedItemCount(this->countRequestedItems(), true);
 	this->executor->execute(graph);
 	delete graph;
 

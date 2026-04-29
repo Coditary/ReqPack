@@ -149,6 +149,7 @@ add_executable(core_unit_tests
     tests/unit/core/configuration/parse_tests.cpp
     tests/unit/core/configuration/cli_tests.cpp
     tests/unit/core/downloader/core_tests.cpp
+    tests/unit/core/history/core_tests.cpp
     tests/unit/core/manifest_loader/core_tests.cpp
     tests/unit/core/planner/core_tests.cpp
     tests/unit/core/registry_database/core_tests.cpp

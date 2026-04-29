@@ -116,8 +116,9 @@ Executer::Executer(Registry* registry, const ReqPackConfig& config) : config(con
 
 Executer::~Executer() {}
 
-void Executer::setRequestedItemCount(int count) const {
+void Executer::setRequestedItemCount(int count, bool inputAlreadyFiltered) const {
 	this->requestedItemCount = std::max(0, count);
+	this->inputAlreadyFiltered = inputAlreadyFiltered;
 }
 
 std::vector<PackageInfo> Executer::list(const Request& request) const {
@@ -173,6 +174,11 @@ void Executer::execute(Graph *graph) {
 		return;
 	}
 
+	const int requestedItemCount = this->requestedItemCount;
+	const bool inputAlreadyFiltered = this->inputAlreadyFiltered;
+	this->requestedItemCount = 0;
+	this->inputAlreadyFiltered = false;
+
 	if (this->config.execution.useTransactionDb) {
 		this->startTransactionDb();
 		if (this->transactionDatabase == nullptr || !this->transactionDatabase->ensureReady()) {
@@ -202,7 +208,7 @@ void Executer::execute(Graph *graph) {
 		this->activeRunId.clear();
 	}
 	const std::vector<TaskGroup> allTaskGroups = this->createTaskGroups(*graph);
-	const std::vector<TaskGroup> plannedTaskGroups = this->filterExecutableTaskGroups(allTaskGroups);
+	const std::vector<TaskGroup> plannedTaskGroups = inputAlreadyFiltered ? allTaskGroups : this->filterExecutableTaskGroups(allTaskGroups);
 	taskGroups = plannedTaskGroups;
 	if (this->config.execution.useTransactionDb && !taskGroups.empty()) {
 		this->activeRunId.clear();
@@ -245,7 +251,7 @@ void Executer::execute(Graph *graph) {
 			if (r.status == "success") ++succeeded;
 			else ++failed;
 		}
-		int planned = this->requestedItemCount;
+		int planned = requestedItemCount;
 		if (planned == 0) {
 			for (const TaskGroup& tg : allTaskGroups) {
 				planned += static_cast<int>(tg.packages.size());
@@ -558,23 +564,8 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGr
 		return this->executeTransactionalTaskGroup(taskGroup, runId);
 	}
 
-	TaskGroup executableTaskGroup = taskGroup;
-	if (actionUsesDesiredStateFilter(taskGroup.action) && !taskGroup.usesLocalTarget) {
-		IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
-		if (plugin != nullptr) {
-			executableTaskGroup.packages = plugin->getMissingPackages(taskGroup.packages);
-			if (executableTaskGroup.packages.empty()) {
-				std::vector<TransactionRecord> records = this->buildSuccessRecords(taskGroup);
-				for (TransactionRecord& record : records) {
-					record.runId = runId;
-				}
-				return records;
-			}
-		}
-	}
-
-	if (!this->dispatchTaskGroupToPlugin(executableTaskGroup)) {
-		std::vector<TransactionRecord> records = this->buildFailureRecords(executableTaskGroup);
+	if (!this->dispatchTaskGroupToPlugin(taskGroup)) {
+		std::vector<TransactionRecord> records = this->buildFailureRecords(taskGroup);
 		for (TransactionRecord& record : records) {
 			record.runId = runId;
 			record.errorMessage = "plugin action failed";
@@ -670,26 +661,7 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 		Logger::instance().displayItemBegin(taskGroup.system + ":" + package.name, package.name);
 	}
 
-	TaskGroup executableTaskGroup = taskGroup;
-	std::vector<Package> alreadySatisfiedPackages;
-	if (actionUsesDesiredStateFilter(taskGroup.action)) {
-		IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
-		if (plugin != nullptr) {
-			executableTaskGroup.packages = plugin->getMissingPackages(taskGroup.packages);
-			for (const Package& package : taskGroup.packages) {
-				if (!containsPackage(executableTaskGroup.packages, package)) {
-					alreadySatisfiedPackages.push_back(package);
-				}
-			}
-		}
-	}
-
-	displaySuccess(alreadySatisfiedPackages);
-	appendSuccessRecords(alreadySatisfiedPackages);
-
-	if (executableTaskGroup.packages.empty()) {
-		return records;
-	}
+	const TaskGroup& executableTaskGroup = taskGroup;
 
 	if (!this->transactionDatabase->updateItemsStatus(runId, executableTaskGroup.packages, "running")) {
 		displayFailure(executableTaskGroup.packages, "transaction update failed");

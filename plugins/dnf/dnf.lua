@@ -35,6 +35,14 @@ local function package_installed(name)
     return command_succeeds("rpm -q --quiet " .. shell_quote(name) .. " >/dev/null 2>&1")
 end
 
+local function shell_join(values)
+    local quoted = {}
+    for _, value in ipairs(values or {}) do
+        table.insert(quoted, shell_quote(value))
+    end
+    return table.concat(quoted, " ")
+end
+
 local function package_request_installed(pkg)
     if pkg.version ~= nil and pkg.version ~= "" then
         return package_installed(package_spec(pkg))
@@ -62,14 +70,6 @@ local function package_specs(packages)
         table.insert(names, package_spec(pkg))
     end
     return names
-end
-
-local function shell_join(values)
-    local quoted = {}
-    for _, value in ipairs(values or {}) do
-        table.insert(quoted, shell_quote(value))
-    end
-    return table.concat(quoted, " ")
 end
 
 local function package_has_update(name)
@@ -223,7 +223,7 @@ function plugin.update(context, packages)
 end
 
 function plugin.list(context)
-    local result = context.exec.run("dnf repoquery --installed --qf $'%{name}\\t%{version}-%{release}\\n'")
+    local result = context.exec.run("dnf repoquery --installed --qf '%{name}\t%{version}-%{release}\n'")
     local items = {}
     for line in (result.stdout or ""):gmatch("[^\r\n]+") do
         local name, ver = line:match("^(.-)\t(.+)$")

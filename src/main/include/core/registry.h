@@ -23,10 +23,12 @@ class Registry : public PluginMetadataProvider {
 private:
     ReqPackConfig config;
     RegistryDatabase database;
+    std::map<std::string, std::string> m_pluginPaths;
     std::map<std::string, std::unique_ptr<IPlugin>> m_plugins;
     std::map<std::string, PluginState> m_states;
 
     void materializePluginScript(const RegistryRecord& record) const;
+    bool ensurePluginConstructed(const std::string& name);
 
 public:
     Registry(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);

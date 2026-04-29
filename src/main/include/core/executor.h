@@ -38,6 +38,7 @@ class Executer {
 	std::unique_ptr<HistoryManager> historyManager;
 	mutable std::string activeRunId;
 	mutable int requestedItemCount{0};
+	mutable bool inputAlreadyFiltered{false};
 
 	void startTransactionDb() const;
 	bool canWriteToVirtualFileSystem() const;
@@ -66,7 +67,7 @@ public:
 	Executer(Registry* registry, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
 	~Executer();
 
-	void setRequestedItemCount(int count) const;
+	void setRequestedItemCount(int count, bool inputAlreadyFiltered = false) const;
 	void execute(Graph *graph);
 	std::vector<PackageInfo> list(const Request& request) const;
 	std::vector<PackageInfo> outdated(const Request& request) const;

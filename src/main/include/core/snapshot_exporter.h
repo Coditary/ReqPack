@@ -8,7 +8,7 @@
 #include <vector>
 
 // Generates a reqpack.lua manifest from the installed-packages snapshot
-// stored in ~/.reqpack/history/installed.json.
+// tracked by HistoryManager.
 class SnapshotExporter {
     ReqPackConfig config;
 
