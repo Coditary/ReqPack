@@ -109,6 +109,11 @@ void Logger::processLoop() {
 		}
 
 		this->processEvent(event);
+		{
+			std::lock_guard<std::mutex> lock(processedMutex);
+			processedEventId = std::max(processedEventId, event.id);
+		}
+		processedCondition.notify_all();
 		if (event.action == OutputAction::STOP) {
 			break;
 		}
@@ -328,8 +333,15 @@ void Logger::setBacktrace(bool enable, size_t max_size) {
 // Core emit
 // ─────────────────────────────────────────────────────────────────────────────
 
-void Logger::emit(OutputAction action, const OutputContext& context) {
-	this->enqueue(OutputEvent{.action = action, .context = context});
+std::uint64_t Logger::emit(OutputAction action, const OutputContext& context) {
+	std::uint64_t eventId = 0;
+	{
+		std::lock_guard<std::mutex> lock(queueMutex);
+		eventId = ++nextEventId;
+		queue.push_back(OutputEvent{.id = eventId, .action = action, .context = context});
+	}
+	queueCondition.notify_one();
+	return eventId;
 }
 
 void Logger::stdout(const std::string& message,
@@ -344,6 +356,14 @@ void Logger::stdout(const std::string& message,
 
 void Logger::flush() {
 	this->emit(OutputAction::FLUSH);
+}
+
+void Logger::flushSync() {
+	const std::uint64_t flushEventId = this->emit(OutputAction::FLUSH);
+	std::unique_lock<std::mutex> lock(processedMutex);
+	processedCondition.wait(lock, [&]() {
+		return processedEventId >= flushEventId;
+	});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

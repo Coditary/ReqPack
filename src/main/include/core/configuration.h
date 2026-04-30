@@ -144,6 +144,11 @@ struct InteractionConfig {
     bool promptBeforeMissingDependencyDownload{false};
 };
 
+struct RemoteConfig {
+    bool readonly{false};
+    int maxConnections{16};
+};
+
 struct SbomConfig {
     SbomOutputFormat defaultFormat{SbomOutputFormat::TABLE};
     std::string defaultOutputPath{};
@@ -202,6 +207,7 @@ struct ReqPackConfig {
     DownloaderConfig downloader{};
     RegistryConfig registry{};
     InteractionConfig interaction{};
+    RemoteConfig remote{};
     SbomConfig sbom{};
     HistoryConfig history{};
     DisplayConfig display{};
@@ -290,6 +296,8 @@ bool consume_cli_config_flag(
     std::size_t& index,
     ReqPackConfigOverrides& overrides
 );
+
+ReqPackConfigOverrides extract_cli_config_overrides(const std::vector<std::string>& arguments);
 
 ReqPackConfigOverrides extract_cli_config_overrides(int argc, char* argv[]);
 

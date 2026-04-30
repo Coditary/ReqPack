@@ -586,6 +586,12 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(interaction.value(), "promptBeforeMissingDependencyDownload", config.interaction.promptBeforeMissingDependencyDownload);
     }
 
+    const sol::optional<sol::table> remote = root["remote"];
+    if (remote.has_value()) {
+        assign_if_present(remote.value(), "readonly", config.remote.readonly);
+        assign_if_present(remote.value(), "maxConnections", config.remote.maxConnections);
+    }
+
     const sol::optional<sol::table> sbom = root["sbom"];
     if (sbom.has_value()) {
         assign_if_present(sbom.value(), "defaultFormat", sbom_output_format_from_string, config.sbom.defaultFormat);
@@ -891,13 +897,18 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
 }
 
 ReqPackConfigOverrides extract_cli_config_overrides(int argc, char* argv[]) {
-    ReqPackConfigOverrides overrides;
     std::vector<std::string> arguments;
     arguments.reserve(static_cast<std::size_t>(argc > 0 ? argc - 1 : 0));
 
     for (int i = 1; i < argc; ++i) {
         arguments.emplace_back(argv[i]);
     }
+
+    return extract_cli_config_overrides(arguments);
+}
+
+ReqPackConfigOverrides extract_cli_config_overrides(const std::vector<std::string>& arguments) {
+    ReqPackConfigOverrides overrides;
 
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         (void)consume_cli_config_flag(arguments, i, overrides);

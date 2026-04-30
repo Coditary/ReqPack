@@ -13,6 +13,7 @@
 #include <string>
 #include <memory>
 #include <thread>
+#include <cstdint>
 #include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,6 +86,7 @@ struct OutputContext {
 };
 
 struct OutputEvent {
+	std::uint64_t id{0};
 	OutputAction  action{OutputAction::LOG};
 	OutputContext context{};
 };
@@ -107,6 +109,10 @@ class Logger {
 	std::deque<OutputEvent>         queue;
 	std::mutex                      queueMutex;
 	std::condition_variable         queueCondition;
+	std::mutex                      processedMutex;
+	std::condition_variable         processedCondition;
+	std::uint64_t                   nextEventId{0};
+	std::uint64_t                   processedEventId{0};
 	bool                            stopRequested{false};
 	std::string                     pattern{"%^[%T] [%l] %v%$"};
 
@@ -145,11 +151,12 @@ public:
 
 	// ── Core emit ─────────────────────────────────────────────────────────────
 
-	void emit(OutputAction action, const OutputContext& context = {});
+	std::uint64_t emit(OutputAction action, const OutputContext& context = {});
 	void stdout(const std::string& message,
 	            const std::string& source = {},
 	            const std::string& scope  = {});
 	void flush();
+	void flushSync();
 
 	// ── Spdlog convenience wrappers ───────────────────────────────────────────
 

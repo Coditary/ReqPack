@@ -1,11 +1,13 @@
 #include <catch2/catch.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
 
 #include "core/configuration.h"
+#include "core/remote_profiles.h"
 
 namespace {
 
@@ -294,4 +296,48 @@ TEST_CASE("configuration falls back for missing or invalid lua config files", "[
     )");
     const ReqPackConfig globalConfig = load_config_from_lua(globalConfigPath, fallback);
     CHECK_FALSE(globalConfig.interaction.interactive);
+}
+
+TEST_CASE("remote user loader parses users and defaults admin flag", "[unit][configuration][remote]") {
+    TempDir tempDir{"reqpack-remote-users"};
+    const std::filesystem::path remotePath = tempDir.path() / "remote.lua";
+
+    write_file(remotePath, R"(
+        return {
+            users = {
+                alice = {
+                    token = "user-token",
+                },
+                root = {
+                    username = "root",
+                    password = "admin-pass",
+                    isAdmin = true,
+                },
+                broken = {
+                    isAdmin = true,
+                },
+            },
+        }
+    )");
+
+    const std::vector<RemoteUser> users = load_remote_users(remotePath);
+    REQUIRE(users.size() == 2);
+
+    const auto alice = std::find_if(users.begin(), users.end(), [](const RemoteUser& user) {
+        return user.id == "alice";
+    });
+    REQUIRE(alice != users.end());
+    REQUIRE(alice->token.has_value());
+    CHECK(alice->token.value() == "user-token");
+    CHECK_FALSE(alice->isAdmin);
+
+    const auto root = std::find_if(users.begin(), users.end(), [](const RemoteUser& user) {
+        return user.id == "root";
+    });
+    REQUIRE(root != users.end());
+    REQUIRE(root->username.has_value());
+    CHECK(root->username.value() == "root");
+    REQUIRE(root->password.has_value());
+    CHECK(root->password.value() == "admin-pass");
+    CHECK(root->isAdmin);
 }

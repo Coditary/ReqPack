@@ -84,6 +84,9 @@ set(SOURCES
     src/main/cpp/core/vulnerability_database.cpp
     src/main/cpp/core/vulnerability_matcher.cpp
     src/main/cpp/core/vulnerability_sync_service.cpp
+    src/main/cpp/core/serve_remote.cpp
+    src/main/cpp/core/remote_profiles.cpp
+    src/main/cpp/core/remote_client.cpp
     src/main/cpp/core/executor.cpp
     src/main/cpp/core/history_manager.cpp
     src/main/cpp/core/registry.cpp
@@ -179,6 +182,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/vulnerability_database.cpp
     src/main/cpp/core/vulnerability_matcher.cpp
     src/main/cpp/core/vulnerability_sync_service.cpp
+    src/main/cpp/core/remote_profiles.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
 )

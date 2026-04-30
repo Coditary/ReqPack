@@ -180,6 +180,10 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         return requests;
     }
 
+    if (action == ActionType::REMOTE) {
+        return requests;
+    }
+
     // Manifest mode: reqpack install <dir-path>
     // If the first non-flag argument after the action looks like a filesystem path
     // and resolves to a directory, load reqpack.lua from it.
@@ -450,6 +454,7 @@ void Cli::print_help() {
         "  sbom                    Exports planned graph as table or JSON\n"
         "  snapshot                Snapshots installed packages to reqpack.lua\n"
         "  serve                   Reads commands from stdin and keeps process running\n"
+        "  remote                  Connects to remote profile from ~/.reqpack/remote.lua\n"
         "\nConfig:\n"
         "  --config <path>         Loads config from a custom Lua file\n"
         "  --config=<path>         Same as above\n"
@@ -715,17 +720,60 @@ void Cli::print_command_help(ActionType action) {
         case ActionType::SERVE:
             help =
                 "Usage: ReqPack serve --stdin [options]\n"
+                "       ReqPack serve --remote [--json|--http|--https] [options]\n"
                 "\n"
-                "Read full ReqPack commands from stdin line by line and execute each\n"
-                "command immediately while process stays alive until EOF.\n"
+                "Serve ReqPack commands either from stdin or over a remote socket.\n"
+                "stdin mode executes one command per line until EOF.\n"
+                "remote mode starts a TCP server and returns command responses to clients.\n"
+                "Without protocol flag, remote mode accepts text protocol and auto-detects JSON requests per connection.\n"
+                "Server-side users can be loaded from ~/.reqpack/remote.lua under users = { ... }.\n"
+                "Admin users may run: shutdown, connections count, connections list, reload-config.\n"
+                "--token/--username/--password remain fallback auth when no valid server users exist.\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
                 "  --stdin                 Read commands from stdin\n"
+                "  --remote                Start remote TCP command server\n"
+                "  --json                  Force JSON Lines protocol for all remote clients\n"
+                "  --http                  Reserved for future HTTP server mode\n"
+                "  --https                 Reserved for future HTTPS server mode\n"
+                "  --bind <addr>           Bind remote server to address (default: 127.0.0.1)\n"
+                "  --port <n>              Bind remote server to port (default: 4545)\n"
+                "  --token <value>         Require token authentication for remote clients\n"
+                "  --username <name>       Require username/password authentication\n"
+                "  --password <value>      Password for username/password authentication\n"
+                "  --readonly              Allow read-only commands only\n"
+                "  --max-connections <n>   Maximum concurrent remote clients\n"
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
-                "  printf 'install dnf curl\\nlist dnf\\n' | ReqPack serve --stdin\n";
+                "  printf 'install dnf curl\\nlist dnf\\n' | ReqPack serve --stdin\n"
+                "  ReqPack serve --remote --bind 127.0.0.1 --port 4545 --token secret\n"
+                "  ReqPack serve --remote --json --readonly --max-connections 4\n";
+            break;
+        case ActionType::REMOTE:
+            help =
+                "Usage: ReqPack remote <profile> [<command>...]\n"
+                "\n"
+                "Connect to remote profile from ~/.reqpack/remote.lua.\n"
+                "With forwarded command, execute once and exit. Without command, start interactive text session.\n"
+                "Forwarded install of local file uploads it to text/auto remotes: ReqPack remote <profile> install <system> <local-file>.\n"
+                "JSON remotes reject file uploads.\n"
+                "\n"
+                "Arguments:\n"
+                "  <profile>               Profile name defined in ~/.reqpack/remote.lua\n"
+                "  <command>               Optional forwarded ReqPack command\n"
+                "\n"
+                "Profile fields:\n"
+                "  host/url                Remote host or IPv4 address\n"
+                "  port                    Remote TCP port\n"
+                "  protocol                auto, text, json, http, or https\n"
+                "  token                   Token auth for text/json remotes\n"
+                "  username/password       Basic auth for text/json remotes\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack remote dev list apply\n"
+                "  ReqPack remote prod\n";
             break;
         default:
             print_help();
@@ -770,6 +818,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "serve") {
         return ActionType::SERVE;
+    }
+    if (normalized_command == "remote") {
+        return ActionType::REMOTE;
     }
 
     return ActionType::UNKNOWN;

@@ -1,6 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -250,5 +251,33 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
             CHECK(request.action == ActionType::OUTDATED);
             CHECK_FALSE(request.system.empty());
         }
+    }
+}
+
+TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli][remote]") {
+    Cli cli;
+    ReqPackConfig config = DEFAULT_REQPACK_CONFIG;
+
+    SECTION("remote command does not produce orchestrator requests") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"remote", "dev", "list", "apply"}, config);
+        CHECK(requests.empty());
+    }
+
+    SECTION("remote help includes profile file guidance") {
+        std::ostringstream capture;
+        std::streambuf* previous = std::cout.rdbuf(capture.rdbuf());
+
+        char arg0[] = "ReqPack";
+        char arg1[] = "remote";
+        char arg2[] = "--help";
+        char* argv[] = {arg0, arg1, arg2};
+
+        const bool handled = cli.handleHelp(3, argv);
+
+        std::cout.rdbuf(previous);
+
+        CHECK(handled);
+        CHECK(capture.str().find("Usage: ReqPack remote <profile>") != std::string::npos);
+        CHECK(capture.str().find("~/.reqpack/remote.lua") != std::string::npos);
     }
 }

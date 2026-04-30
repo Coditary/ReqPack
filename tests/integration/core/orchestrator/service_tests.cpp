@@ -1,13 +1,27 @@
 #include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <fstream>
+#include <optional>
+#include <spawn.h>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
+#include <thread>
 #include <vector>
+
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <catch2/catch.hpp>
 
 #include "test_helpers.h"
+
+extern char** environ;
 
 namespace {
 
@@ -80,9 +94,38 @@ std::filesystem::path write_config(const std::filesystem::path& root, const std:
     return configPath;
 }
 
+std::filesystem::path write_remote_profiles(const std::filesystem::path& root, const std::string& content) {
+    const std::filesystem::path reqpackHome = root / ".reqpack";
+    std::filesystem::create_directories(reqpackHome);
+    const std::filesystem::path profilePath = reqpackHome / "remote.lua";
+    write_file(profilePath, content);
+    return profilePath;
+}
+
+std::filesystem::path write_remote_users(const std::filesystem::path& root, const std::string& content) {
+    return write_remote_profiles(root, content);
+}
+
 std::string run_reqpack(const std::filesystem::path& workspace, const std::filesystem::path& configPath, const std::vector<std::string>& arguments) {
     std::string command = "cd " + escape_shell_arg(workspace.string()) +
         " && " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " --config " + escape_shell_arg(configPath.string());
+    for (const std::string& argument : arguments) {
+        command += " " + escape_shell_arg(argument);
+    }
+    command += " 2>&1";
+    return run_command_capture(command);
+}
+
+std::string run_reqpack_with_home(
+    const std::filesystem::path& workspace,
+    const std::filesystem::path& configPath,
+    const std::filesystem::path& homePath,
+    const std::vector<std::string>& arguments
+) {
+    std::string command = "cd " + escape_shell_arg(workspace.string()) +
+        " && HOME=" + escape_shell_arg(homePath.string()) +
+        " " + escape_shell_arg((build_root() / "ReqPack").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
         command += " " + escape_shell_arg(argument);
@@ -106,6 +149,215 @@ std::string run_reqpack_with_stdin(
     }
     command += " 2>&1";
     return run_command_capture(command);
+}
+
+class ServerProcess {
+public:
+    ServerProcess(
+        const std::filesystem::path& workspace,
+        const std::filesystem::path& configPath,
+        const std::optional<std::filesystem::path>& homePath,
+        const std::vector<std::string>& arguments,
+        const std::filesystem::path& logPath
+    ) {
+        posix_spawn_file_actions_t actions;
+        if (posix_spawn_file_actions_init(&actions) != 0 ||
+            posix_spawn_file_actions_addchdir_np(&actions, workspace.c_str()) != 0 ||
+            posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) != 0 ||
+            posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, logPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644) != 0 ||
+            posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, logPath.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644) != 0) {
+            throw std::runtime_error("failed to configure server process actions");
+        }
+
+        std::vector<std::string> argvStrings;
+        argvStrings.push_back((build_root() / "ReqPack").string());
+        argvStrings.push_back("--config");
+        argvStrings.push_back(configPath.string());
+        argvStrings.insert(argvStrings.end(), arguments.begin(), arguments.end());
+
+        std::vector<std::string> environmentStrings;
+        std::vector<char*> environment;
+        if (homePath.has_value()) {
+            environmentStrings.push_back("HOME=" + homePath->string());
+            environment.reserve(environmentStrings.size() + 1);
+            for (std::string& value : environmentStrings) {
+                environment.push_back(value.data());
+            }
+            environment.push_back(nullptr);
+        }
+
+        std::vector<char*> argv;
+        argv.reserve(argvStrings.size() + 1);
+        for (std::string& argument : argvStrings) {
+            argv.push_back(argument.data());
+        }
+        argv.push_back(nullptr);
+
+        const int spawnResult = posix_spawn(
+            &pid_,
+            argvStrings.front().c_str(),
+            &actions,
+            nullptr,
+            argv.data(),
+            homePath.has_value() ? environment.data() : environ
+        );
+        posix_spawn_file_actions_destroy(&actions);
+        if (spawnResult != 0) {
+            throw std::runtime_error("failed to spawn server process");
+        }
+    }
+
+    ~ServerProcess() {
+        stop();
+    }
+
+    void stop() {
+        if (pid_ <= 0) {
+            return;
+        }
+        (void)::kill(pid_, SIGTERM);
+        (void)::waitpid(pid_, nullptr, 0);
+        pid_ = -1;
+    }
+
+private:
+    pid_t pid_{-1};
+};
+
+int reserve_tcp_port() {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == -1) {
+        throw std::runtime_error("failed to create port reservation socket");
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (::bind(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
+        ::close(fd);
+        throw std::runtime_error("failed to bind port reservation socket");
+    }
+
+    socklen_t length = sizeof(address);
+    if (::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+        ::close(fd);
+        throw std::runtime_error("failed to inspect reserved port");
+    }
+    const int port = ntohs(address.sin_port);
+    ::close(fd);
+    return port;
+}
+
+int connect_with_retry(const std::string& host, int port) {
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd == -1) {
+            continue;
+        }
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_port = htons(static_cast<uint16_t>(port));
+        if (::inet_pton(AF_INET, host.c_str(), &address.sin_addr) != 1) {
+            ::close(fd);
+            throw std::runtime_error("failed to parse test host address");
+        }
+        if (::connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0) {
+            return fd;
+        }
+        ::close(fd);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    FAIL("failed to connect to server");
+    throw std::runtime_error("failed to connect to server");
+}
+
+bool send_socket_text(int fd, const std::string& text) {
+    std::size_t offset = 0;
+    while (offset < text.size()) {
+        const ssize_t written = ::send(fd, text.data() + offset, text.size() - offset, 0);
+        if (written <= 0) {
+            return false;
+        }
+        offset += static_cast<std::size_t>(written);
+    }
+    return true;
+}
+
+std::string read_socket_line(int fd) {
+    std::string line;
+    char c = '\0';
+    while (::recv(fd, &c, 1, 0) == 1) {
+        if (c == '\n') {
+            break;
+        }
+        if (c != '\r') {
+            line.push_back(c);
+        }
+    }
+    return line;
+}
+
+std::string read_socket_bytes(int fd, std::size_t count) {
+    std::string out(count, '\0');
+    std::size_t offset = 0;
+    while (offset < count) {
+        const ssize_t received = ::recv(fd, out.data() + offset, count - offset, 0);
+        if (received <= 0) {
+            throw std::runtime_error("failed to read expected socket payload");
+        }
+        offset += static_cast<std::size_t>(received);
+    }
+    return out;
+}
+
+std::pair<std::string, std::string> read_text_protocol_response(int fd) {
+    const std::string header = read_socket_line(fd);
+    const std::size_t separator = header.find(' ');
+    if (separator == std::string::npos) {
+        throw std::runtime_error("invalid text protocol response header");
+    }
+    const std::string status = header.substr(0, separator);
+    const std::size_t length = static_cast<std::size_t>(std::stoul(header.substr(separator + 1)));
+    return {status, read_socket_bytes(fd, length)};
+}
+
+std::string read_json_response_line(int fd) {
+    return read_socket_line(fd);
+}
+
+std::string run_reqpack_with_home_and_status(
+    const std::filesystem::path& workspace,
+    const std::filesystem::path& configPath,
+    const std::filesystem::path& homePath,
+    const std::vector<std::string>& arguments,
+    int& status
+) {
+    std::string command = "cd " + escape_shell_arg(workspace.string()) +
+        " && HOME=" + escape_shell_arg(homePath.string()) +
+        " " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " --config " + escape_shell_arg(configPath.string());
+    for (const std::string& argument : arguments) {
+        command += " " + escape_shell_arg(argument);
+    }
+    command += " 2>&1";
+
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr) {
+        throw std::runtime_error("failed to run command: " + command);
+    }
+
+    std::string output;
+    char buffer[4096];
+    while (std::fgets(buffer, static_cast<int>(sizeof(buffer)), pipe) != nullptr) {
+        output += buffer;
+    }
+
+    status = pclose(pipe);
+    if (status == -1) {
+        throw std::runtime_error("failed to close command pipe: " + command);
+    }
+    return output;
 }
 
 const char* ORCHESTRATOR_PLUGIN = R"(
@@ -323,4 +575,419 @@ TEST_CASE("reqpack serve stdin executes commands line by line and continues afte
     CHECK(read_file(installMarker) == "alpha");
     CHECK(output.find("stdin line 2: invalid command syntax") != std::string::npos);
     CHECK(output.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+}
+
+TEST_CASE("reqpack serve remote text mode supports token auth", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-text"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const int client = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(client, "auth token secret\n"));
+    const auto authResponse = read_text_protocol_response(client);
+    CHECK(authResponse.first == "OK");
+    CHECK(authResponse.second.empty());
+
+    REQUIRE(send_socket_text(client, "list apply\n"));
+    const auto listResponse = read_text_protocol_response(client);
+    CHECK(listResponse.first == "OK");
+    CHECK(listResponse.second.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+    ::close(client);
+}
+
+TEST_CASE("reqpack serve remote readonly rejects mutating commands", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-readonly"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--readonly"
+    }, logPath);
+
+    const int client = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(client, "install apply alpha\n"));
+    const auto response = read_text_protocol_response(client);
+    CHECK(response.first == "ERR");
+    CHECK(response.second.find("readonly") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(pluginDirectory / "apply" / "state" / "install.txt"));
+    ::close(client);
+}
+
+TEST_CASE("reqpack serve remote json mode returns json responses", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-json"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--json", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const int client = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(client, "{\"token\":\"secret\",\"command\":\"list apply\"}\n"));
+    const std::string response = read_json_response_line(client);
+    CHECK(response.find("\"ok\":true") != std::string::npos);
+    CHECK(response.find("listed from") != std::string::npos);
+    ::close(client);
+}
+
+TEST_CASE("reqpack serve remote autodetects json clients without json flag", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-auto-json"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const int client = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(client, "{\"token\":\"secret\",\"command\":\"list apply\"}\n"));
+    const std::string response = read_json_response_line(client);
+    CHECK(response.find("\"ok\":true") != std::string::npos);
+    CHECK(response.find("listed from") != std::string::npos);
+    ::close(client);
+}
+
+TEST_CASE("reqpack serve remote enforces max connections", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-limit"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--max-connections", "1"
+    }, logPath);
+
+    const int firstClient = connect_with_retry("127.0.0.1", port);
+    const int secondClient = connect_with_retry("127.0.0.1", port);
+    const auto response = read_text_protocol_response(secondClient);
+    CHECK(response.first == "ERR");
+    CHECK(response.second.find("max connections") != std::string::npos);
+    ::close(firstClient);
+    ::close(secondClient);
+}
+
+TEST_CASE("reqpack serve remote supports admin commands from server remote users", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-admin"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+    write_remote_users(tempDir.path(),
+        "return {\n"
+        "  users = {\n"
+        "    alice = { token = 'user-token' },\n"
+        "    root = { token = 'admin-token', isAdmin = true },\n"
+        "  },\n"
+        "}\n");
+
+    ServerProcess server(tempDir.path(), configPath, tempDir.path(), {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port)
+    }, logPath);
+
+    const int userClient = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(userClient, "auth token user-token\n"));
+    const auto userAuth = read_text_protocol_response(userClient);
+    CHECK(userAuth.first == "OK");
+
+    REQUIRE(send_socket_text(userClient, "connections count\n"));
+    const auto forbidden = read_text_protocol_response(userClient);
+    CHECK(forbidden.first == "ERR");
+    CHECK(forbidden.second.find("admin privileges") != std::string::npos);
+
+    const int adminClient = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(adminClient, "auth token admin-token\n"));
+    const auto adminAuth = read_text_protocol_response(adminClient);
+    CHECK(adminAuth.first == "OK");
+
+    REQUIRE(send_socket_text(adminClient, "connections count\n"));
+    const auto countResponse = read_text_protocol_response(adminClient);
+    CHECK(countResponse.first == "OK");
+    CHECK(countResponse.second == "2");
+
+    REQUIRE(send_socket_text(adminClient, "connections list\n"));
+    const auto listResponse = read_text_protocol_response(adminClient);
+    CHECK(listResponse.first == "OK");
+    CHECK(listResponse.second.find("user=alice") != std::string::npos);
+    CHECK(listResponse.second.find("user=root") != std::string::npos);
+    CHECK(listResponse.second.find("admin=true") != std::string::npos);
+
+    REQUIRE(send_socket_text(userClient, "exit\n"));
+    const auto exitResponse = read_text_protocol_response(userClient);
+    CHECK(exitResponse.first == "OK");
+
+    REQUIRE(send_socket_text(adminClient, "shutdown\n"));
+    const auto shutdownResponse = read_text_protocol_response(adminClient);
+    CHECK(shutdownResponse.first == "OK");
+    CHECK(shutdownResponse.second.find("shutting down") != std::string::npos);
+
+    ::close(userClient);
+    ::close(adminClient);
+}
+
+TEST_CASE("reqpack serve remote reload-config reloads users and readonly state", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-reload"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+    write_remote_users(tempDir.path(),
+        "return {\n"
+        "  users = {\n"
+        "    root = { token = 'admin-token', isAdmin = true },\n"
+        "  },\n"
+        "}\n");
+
+    ServerProcess server(tempDir.path(), configPath, tempDir.path(), {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port)
+    }, logPath);
+
+    const int adminClient = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(adminClient, "auth token admin-token\n"));
+    const auto adminAuth = read_text_protocol_response(adminClient);
+    CHECK(adminAuth.first == "OK");
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = { interactive = false },\n"
+        "  remote = { readonly = true },\n"
+        "}\n");
+    write_remote_users(tempDir.path(),
+        "return {\n"
+        "  users = {\n"
+        "    root = { token = 'new-admin-token', isAdmin = true },\n"
+        "  },\n"
+        "}\n");
+
+    REQUIRE(send_socket_text(adminClient, "reload-config\n"));
+    const auto reloadResponse = read_text_protocol_response(adminClient);
+    CHECK(reloadResponse.first == "OK");
+
+    const int staleClient = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(staleClient, "auth token admin-token\n"));
+    const auto staleAuth = read_text_protocol_response(staleClient);
+    CHECK(staleAuth.first == "ERR");
+    ::close(staleClient);
+
+    const int newAdminClient = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(newAdminClient, "auth token new-admin-token\n"));
+    const auto newAuth = read_text_protocol_response(newAdminClient);
+    CHECK(newAuth.first == "OK");
+
+    REQUIRE(send_socket_text(newAdminClient, "install apply alpha\n"));
+    const auto readonlyResponse = read_text_protocol_response(newAdminClient);
+    CHECK(readonlyResponse.first == "ERR");
+    CHECK(readonlyResponse.second.find("readonly") != std::string::npos);
+
+    REQUIRE(send_socket_text(newAdminClient, "shutdown\n"));
+    const auto shutdownResponse = read_text_protocol_response(newAdminClient);
+    CHECK(shutdownResponse.first == "OK");
+
+    ::close(adminClient);
+    ::close(newAdminClient);
+}
+
+TEST_CASE("reqpack remote loads profile from default remote.lua and forwards command", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-profile"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = {\n"
+        "    url = 'tcp://127.0.0.1:" + std::to_string(port) + "',\n"
+        "    token = 'secret',\n"
+        "  },\n"
+        "}\n");
+
+    ServerProcess server(tempDir.path(), configPath, tempDir.path(), {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const int warmupClient = connect_with_retry("127.0.0.1", port);
+    ::close(warmupClient);
+
+    const std::string output = run_reqpack_with_home(tempDir.path(), configPath, tempDir.path(), {"remote", "dev", "list", "apply"});
+    CHECK(output.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+}
+
+TEST_CASE("reqpack remote preserves forwarded command flags after profile name", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-profile-flags"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = {\n"
+        "    host = '127.0.0.1',\n"
+        "    port = " + std::to_string(port) + ",\n"
+        "  },\n"
+        "}\n");
+
+    ServerProcess server(tempDir.path(), configPath, tempDir.path(), {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port)
+    }, logPath);
+
+    const int warmupClient = connect_with_retry("127.0.0.1", port);
+    ::close(warmupClient);
+
+    const std::string output = run_reqpack_with_home(tempDir.path(), configPath, tempDir.path(), {
+        "remote", "dev", "sbom", "apply", "sample", "--sbom-format", "json"
+    });
+    CHECK(output.find("\"packages\"") != std::string::npos);
+    CHECK(output.find("\"name\": \"sample\"") != std::string::npos);
+}
+
+TEST_CASE("reqpack remote uploads local install file over text protocol", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-upload"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = {\n"
+        "    url = 'tcp://127.0.0.1:" + std::to_string(port) + "',\n"
+        "    token = 'secret',\n"
+        "  },\n"
+        "}\n");
+
+    const std::filesystem::path uploadPath = tempDir.path() / "sample.pkg";
+    write_file(uploadPath, "payload-content");
+
+    ServerProcess server(tempDir.path(), configPath, tempDir.path(), {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const int warmupClient = connect_with_retry("127.0.0.1", port);
+    ::close(warmupClient);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "remote", "dev", "install", "apply", uploadPath.string()
+    }, status);
+    INFO(output);
+    CHECK(status == 0);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "local.txt").find("sample.pkg") != std::string::npos);
+}
+
+TEST_CASE("reqpack remote rejects file upload over json protocol", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-upload-json"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = {\n"
+        "    host = '127.0.0.1',\n"
+        "    port = " + std::to_string(port) + ",\n"
+        "    protocol = 'json',\n"
+        "    token = 'secret',\n"
+        "  },\n"
+        "}\n");
+
+    const std::filesystem::path uploadPath = tempDir.path() / "sample.pkg";
+    write_file(uploadPath, "payload-content");
+
+    ServerProcess server(tempDir.path(), configPath, tempDir.path(), {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret", "--json"
+    }, logPath);
+
+    const int warmupClient = connect_with_retry("127.0.0.1", port);
+    ::close(warmupClient);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "remote", "dev", "install", "apply", uploadPath.string()
+    }, status);
+    CHECK(status != 0);
+    CHECK(output.find("file upload requires text protocol") != std::string::npos);
+}
+
+TEST_CASE("reqpack remote upload respects readonly server mode", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-upload-readonly"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = {\n"
+        "    url = 'tcp://127.0.0.1:" + std::to_string(port) + "',\n"
+        "    token = 'secret',\n"
+        "  },\n"
+        "}\n");
+
+    const std::filesystem::path uploadPath = tempDir.path() / "sample.pkg";
+    write_file(uploadPath, "payload-content");
+
+    ServerProcess server(tempDir.path(), configPath, tempDir.path(), {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret", "--readonly"
+    }, logPath);
+
+    const int warmupClient = connect_with_retry("127.0.0.1", port);
+    ::close(warmupClient);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "remote", "dev", "install", "apply", uploadPath.string()
+    }, status);
+    CHECK(status != 0);
+    CHECK(output.find("readonly") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(pluginDirectory / "apply" / "state" / "local.txt"));
 }
