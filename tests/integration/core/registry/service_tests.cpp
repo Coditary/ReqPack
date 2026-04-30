@@ -88,10 +88,38 @@ TEST_CASE("registry scans plugin directory and exposes registered plugin names",
     registry.scanDirectory(config.registry.pluginDirectory);
 
     const std::vector<std::string> names = registry.getAvailableNames();
-    REQUIRE(names.size() == 1);
-    CHECK(names[0] == "valid");
+    REQUIRE(names.size() == 2);
+    CHECK(std::find(names.begin(), names.end(), "rq") != names.end());
+    CHECK(std::find(names.begin(), names.end(), "valid") != names.end());
     CHECK(registry.getState("valid") == PluginState::REGISTERED);
     CHECK(registry.getPlugin("valid") != nullptr);
+}
+
+TEST_CASE("registry exposes built-in rq and resolves rqp extension", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-built-in-rq"};
+    ReqPackConfig config = make_registry_test_config(tempDir.path());
+
+    Registry registry(config);
+
+    REQUIRE(registry.getPlugin("rq") != nullptr);
+    REQUIRE(registry.loadPlugin("rq"));
+    CHECK(registry.isLoaded("rq"));
+    CHECK(registry.resolveSystemForExtension(".rqp") == "rq");
+}
+
+TEST_CASE("registry ignores external rq plugin override", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-rq-override"};
+    ReqPackConfig config = make_registry_test_config(tempDir.path());
+
+    add_plugin_script(tempDir.path() / "plugins", "rq", VALID_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+
+    REQUIRE(registry.getPlugin("rq") != nullptr);
+    REQUIRE(registry.loadPlugin("rq"));
+    CHECK(registry.resolveSystemForExtension(".rqp") == "rq");
+    CHECK(registry.getPlugin("rq")->getName() == "ReqPack Native Package Manager");
 }
 
 TEST_CASE("registry loads valid plugin and resolves category lookup", "[integration][registry][service]") {

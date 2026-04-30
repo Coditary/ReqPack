@@ -28,6 +28,11 @@ bool is_existing_path(const std::string& value) {
 	return std::filesystem::exists(std::filesystem::path(value), error) && !error;
 }
 
+bool is_existing_regular_file(const std::string& value) {
+    std::error_code error;
+    return std::filesystem::is_regular_file(std::filesystem::path(value), error) && !error;
+}
+
 bool is_url(const std::string& value) {
     return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0;
 }
@@ -273,6 +278,16 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
     const std::set<std::string> known_systems = discover_systems(config);
     std::string current_system;
 
+    auto assign_local_target = [&](Request& request, const std::string& system, const std::string& path) -> bool {
+        if (!request.packages.empty() || (request.usesLocalTarget && request.localPath != path)) {
+            Logger::instance().err("install cannot mix local path and package names for system '" + system + "'");
+            return false;
+        }
+        request.localPath = path;
+        request.usesLocalTarget = true;
+        return true;
+    };
+
     auto ensure_request = [&](const std::string& system) -> Request& {
         const std::string normalized_system = to_lower(system);
         const auto [it, inserted] = request_index_by_system.emplace(normalized_system, requests.size());
@@ -315,12 +330,9 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         if (action == ActionType::INSTALL && is_url(argument)) {
             if (!current_system.empty()) {
                 Request& request = ensure_request(current_system);
-                if (!request.packages.empty() || (request.usesLocalTarget && request.localPath != argument)) {
-                    Logger::instance().err("install cannot mix local path and package names for system '" + current_system + "'");
+                if (!assign_local_target(request, current_system, argument)) {
                     return {};
                 }
-                request.localPath = argument;
-                request.usesLocalTarget = true;
             } else {
                 // No system known yet — system will be resolved from file extension at runtime.
                 Request urlRequest;
@@ -328,6 +340,22 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
                 urlRequest.localPath = argument;
                 urlRequest.usesLocalTarget = true;
                 requests.push_back(std::move(urlRequest));
+            }
+            continue;
+        }
+
+        if (action == ActionType::INSTALL && is_existing_regular_file(argument)) {
+            if (!current_system.empty()) {
+                Request& request = ensure_request(current_system);
+                if (!assign_local_target(request, current_system, argument)) {
+                    return {};
+                }
+            } else {
+                Request localRequest;
+                localRequest.action = action;
+                localRequest.localPath = argument;
+                localRequest.usesLocalTarget = true;
+                requests.push_back(std::move(localRequest));
             }
             continue;
         }
@@ -359,12 +387,9 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 
         Request& request = ensure_request(current_system);
 		if (action == ActionType::INSTALL && is_existing_path(argument)) {
-			if (!request.packages.empty() || (request.usesLocalTarget && request.localPath != argument)) {
-				Logger::instance().err("install cannot mix local path and package names for system '" + current_system + "'");
+			if (!assign_local_target(request, current_system, argument)) {
 				return {};
 			}
-			request.localPath = argument;
-			request.usesLocalTarget = true;
 			continue;
 		}
 		if (request.usesLocalTarget) {
@@ -853,6 +878,7 @@ std::optional<std::pair<std::string, std::string>> Cli::split_scoped_package(
 
 std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config) {
     std::set<std::string> systems;
+    systems.insert("rq");
     const std::filesystem::path directory = config.registry.pluginDirectory;
     RegistryDatabase registryDatabase(config);
 
@@ -887,6 +913,7 @@ std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config)
 
 std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {
     std::set<std::string> systems;
+    systems.insert("rq");
     const std::filesystem::path directory = config.registry.pluginDirectory;
     RegistryDatabase registryDatabase(config);
 

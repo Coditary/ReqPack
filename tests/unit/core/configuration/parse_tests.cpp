@@ -231,6 +231,13 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                 prettyPrint = false,
                 includeDependencyEdges = false,
             },
+            rq = {
+                repositories = {
+                    "https://packages.example.test/rq/index.json",
+                    "file:///srv/rq/index.json",
+                },
+                statePath = "~/rq-state",
+            },
         }
     )");
 
@@ -268,6 +275,11 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(std::filesystem::path(config.sbom.defaultOutputPath) == home / "sbom-out.json");
     CHECK_FALSE(config.sbom.prettyPrint);
     CHECK_FALSE(config.sbom.includeDependencyEdges);
+    CHECK(config.rq.repositories == std::vector<std::string>{
+        "https://packages.example.test/rq/index.json",
+        "file:///srv/rq/index.json",
+    });
+    CHECK(std::filesystem::path(config.rq.statePath) == home / "rq-state");
 }
 
 TEST_CASE("configuration falls back for missing or invalid lua config files", "[unit][configuration][load]") {

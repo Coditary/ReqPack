@@ -1,6 +1,7 @@
 #include <catch2/catch.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -233,6 +234,44 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().action == ActionType::INSTALL);
         CHECK(requests.front().system == "dnf");
         CHECK(requests.front().packages == std::vector<std::string>{"curl", "git"});
+    }
+
+    SECTION("local regular file before system resolution becomes local target") {
+        const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "reqpack-cli-local-target-test.rqp";
+        {
+            std::ofstream output(tempRoot, std::ios::binary);
+            REQUIRE(output.is_open());
+            output << "rqp";
+        }
+
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", tempRoot.string()}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::INSTALL);
+        CHECK(requests.front().usesLocalTarget);
+        CHECK(requests.front().localPath == tempRoot.string());
+        CHECK(requests.front().system.empty());
+
+        std::error_code error;
+        std::filesystem::remove(tempRoot, error);
+    }
+
+    SECTION("explicit rq with local file keeps rq system") {
+        const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "reqpack-cli-local-rq-test.rqp";
+        {
+            std::ofstream output(tempRoot, std::ios::binary);
+            REQUIRE(output.is_open());
+            output << "rqp";
+        }
+
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "rq", tempRoot.string()}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::INSTALL);
+        CHECK(requests.front().system == "rq");
+        CHECK(requests.front().usesLocalTarget);
+        CHECK(requests.front().localPath == tempRoot.string());
+
+        std::error_code error;
+        std::filesystem::remove(tempRoot, error);
     }
 
     SECTION("list without system targets all known systems") {

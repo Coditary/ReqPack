@@ -18,6 +18,7 @@ find_package(Lua REQUIRED)
 find_package(CLI11 REQUIRED)
 find_package(CURL REQUIRED)
 find_package(Boost REQUIRED)
+find_package(OpenSSL REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 
@@ -64,12 +65,14 @@ set(SOURCES
     src/main/cpp/plugins/exec_rules.cpp
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
+    src/main/cpp/plugins/rq_plugin.cpp
     src/main/cpp/core/configuration.cpp
     src/main/cpp/core/manifest_loader.cpp
     src/main/cpp/core/downloader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/rq_package.cpp
     src/main/cpp/core/transaction_database.cpp
     src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/orchestrator.cpp
@@ -130,9 +133,11 @@ add_executable(core_integration_tests
     src/main/cpp/plugins/exec_rules.cpp
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
+    src/main/cpp/plugins/rq_plugin.cpp
     src/main/cpp/core/configuration.cpp
     src/main/cpp/core/downloader.cpp
     src/main/cpp/core/downloader_core.cpp
+    src/main/cpp/core/rq_package.cpp
     src/main/cpp/core/registry.cpp
     src/main/cpp/core/transaction_database.cpp
     src/main/cpp/core/transaction_database_core.cpp
@@ -156,6 +161,7 @@ add_executable(core_unit_tests
     tests/unit/core/manifest_loader/core_tests.cpp
     tests/unit/core/planner/core_tests.cpp
     tests/unit/core/registry_database/core_tests.cpp
+    tests/unit/core/rq_package/core_tests.cpp
     tests/unit/core/osv/core_tests.cpp
     tests/unit/core/sbom/export_tests.cpp
     tests/unit/core/transaction_database/serialization_tests.cpp
@@ -170,6 +176,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/rq_package.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
     src/main/cpp/core/sbom_exporter.cpp
@@ -225,7 +232,9 @@ target_link_libraries(ReqPack PRIVATE
 	CLI11::CLI11
 	CURL::libcurl
 	lmdb
+	OpenSSL::Crypto
 	util
+	zstd
 	${LUA_LIBRARIES}
 	Boost::boost
 	spdlog::spdlog
@@ -251,7 +260,9 @@ target_link_libraries(core_unit_tests PRIVATE
     CLI11::CLI11
     CURL::libcurl
     lmdb
+    OpenSSL::Crypto
     util
+    zstd
     ${LUA_LIBRARIES}
     Boost::boost
     spdlog::spdlog
@@ -262,7 +273,9 @@ target_link_libraries(core_integration_tests PRIVATE
     Catch2::Catch2
     CURL::libcurl
     lmdb
+    OpenSSL::Crypto
     util
+    zstd
     ${LUA_LIBRARIES}
     Boost::boost
     spdlog::spdlog

@@ -94,24 +94,28 @@ void Orchestrator::run() {
 	// Temp files are tracked and deleted after execution.
 	std::vector<std::filesystem::path> tempFiles;
 	for (Request& request : this->requests) {
-		if (request.action != ActionType::INSTALL || !request.usesLocalTarget || !is_url(request.localPath)) {
+		if (request.action != ActionType::INSTALL || !request.usesLocalTarget) {
 			continue;
 		}
 
 		if (request.system.empty()) {
 			const std::string ext = file_extension(request.localPath);
 			if (ext.empty()) {
-				Logger::instance().err("cannot determine system for URL with no file extension: " + request.localPath +
-					"\nUse: ReqPack install <system> <url>");
+				Logger::instance().err("cannot determine system for local target with no file extension: " + request.localPath +
+					"\nUse: ReqPack install <system> <path>");
 				return;
 			}
 			const std::string resolved = this->registry->resolveSystemForExtension(ext);
 			if (resolved.empty()) {
 				Logger::instance().err("no plugin found for file extension '" + ext + "': " + request.localPath +
-					"\nUse: ReqPack install <system> <url>");
+					"\nUse: ReqPack install <system> <path>");
 				return;
 			}
 			request.system = resolved;
+		}
+
+		if (!is_url(request.localPath)) {
+			continue;
 		}
 
 		const std::string filename = url_filename(request.localPath);

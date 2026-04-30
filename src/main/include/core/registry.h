@@ -28,6 +28,7 @@ private:
     std::map<std::string, PluginState> m_states;
 
     void materializePluginScript(const RegistryRecord& record) const;
+    void registerBuiltInPlugins();
     bool ensurePluginConstructed(const std::string& name);
 
 public:

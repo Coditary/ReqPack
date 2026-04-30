@@ -156,6 +156,11 @@ struct SbomConfig {
     bool includeDependencyEdges{true};
 };
 
+struct RqConfig {
+    std::vector<std::string> repositories{};
+    std::string statePath{"~/.reqpack/rq/state"};
+};
+
 struct HistoryConfig {
     // Controls history.jsonl – the append-only event log.
     bool enabled{true};
@@ -209,6 +214,7 @@ struct ReqPackConfig {
     InteractionConfig interaction{};
     RemoteConfig remote{};
     SbomConfig sbom{};
+    RqConfig rq{};
     HistoryConfig history{};
     DisplayConfig display{};
 

@@ -90,8 +90,99 @@ std::filesystem::path write_config(const std::filesystem::path& root, const std:
         "  interaction = {\n"
         "    interactive = false,\n"
         "  },\n"
+        "  rq = {\n"
+        "    statePath = '" + (root / "rq-state").string() + "',\n"
+        "  },\n"
         "}\n");
     return configPath;
+}
+
+std::filesystem::path build_rqp_package(
+    const std::filesystem::path& root,
+    const std::string& name,
+    const std::string& installLua,
+    const std::optional<std::pair<std::string, std::string>>& payloadFile = std::nullopt
+) {
+    const std::filesystem::path packageRoot = root / (name + "-pkg");
+    const std::filesystem::path payloadRoot = packageRoot / "payload-tree";
+    const std::filesystem::path controlRoot = packageRoot / "control";
+    std::filesystem::create_directories(controlRoot / "scripts");
+    std::filesystem::create_directories(controlRoot / "hashes");
+    std::filesystem::create_directories(controlRoot / "payload");
+
+    if (payloadFile.has_value()) {
+        const std::filesystem::path payloadPath = payloadRoot / payloadFile->first;
+        write_file(payloadPath, payloadFile->second);
+        const std::string payloadTar = (controlRoot / "payload" / "payload.tar").string();
+        const std::string payloadTarZst = (controlRoot / "payload" / "payload.tar.zst").string();
+        const std::string tarCommand = "tar -C " + escape_shell_arg(payloadRoot.string()) + " -cf " + escape_shell_arg(payloadTar) + " .";
+        REQUIRE(std::system(tarCommand.c_str()) == 0);
+        const std::string zstdCommand = "zstd -q -f " + escape_shell_arg(payloadTar) + " -o " + escape_shell_arg(payloadTarZst);
+        REQUIRE(std::system(zstdCommand.c_str()) == 0);
+        const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(payloadTarZst));
+        const std::size_t pos = hashOutput.rfind(' ');
+        REQUIRE(pos != std::string::npos);
+        write_file(controlRoot / "hashes" / "payload.sha256", hashOutput.substr(pos + 1, 64) + "  payload/payload.tar.zst\n");
+        std::error_code removeError;
+        std::filesystem::remove(controlRoot / "payload" / "payload.tar", removeError);
+    }
+
+    const std::string metadata = payloadFile.has_value()
+        ? "{\n"
+          "  \"formatVersion\": 1,\n"
+          "  \"name\": \"" + name + "\",\n"
+          "  \"version\": \"1.0.0\",\n"
+          "  \"release\": 1,\n"
+          "  \"revision\": 0,\n"
+          "  \"summary\": \"test package\",\n"
+          "  \"description\": \"integration test package\",\n"
+          "  \"license\": \"MIT\",\n"
+          "  \"architecture\": \"noarch\",\n"
+          "  \"vendor\": \"ReqPack Tests\",\n"
+          "  \"maintainerEmail\": \"tests@example.org\",\n"
+          "  \"tags\": [\"test\"],\n"
+          "  \"url\": \"https://example.test/" + name + ".rqp\",\n"
+          "  \"payload\": {\n"
+          "    \"path\": \"payload/payload.tar.zst\",\n"
+          "    \"archive\": \"tar\",\n"
+          "    \"compression\": \"zstd\",\n"
+          "    \"hashAlgorithm\": \"sha256\",\n"
+          "    \"hashFile\": \"hashes/payload.sha256\",\n"
+          "    \"sizeCompressed\": 0,\n"
+          "    \"sizeInstalledExpected\": 0\n"
+          "  }\n"
+          "}\n"
+        : "{\n"
+          "  \"formatVersion\": 1,\n"
+          "  \"name\": \"" + name + "\",\n"
+          "  \"version\": \"1.0.0\",\n"
+          "  \"release\": 1,\n"
+          "  \"revision\": 0,\n"
+          "  \"summary\": \"test package\",\n"
+          "  \"description\": \"integration test package\",\n"
+          "  \"license\": \"MIT\",\n"
+          "  \"architecture\": \"noarch\",\n"
+          "  \"vendor\": \"ReqPack Tests\",\n"
+          "  \"maintainerEmail\": \"tests@example.org\",\n"
+          "  \"tags\": [\"test\"],\n"
+          "  \"url\": \"https://example.test/" + name + ".rqp\"\n"
+          "}\n";
+
+    write_file(controlRoot / "metadata.json", metadata);
+    write_file(controlRoot / "reqpack.lua", R"(
+return {
+  apiVersion = 1,
+  hooks = {
+    install = "scripts/install.lua"
+  }
+}
+)");
+    write_file(controlRoot / "scripts" / "install.lua", installLua);
+
+    const std::filesystem::path packagePath = root / (name + ".rqp");
+    const std::string tarCommand = "tar -C " + escape_shell_arg(controlRoot.string()) + " -cf " + escape_shell_arg(packagePath.string()) + " .";
+    REQUIRE(std::system(tarCommand.c_str()) == 0);
+    return packagePath;
 }
 
 std::filesystem::path write_remote_profiles(const std::filesystem::path& root, const std::string& content) {
@@ -475,6 +566,28 @@ TEST_CASE("orchestrator install command plans validates and executes plugin inst
     const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
     REQUIRE(std::filesystem::exists(installMarker));
     CHECK(read_file(installMarker) == "sample");
+}
+
+TEST_CASE("orchestrator install local rqp resolves to built-in rq by extension", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-rqp"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path localPackage = build_rqp_package(
+        tempDir.path(),
+        "artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-rqp"))
+    );
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", localPackage.string()});
+    const std::filesystem::path stateDir = tempDir.path() / "rq-state" / "artifact" / "artifact@1.0.0-1+r0";
+
+    CHECK(output.find("INSTALL: rq:local") != std::string::npos);
+    CHECK(output.find("1 ok") != std::string::npos);
+    CHECK(std::filesystem::exists(stateDir / "installed.txt"));
+    CHECK(std::filesystem::exists(stateDir / "metadata.json"));
+    CHECK(std::filesystem::exists(stateDir / "reqpack.lua"));
+    CHECK(std::filesystem::exists(stateDir / "manifest.json"));
 }
 
 TEST_CASE("orchestrator sbom command exports planned graph without executing plugin install", "[integration][orchestrator][service]") {

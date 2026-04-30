@@ -1,4 +1,5 @@
 #include "core/registry.h"
+#include "plugins/rq_plugin.h"
 #include "plugins/lua_bridge.h"
 
 #include <algorithm>
@@ -7,6 +8,8 @@
 #include <fstream>
 
 namespace {
+
+constexpr const char* BUILTIN_RQ_PLUGIN_ID = "rq";
 
 void remove_directory_contents(const std::filesystem::path& directory) {
     std::error_code error;
@@ -74,7 +77,18 @@ void copy_directory_contents(const std::filesystem::path& source, const std::fil
 
 }  // namespace
 
-Registry::Registry(const ReqPackConfig& config) : config(config), database(config) {}
+Registry::Registry(const ReqPackConfig& config) : config(config), database(config) {
+    registerBuiltInPlugins();
+}
+
+void Registry::registerBuiltInPlugins() {
+    if (!m_plugins.contains(BUILTIN_RQ_PLUGIN_ID)) {
+        m_plugins[BUILTIN_RQ_PLUGIN_ID] = std::make_unique<RqPlugin>(this->config);
+    }
+    if (!m_states.contains(BUILTIN_RQ_PLUGIN_ID)) {
+        m_states[BUILTIN_RQ_PLUGIN_ID] = PluginState::REGISTERED;
+    }
+}
 
 bool Registry::ensurePluginConstructed(const std::string& name) {
     const std::string resolvedName = this->resolvePluginName(name);
@@ -107,6 +121,10 @@ std::string Registry::resolvePluginName(const std::string& name) const {
     std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
+
+    if (normalized == BUILTIN_RQ_PLUGIN_ID) {
+        return normalized;
+    }
 
     if (const std::optional<RegistryRecord> record = this->database.getRecord(normalized)) {
         if (record->alias && !record->source.empty()) {
@@ -153,6 +171,10 @@ std::vector<std::string> Registry::getKnownPluginNames() {
 }
 
 void Registry::materializePluginScript(const RegistryRecord& record) const {
+    if (record.name == BUILTIN_RQ_PLUGIN_ID) {
+        return;
+    }
+
     if (record.script.empty()) {
         return;
     }
@@ -205,6 +227,9 @@ void Registry::scanDirectory(const std::string& path) {
         }
 
         std::string id = filePath.stem().string();
+		if (id == BUILTIN_RQ_PLUGIN_ID) {
+			continue;
+		}
 		m_pluginPaths[id] = filePath.string();
 		if (m_states.find(id) == m_states.end() || m_states[id] == PluginState::NOT_FOUND) {
 			m_states[id] = PluginState::REGISTERED;
@@ -214,6 +239,28 @@ void Registry::scanDirectory(const std::string& path) {
 
 bool Registry::loadPlugin(const std::string& name) {
     const std::string resolvedName = this->resolvePluginName(name);
+    if (resolvedName == BUILTIN_RQ_PLUGIN_ID) {
+        if (!this->ensurePluginConstructed(resolvedName)) {
+            return false;
+        }
+        if (m_plugins.find(resolvedName) == m_plugins.end()) return false;
+        if (m_states[resolvedName] == PluginState::ACTIVE) return true;
+        if (m_states[resolvedName] == PluginState::FAILED) return false;
+
+        if (m_plugins[resolvedName]->getInterfaceVersion() != REQPACK_API_VERSION) {
+            m_states[resolvedName] = PluginState::FAILED;
+            return false;
+        }
+
+        if (m_plugins[resolvedName]->init()) {
+            m_states[resolvedName] = PluginState::ACTIVE;
+            return true;
+        }
+
+        m_states[resolvedName] = PluginState::FAILED;
+        return false;
+    }
+
     if (m_pluginPaths.find(resolvedName) == m_pluginPaths.end()) {
         if (const std::optional<RegistryRecord> record = this->database.resolveRecord(resolvedName)) {
             this->materializePluginScript(record.value());
@@ -265,7 +312,7 @@ IPlugin* Registry::getPlugin(const std::string& name) {
 
 std::vector<std::string> Registry::findByCategory(const std::string& category) const {
     std::vector<std::string> found;
-    for (const auto& [name, _] : m_pluginPaths) {
+    for (const std::string& name : this->getAvailableNames()) {
         IPlugin* plugin = const_cast<Registry*>(this)->getPlugin(name);
         if (plugin == nullptr) {
             continue;
@@ -297,14 +344,19 @@ Registry::~Registry() {
 
 std::vector<std::string> Registry::getAvailableNames() const {
     std::vector<std::string> names;
+    for (const auto& [name, _] : m_plugins) {
+        names.push_back(name);
+    }
     for (const auto& [name, _] : m_pluginPaths) {
         names.push_back(name);
     }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
     return names;
 }
 
 std::string Registry::resolveSystemForExtension(const std::string& extension) const {
-    for (const auto& [name, _] : m_pluginPaths) {
+    for (const std::string& name : this->getAvailableNames()) {
         IPlugin* plugin = const_cast<Registry*>(this)->getPlugin(name);
         if (plugin == nullptr) {
             continue;
