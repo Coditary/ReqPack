@@ -156,9 +156,9 @@ struct SbomConfig {
     bool includeDependencyEdges{true};
 };
 
-struct RqConfig {
+struct RqpConfig {
     std::vector<std::string> repositories{};
-    std::string statePath{"~/.reqpack/rq/state"};
+    std::string statePath{"~/.reqpack/rqp/state"};
 };
 
 struct HistoryConfig {
@@ -214,7 +214,7 @@ struct ReqPackConfig {
     InteractionConfig interaction{};
     RemoteConfig remote{};
     SbomConfig sbom{};
-    RqConfig rq{};
+    RqpConfig rqp{};
     HistoryConfig history{};
     DisplayConfig display{};
 

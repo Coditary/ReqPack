@@ -4,7 +4,11 @@
 
 #include "core/configuration.h"
 #include "core/rq_package.h"
+#include "core/rq_repository.h"
+#include "core/rqp_state_store.h"
 
+#include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -38,10 +42,45 @@ public:
     std::vector<PackageInfo> outdated(const PluginCallContext& context) override;
     std::vector<PackageInfo> search(const PluginCallContext& context, const std::string& prompt) override;
     PackageInfo info(const PluginCallContext& context, const std::string& packageName) override;
+    std::vector<PluginEventRecord> takeRecentEvents() override;
 
 private:
+    struct ManifestEntry {
+        std::string type;
+        std::string path;
+    };
+
     ReqPackConfig config_{};
+    std::vector<PluginEventRecord> recentEvents_{};
+    mutable std::vector<ManifestEntry> pendingManifest_{};
+    bool installPackagePath(
+        const PluginCallContext& context,
+        const std::filesystem::path& path,
+        const std::string& sourceType,
+        const std::string& sourceValue,
+        const std::string& repository = {}
+    );
+    bool installResolvedPackage(const PluginCallContext& context, const Package& package, const RqRepositoryPackage& resolvedPackage);
+    bool removeInstalledPackage(const PluginCallContext& context, const RqpInstalledPackage& installed);
     bool runHook(const PluginCallContext& context, const RqPackageLayout& layout, const std::string& hookKey) const;
-    bool persistInstalledState(const RqPackageLayout& layout) const;
+    bool runInstalledHook(const PluginCallContext& context, const RqpInstalledPackage& installed, const std::string& hookKey) const;
+    bool persistInstalledState(
+        const RqPackageLayout& layout,
+        const std::string& sourceType,
+        const std::string& sourceValue,
+        const std::string& repository = {}
+    ) const;
+    bool removeManifestArtifacts(const RqpInstalledPackage& installed) const;
+    static std::vector<ManifestEntry> parseManifestJson(const std::string& content);
+    static std::string manifestJson(const std::vector<ManifestEntry>& manifest);
+    static PackageInfo packageInfoFromInstalled(const RqpInstalledPackage& installed);
+    static std::string installedVersionString(const RqMetadata& metadata);
+    static int compareInstalledVersions(const RqpInstalledPackage& left, const RqpInstalledPackage& right);
+    static bool repositoryCandidateIsNewer(const RqpInstalledPackage& installed, const RqRepositoryPackage& candidate);
+    std::vector<RqRepositoryIndex> loadRepositoryIndexes(const PluginCallContext& context) const;
+    static std::string readTextFile(const std::filesystem::path& path);
+    static std::string sha256Hex(const std::string& bytes);
+    static std::filesystem::path localPathForUrl(const std::string& url);
+    static std::filesystem::path downloadPackageArtifact(const PluginCallContext& context, const std::string& url);
     bool initialized_{false};
 };

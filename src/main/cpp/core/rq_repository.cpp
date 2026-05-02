@@ -1,6 +1,7 @@
 #include "core/rq_repository.h"
 
 #include "core/rq_package.h"
+#include "core/version_compare.h"
 
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
@@ -72,6 +73,10 @@ bool is_valid_sha256(const std::string& value) {
 }
 
 bool is_better_candidate(const RqRepositoryPackage& candidate, const RqRepositoryPackage& currentBest) {
+    const int versionComparison = version_compare_values(candidate.version, currentBest.version);
+    if (versionComparison != 0) {
+        return versionComparison > 0;
+    }
     if (candidate.release != currentBest.release) {
         return candidate.release > currentBest.release;
     }
@@ -86,12 +91,12 @@ bool is_better_candidate(const RqRepositoryPackage& candidate, const RqRepositor
 RqRepositoryIndex rq_repository_parse_index(const std::string& content, const std::string& source) {
     const std::optional<ptree> parsed = parse_json_tree(content);
     if (!parsed.has_value()) {
-        throw std::runtime_error("invalid rq repository index json");
+        throw std::runtime_error("invalid rqp repository index json");
     }
 
     const ptree& tree = parsed.value();
     if (tree.get<int>("schemaVersion", 0) != 1) {
-        throw std::runtime_error("unsupported rq repository schemaVersion");
+        throw std::runtime_error("unsupported rqp repository schemaVersion");
     }
 
     RqRepositoryIndex index;

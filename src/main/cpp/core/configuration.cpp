@@ -603,13 +603,13 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         config.sbom.defaultOutputPath = expand_user_path(config.sbom.defaultOutputPath).string();
     }
 
-    const sol::optional<sol::table> rq = root["rq"];
-    if (rq.has_value()) {
-        config.rq.repositories = load_string_array(rq.value()["repositories"]);
-        assign_if_present(rq.value(), "statePath", config.rq.statePath);
+    const sol::optional<sol::table> rqp = root["rqp"];
+    if (rqp.has_value()) {
+        config.rqp.repositories = load_string_array(rqp.value()["repositories"]);
+        assign_if_present(rqp.value(), "statePath", config.rqp.statePath);
     }
-    if (!config.rq.statePath.empty()) {
-        config.rq.statePath = expand_user_path(config.rq.statePath).string();
+    if (!config.rqp.statePath.empty()) {
+        config.rqp.statePath = expand_user_path(config.rqp.statePath).string();
     }
 
     const sol::optional<sol::table> history = root["history"];

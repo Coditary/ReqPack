@@ -255,23 +255,32 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         std::filesystem::remove(tempRoot, error);
     }
 
-    SECTION("explicit rq with local file keeps rq system") {
-        const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "reqpack-cli-local-rq-test.rqp";
+    SECTION("explicit rqp with local file keeps rqp system") {
+        const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "reqpack-cli-local-rqp-test.rqp";
         {
             std::ofstream output(tempRoot, std::ios::binary);
             REQUIRE(output.is_open());
             output << "rqp";
         }
 
-        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "rq", tempRoot.string()}, config);
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "rqp", tempRoot.string()}, config);
         REQUIRE(requests.size() == 1);
         CHECK(requests.front().action == ActionType::INSTALL);
-        CHECK(requests.front().system == "rq");
+        CHECK(requests.front().system == "rqp");
         CHECK(requests.front().usesLocalTarget);
         CHECK(requests.front().localPath == tempRoot.string());
 
         std::error_code error;
         std::filesystem::remove(tempRoot, error);
+    }
+
+    SECTION("scoped rqp package keeps rqp system and versioned package") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "rqp:tool@1.2.3"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::INSTALL);
+        CHECK(requests.front().system == "rqp");
+        CHECK(requests.front().packages == std::vector<std::string>{"tool@1.2.3"});
+        CHECK_FALSE(requests.front().usesLocalTarget);
     }
 
     SECTION("list without system targets all known systems") {

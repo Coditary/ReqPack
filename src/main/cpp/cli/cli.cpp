@@ -878,7 +878,7 @@ std::optional<std::pair<std::string, std::string>> Cli::split_scoped_package(
 
 std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config) {
     std::set<std::string> systems;
-    systems.insert("rq");
+    systems.insert("rqp");
     const std::filesystem::path directory = config.registry.pluginDirectory;
     RegistryDatabase registryDatabase(config);
 
@@ -913,7 +913,7 @@ std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config)
 
 std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {
     std::set<std::string> systems;
-    systems.insert("rq");
+    systems.insert("rqp");
     const std::filesystem::path directory = config.registry.pluginDirectory;
     RegistryDatabase registryDatabase(config);
 

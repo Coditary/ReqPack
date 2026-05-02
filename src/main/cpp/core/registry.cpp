@@ -9,7 +9,7 @@
 
 namespace {
 
-constexpr const char* BUILTIN_RQ_PLUGIN_ID = "rq";
+constexpr const char* BUILTIN_RQ_PLUGIN_ID = "rqp";
 
 void remove_directory_contents(const std::filesystem::path& directory) {
     std::error_code error;

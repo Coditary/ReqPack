@@ -89,37 +89,37 @@ TEST_CASE("registry scans plugin directory and exposes registered plugin names",
 
     const std::vector<std::string> names = registry.getAvailableNames();
     REQUIRE(names.size() == 2);
-    CHECK(std::find(names.begin(), names.end(), "rq") != names.end());
+    CHECK(std::find(names.begin(), names.end(), "rqp") != names.end());
     CHECK(std::find(names.begin(), names.end(), "valid") != names.end());
     CHECK(registry.getState("valid") == PluginState::REGISTERED);
     CHECK(registry.getPlugin("valid") != nullptr);
 }
 
-TEST_CASE("registry exposes built-in rq and resolves rqp extension", "[integration][registry][service]") {
-    TempDir tempDir{"reqpack-registry-built-in-rq"};
+TEST_CASE("registry exposes built-in rqp and resolves rqp extension", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-built-in-rqp"};
     ReqPackConfig config = make_registry_test_config(tempDir.path());
 
     Registry registry(config);
 
-    REQUIRE(registry.getPlugin("rq") != nullptr);
-    REQUIRE(registry.loadPlugin("rq"));
-    CHECK(registry.isLoaded("rq"));
-    CHECK(registry.resolveSystemForExtension(".rqp") == "rq");
+    REQUIRE(registry.getPlugin("rqp") != nullptr);
+    REQUIRE(registry.loadPlugin("rqp"));
+    CHECK(registry.isLoaded("rqp"));
+    CHECK(registry.resolveSystemForExtension(".rqp") == "rqp");
 }
 
-TEST_CASE("registry ignores external rq plugin override", "[integration][registry][service]") {
-    TempDir tempDir{"reqpack-registry-rq-override"};
+TEST_CASE("registry ignores external rqp plugin override", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-rqp-override"};
     ReqPackConfig config = make_registry_test_config(tempDir.path());
 
-    add_plugin_script(tempDir.path() / "plugins", "rq", VALID_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "rqp", VALID_PLUGIN);
 
     Registry registry(config);
     registry.scanDirectory(config.registry.pluginDirectory);
 
-    REQUIRE(registry.getPlugin("rq") != nullptr);
-    REQUIRE(registry.loadPlugin("rq"));
-    CHECK(registry.resolveSystemForExtension(".rqp") == "rq");
-    CHECK(registry.getPlugin("rq")->getName() == "ReqPack Native Package Manager");
+    REQUIRE(registry.getPlugin("rqp") != nullptr);
+    REQUIRE(registry.loadPlugin("rqp"));
+    CHECK(registry.resolveSystemForExtension(".rqp") == "rqp");
+    CHECK(registry.getPlugin("rqp")->getName() == "ReqPack Native Package Manager");
 }
 
 TEST_CASE("registry loads valid plugin and resolves category lookup", "[integration][registry][service]") {

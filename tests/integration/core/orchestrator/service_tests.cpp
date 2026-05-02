@@ -90,8 +90,48 @@ std::filesystem::path write_config(const std::filesystem::path& root, const std:
         "  interaction = {\n"
         "    interactive = false,\n"
         "  },\n"
-        "  rq = {\n"
-        "    statePath = '" + (root / "rq-state").string() + "',\n"
+        "  rqp = {\n"
+        "    statePath = '" + (root / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+    return configPath;
+}
+
+std::filesystem::path write_config_with_rq_repositories(
+    const std::filesystem::path& root,
+    const std::filesystem::path& pluginDirectory,
+    const std::vector<std::string>& repositories
+) {
+    const std::filesystem::path configPath = root / "config.lua";
+    std::string repositoryList = "";
+    for (const std::string& repository : repositories) {
+        repositoryList += "      '" + repository + "',\n";
+    }
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (root / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (root / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (root / "rqp-state").string() + "',\n"
+        "    repositories = {\n" + repositoryList +
+        "    },\n"
         "  },\n"
         "}\n");
     return configPath;
@@ -101,7 +141,9 @@ std::filesystem::path build_rqp_package(
     const std::filesystem::path& root,
     const std::string& name,
     const std::string& installLua,
-    const std::optional<std::pair<std::string, std::string>>& payloadFile = std::nullopt
+    const std::optional<std::pair<std::string, std::string>>& payloadFile = std::nullopt,
+    const std::optional<std::string>& overrideHash = std::nullopt,
+    const std::string& version = "1.0.0"
 ) {
     const std::filesystem::path packageRoot = root / (name + "-pkg");
     const std::filesystem::path payloadRoot = packageRoot / "payload-tree";
@@ -119,10 +161,14 @@ std::filesystem::path build_rqp_package(
         REQUIRE(std::system(tarCommand.c_str()) == 0);
         const std::string zstdCommand = "zstd -q -f " + escape_shell_arg(payloadTar) + " -o " + escape_shell_arg(payloadTarZst);
         REQUIRE(std::system(zstdCommand.c_str()) == 0);
-        const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(payloadTarZst));
-        const std::size_t pos = hashOutput.rfind(' ');
-        REQUIRE(pos != std::string::npos);
-        write_file(controlRoot / "hashes" / "payload.sha256", hashOutput.substr(pos + 1, 64) + "  payload/payload.tar.zst\n");
+        std::string hash = overrideHash.value_or({});
+        if (!overrideHash.has_value()) {
+            const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(payloadTarZst));
+            const std::size_t pos = hashOutput.rfind(' ');
+            REQUIRE(pos != std::string::npos);
+            hash = hashOutput.substr(pos + 1, 64);
+        }
+        write_file(controlRoot / "hashes" / "payload.sha256", hash + "  payload/payload.tar.zst\n");
         std::error_code removeError;
         std::filesystem::remove(controlRoot / "payload" / "payload.tar", removeError);
     }
@@ -131,7 +177,7 @@ std::filesystem::path build_rqp_package(
         ? "{\n"
           "  \"formatVersion\": 1,\n"
           "  \"name\": \"" + name + "\",\n"
-          "  \"version\": \"1.0.0\",\n"
+          "  \"version\": \"" + version + "\",\n"
           "  \"release\": 1,\n"
           "  \"revision\": 0,\n"
           "  \"summary\": \"test package\",\n"
@@ -155,7 +201,7 @@ std::filesystem::path build_rqp_package(
         : "{\n"
           "  \"formatVersion\": 1,\n"
           "  \"name\": \"" + name + "\",\n"
-          "  \"version\": \"1.0.0\",\n"
+          "  \"version\": \"" + version + "\",\n"
           "  \"release\": 1,\n"
           "  \"revision\": 0,\n"
           "  \"summary\": \"test package\",\n"
@@ -183,6 +229,40 @@ return {
     const std::string tarCommand = "tar -C " + escape_shell_arg(controlRoot.string()) + " -cf " + escape_shell_arg(packagePath.string()) + " .";
     REQUIRE(std::system(tarCommand.c_str()) == 0);
     return packagePath;
+}
+
+std::string sha256_file_hex(const std::filesystem::path& path) {
+    const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(path.string()));
+    const std::size_t pos = hashOutput.rfind(' ');
+    REQUIRE(pos != std::string::npos);
+    return hashOutput.substr(pos + 1, 64);
+}
+
+std::filesystem::path write_rq_repository_index(
+    const std::filesystem::path& root,
+    const std::string& packageName,
+    const std::string& packageVersion,
+    const std::filesystem::path& artifactPath,
+    const std::optional<std::string>& packageSha256 = std::nullopt
+) {
+    const std::filesystem::path indexPath = root / "index.json";
+    write_file(indexPath,
+        "{\n"
+        "  \"schemaVersion\": 1,\n"
+        "  \"packages\": [\n"
+        "    {\n"
+        "      \"name\": \"" + packageName + "\",\n"
+        "      \"version\": \"" + packageVersion + "\",\n"
+        "      \"release\": 1,\n"
+        "      \"revision\": 0,\n"
+        "      \"architecture\": \"noarch\",\n"
+        "      \"summary\": \"repo package\",\n"
+        "      \"url\": \"file://" + artifactPath.string() + "\""
+        + (packageSha256.has_value() ? ",\n      \"packageSha256\": \"" + packageSha256.value() + "\"\n" : "\n") +
+        "    }\n"
+        "  ]\n"
+        "}\n");
+    return indexPath;
 }
 
 std::filesystem::path write_remote_profiles(const std::filesystem::path& root, const std::string& content) {
@@ -568,7 +648,7 @@ TEST_CASE("orchestrator install command plans validates and executes plugin inst
     CHECK(read_file(installMarker) == "sample");
 }
 
-TEST_CASE("orchestrator install local rqp resolves to built-in rq by extension", "[integration][orchestrator][service]") {
+TEST_CASE("orchestrator install local rqp resolves to built-in rqp by extension", "[integration][orchestrator][service]") {
     TempDir tempDir{"reqpack-orchestrator-install-rqp"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
     const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
@@ -580,14 +660,197 @@ TEST_CASE("orchestrator install local rqp resolves to built-in rq by extension",
     );
 
     const std::string output = run_reqpack(tempDir.path(), configPath, {"install", localPackage.string()});
-    const std::filesystem::path stateDir = tempDir.path() / "rq-state" / "artifact" / "artifact@1.0.0-1+r0";
+    const std::filesystem::path stateDir = tempDir.path() / "rqp-state" / "artifact" / "artifact@1.0.0-1+r0";
+    INFO(output);
 
-    CHECK(output.find("INSTALL: rq:local") != std::string::npos);
+    CHECK(output.find("INSTALL: rqp:local") != std::string::npos);
     CHECK(output.find("1 ok") != std::string::npos);
     CHECK(std::filesystem::exists(stateDir / "installed.txt"));
     CHECK(std::filesystem::exists(stateDir / "metadata.json"));
     CHECK(std::filesystem::exists(stateDir / "reqpack.lua"));
     CHECK(std::filesystem::exists(stateDir / "manifest.json"));
+}
+
+TEST_CASE("orchestrator install named rqp package resolves from repository index", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-rqp-repo"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path artifactPath = build_rqp_package(
+        tempDir.path(),
+        "repo-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-from-repo"))
+    );
+    const std::filesystem::path indexPath = write_rq_repository_index(
+        tempDir.path(),
+        "repo-artifact",
+        "1.0.0",
+        artifactPath,
+        sha256_file_hex(artifactPath)
+    );
+    const std::filesystem::path configPath = write_config_with_rq_repositories(
+        tempDir.path(),
+        pluginDirectory,
+        {"file://" + indexPath.string()}
+    );
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "rqp:repo-artifact@1.0.0"});
+    const std::filesystem::path stateDir = tempDir.path() / "rqp-state" / "repo-artifact" / "repo-artifact@1.0.0-1+r0";
+
+    CHECK(output.find("INSTALL: rqp:repo-artifact") != std::string::npos);
+    CHECK(output.find("1 ok") != std::string::npos);
+    CHECK(std::filesystem::exists(stateDir / "installed.txt"));
+    CHECK(read_file(stateDir / "installed.txt") == "hello-from-repo");
+    CHECK(read_file(stateDir / "source.json").find("\"source\": \"repository\"") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install rqp package aborts on repository artifact hash mismatch", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-rqp-repo-bad-hash"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path artifactPath = build_rqp_package(
+        tempDir.path(),
+        "repo-bad-hash",
+        "return true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-from-repo"))
+    );
+    const std::filesystem::path indexPath = write_rq_repository_index(
+        tempDir.path(),
+        "repo-bad-hash",
+        "1.0.0",
+        artifactPath,
+        std::string(64, 'a')
+    );
+    const std::filesystem::path configPath = write_config_with_rq_repositories(
+        tempDir.path(),
+        pluginDirectory,
+        {"file://" + indexPath.string()}
+    );
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "rqp", "repo-bad-hash@1.0.0"});
+    const std::filesystem::path stateDir = tempDir.path() / "rqp-state" / "repo-bad-hash" / "repo-bad-hash@1.0.0-1+r0";
+
+    CHECK(output.find("rqp:repo-bad-hash") != std::string::npos);
+    CHECK(output.find("repository package sha256 mismatch") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(stateDir));
+}
+
+TEST_CASE("orchestrator list and info read installed rqp state", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-rqp-list-info"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path localPackage = build_rqp_package(
+        tempDir.path(),
+        "listed-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-list"))
+    );
+
+    (void)run_reqpack(tempDir.path(), configPath, {"install", localPackage.string()});
+
+    const std::string listOutput = run_reqpack(tempDir.path(), configPath, {"list", "rqp"});
+    const std::string infoOutput = run_reqpack(tempDir.path(), configPath, {"info", "rqp", "listed-artifact"});
+
+    CHECK(listOutput.find("listed-artifact 1.0.0-1+r0 - test package") != std::string::npos);
+    CHECK(infoOutput.find("listed-artifact 1.0.0-1+r0 - test package") != std::string::npos);
+}
+
+TEST_CASE("orchestrator remove rqp package deletes state and artifacts", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-rqp-remove"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path localPackage = build_rqp_package(
+        tempDir.path(),
+        "removable-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\ncontext.artifacts.register_file(out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-remove"))
+    );
+    const std::filesystem::path stateDir = tempDir.path() / "rqp-state" / "removable-artifact" / "removable-artifact@1.0.0-1+r0";
+
+    (void)run_reqpack(tempDir.path(), configPath, {"install", localPackage.string()});
+    REQUIRE(std::filesystem::exists(stateDir / "installed.txt"));
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"remove", "rqp", "removable-artifact@1.0.0"});
+
+    CHECK(output.find("REMOVE: rqp:removable-artifact") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(stateDir));
+}
+
+TEST_CASE("orchestrator update rqp package no-ops for local source", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-rqp-update-local-noop"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path localPackage = build_rqp_package(
+        tempDir.path(),
+        "local-only-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-local"))
+    );
+    const std::filesystem::path stateDir = tempDir.path() / "rqp-state" / "local-only-artifact" / "local-only-artifact@1.0.0-1+r0";
+
+    (void)run_reqpack(tempDir.path(), configPath, {"install", localPackage.string()});
+    REQUIRE(std::filesystem::exists(stateDir / "installed.txt"));
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"update", "rqp", "local-only-artifact"});
+
+    CHECK((output.find("0 ok") != std::string::npos || output.find("0 fail") != std::string::npos));
+    CHECK(read_file(stateDir / "installed.txt") == "hello-local");
+}
+
+TEST_CASE("orchestrator update rqp package installs newer repository version", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-rqp-update-repo"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path artifactV1 = build_rqp_package(
+        tempDir.path() / "v1",
+        "updatable-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\ncontext.artifacts.register_file(out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-v1"))
+    );
+    const std::filesystem::path artifactV2 = build_rqp_package(
+        tempDir.path() / "v2",
+        "updatable-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\ncontext.artifacts.register_file(out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-v2")),
+        std::nullopt,
+        "1.1.0"
+    );
+    const std::filesystem::path indexPath = tempDir.path() / "index.json";
+    write_file(indexPath,
+        "{\n"
+        "  \"schemaVersion\": 1,\n"
+        "  \"packages\": [\n"
+        "    {\n"
+        "      \"name\": \"updatable-artifact\",\n"
+        "      \"version\": \"1.0.0\",\n"
+        "      \"release\": 1,\n"
+        "      \"revision\": 0,\n"
+        "      \"architecture\": \"noarch\",\n"
+        "      \"summary\": \"repo package\",\n"
+        "      \"url\": \"file://" + artifactV1.string() + "\",\n"
+        "      \"packageSha256\": \"" + sha256_file_hex(artifactV1) + "\"\n"
+        "    },\n"
+        "    {\n"
+        "      \"name\": \"updatable-artifact\",\n"
+        "      \"version\": \"1.1.0\",\n"
+        "      \"release\": 1,\n"
+        "      \"revision\": 0,\n"
+        "      \"architecture\": \"noarch\",\n"
+        "      \"summary\": \"repo package\",\n"
+        "      \"url\": \"file://" + artifactV2.string() + "\",\n"
+        "      \"packageSha256\": \"" + sha256_file_hex(artifactV2) + "\"\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+    const std::filesystem::path configPath = write_config_with_rq_repositories(
+        tempDir.path(),
+        pluginDirectory,
+        {"file://" + indexPath.string()}
+    );
+    const std::filesystem::path stateDir = tempDir.path() / "rqp-state" / "updatable-artifact" / "updatable-artifact@1.1.0-1+r0";
+
+    (void)run_reqpack(tempDir.path(), configPath, {"install", "rqp", "updatable-artifact@1.0.0"});
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"update", "rqp", "updatable-artifact"});
+    CHECK(output.find("UPDATE: rqp:updatable-artifact") != std::string::npos);
+    CHECK(std::filesystem::exists(stateDir / "installed.txt"));
+    CHECK(read_file(stateDir / "installed.txt") == "hello-v2");
 }
 
 TEST_CASE("orchestrator sbom command exports planned graph without executing plugin install", "[integration][orchestrator][service]") {

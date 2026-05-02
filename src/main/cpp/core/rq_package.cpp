@@ -312,7 +312,9 @@ std::vector<RqBinaryEntry> load_binaries(const boost::optional<const ptree&>& va
     return result;
 }
 
-RqMetadata parse_metadata(const std::string& content) {
+}  // namespace
+
+RqMetadata rq_parse_metadata_json(const std::string& content) {
     const std::optional<ptree> parsed = parse_json_tree(content);
     if (!parsed.has_value()) {
         throw std::runtime_error("invalid metadata json");
@@ -362,7 +364,7 @@ RqMetadata parse_metadata(const std::string& content) {
     return metadata;
 }
 
-std::map<std::string, std::string> parse_reqpack_hooks(const std::filesystem::path& reqpackLuaPath) {
+std::map<std::string, std::string> rq_parse_reqpack_hooks(const std::filesystem::path& reqpackLuaPath) {
     sol::state lua;
     lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::table, sol::lib::string, sol::lib::math);
 
@@ -415,6 +417,8 @@ std::map<std::string, std::string> parse_reqpack_hooks(const std::filesystem::pa
 
     return hooks;
 }
+
+namespace {
 
 std::filesystem::path make_unique_directory(const std::filesystem::path& parent, const std::string& prefix) {
     std::filesystem::create_directories(parent);
@@ -486,9 +490,9 @@ RqPackageLayout RqPackageReader::load(
         throw std::runtime_error("rqp package not found: " + packagePath.string());
     }
 
-    const std::filesystem::path controlDir = make_unique_directory(workRoot, "rq-control");
-    const std::filesystem::path payloadDir = make_unique_directory(workRoot, "rq-payload");
-    const std::filesystem::path workDir = make_unique_directory(workRoot, "rq-work");
+    const std::filesystem::path controlDir = make_unique_directory(workRoot, "rqp-control");
+    const std::filesystem::path payloadDir = make_unique_directory(workRoot, "rqp-payload");
+    const std::filesystem::path workDir = make_unique_directory(workRoot, "rqp-work");
 
     std::optional<std::string> metadataContent;
     std::optional<std::string> reqpackContent;
@@ -530,10 +534,10 @@ RqPackageLayout RqPackageReader::load(
     layout.controlDir = controlDir;
     layout.payloadDir = payloadDir;
     layout.workDir = workDir;
-    layout.metadata = parse_metadata(metadataContent.value());
+    layout.metadata = rq_parse_metadata_json(metadataContent.value());
     layout.identity = rq_package_identity(layout.metadata);
     layout.stateDir = stateRoot / layout.metadata.name / layout.identity;
-    layout.hooks = parse_reqpack_hooks(controlDir / "reqpack.lua");
+    layout.hooks = rq_parse_reqpack_hooks(controlDir / "reqpack.lua");
 
     if (!rq_architecture_matches(layout.metadata.architecture, rq_host_architecture())) {
         throw std::runtime_error("package architecture does not match host");

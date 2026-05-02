@@ -73,6 +73,8 @@ set(SOURCES
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
     src/main/cpp/core/rq_package.cpp
+    src/main/cpp/core/rq_repository.cpp
+    src/main/cpp/core/rqp_state_store.cpp
     src/main/cpp/core/transaction_database.cpp
     src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/orchestrator.cpp
@@ -138,6 +140,8 @@ add_executable(core_integration_tests
     src/main/cpp/core/downloader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/rq_package.cpp
+    src/main/cpp/core/rq_repository.cpp
+    src/main/cpp/core/rqp_state_store.cpp
     src/main/cpp/core/registry.cpp
     src/main/cpp/core/transaction_database.cpp
     src/main/cpp/core/transaction_database_core.cpp
@@ -162,6 +166,8 @@ add_executable(core_unit_tests
     tests/unit/core/planner/core_tests.cpp
     tests/unit/core/registry_database/core_tests.cpp
     tests/unit/core/rq_package/core_tests.cpp
+    tests/unit/core/rq_repository/core_tests.cpp
+    tests/unit/core/rqp_state_store/core_tests.cpp
     tests/unit/core/osv/core_tests.cpp
     tests/unit/core/sbom/export_tests.cpp
     tests/unit/core/transaction_database/serialization_tests.cpp
@@ -177,6 +183,8 @@ add_executable(core_unit_tests
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner_core.cpp
     src/main/cpp/core/rq_package.cpp
+    src/main/cpp/core/rq_repository.cpp
+    src/main/cpp/core/rqp_state_store.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
     src/main/cpp/core/sbom_exporter.cpp

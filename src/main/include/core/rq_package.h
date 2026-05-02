@@ -62,9 +62,18 @@ struct RqPackageLayout {
     bool hasPayload{false};
 };
 
+struct RqStateSource {
+    std::string source;
+    std::string path;
+    std::string repository;
+    std::string identity;
+};
+
 std::string rq_host_architecture();
 std::string rq_package_identity(const RqMetadata& metadata);
 bool rq_architecture_matches(const std::string& packageArchitecture, const std::string& hostArchitecture);
+RqMetadata rq_parse_metadata_json(const std::string& content);
+std::map<std::string, std::string> rq_parse_reqpack_hooks(const std::filesystem::path& reqpackLuaPath);
 
 class RqPackageReader {
 public:

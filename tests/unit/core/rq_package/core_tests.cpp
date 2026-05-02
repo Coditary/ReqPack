@@ -129,8 +129,8 @@ return {
 
 }  // namespace
 
-TEST_CASE("rq package reader loads valid rqp and extracts payload", "[unit][rq_package][core]") {
-    TempDir tempDir{"reqpack-rq-reader-valid"};
+TEST_CASE("rqp package reader loads valid rqp and extracts payload", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-reader-valid"};
     const std::filesystem::path packagePath = build_rqp_package(
         tempDir.path(),
         "valid",
@@ -146,8 +146,8 @@ TEST_CASE("rq package reader loads valid rqp and extracts payload", "[unit][rq_p
     CHECK(std::filesystem::exists(layout.payloadDir / "payload.txt"));
 }
 
-TEST_CASE("rq package reader rejects payload hash mismatch", "[unit][rq_package][core]") {
-    TempDir tempDir{"reqpack-rq-reader-bad-hash"};
+TEST_CASE("rqp package reader rejects payload hash mismatch", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-reader-bad-hash"};
     const std::filesystem::path packagePath = build_rqp_package(
         tempDir.path(),
         "bad-hash",
