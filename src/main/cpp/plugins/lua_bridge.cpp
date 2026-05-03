@@ -111,6 +111,41 @@ std::optional<std::vector<Package>> packages_from_lua_object(const sol::object& 
     return packages;
 }
 
+std::optional<Package> package_from_lua_object(const sol::object& value) {
+    if (!value.valid()) {
+        return std::nullopt;
+    }
+    if (value.get_type() == sol::type::userdata) {
+        return value.as<Package>();
+    }
+    if (value.get_type() != sol::type::table) {
+        return std::nullopt;
+    }
+
+    const sol::table packageTable = value.as<sol::table>();
+    Package package;
+    package.action = action_from_lua_object(packageTable["action"]);
+    if (const sol::optional<std::string> system = packageTable["system"]; system.has_value()) {
+        package.system = system.value();
+    }
+    if (const sol::optional<std::string> name = packageTable["name"]; name.has_value()) {
+        package.name = name.value();
+    }
+    if (const sol::optional<std::string> version = packageTable["version"]; version.has_value()) {
+        package.version = version.value();
+    }
+    if (const sol::optional<std::string> sourcePath = packageTable["sourcePath"]; sourcePath.has_value()) {
+        package.sourcePath = sourcePath.value();
+    }
+    if (const sol::optional<bool> localTarget = packageTable["localTarget"]; localTarget.has_value()) {
+        package.localTarget = localTarget.value();
+    }
+    if (const sol::optional<std::vector<std::string>> flags = packageTable["flags"]; flags.has_value()) {
+        package.flags = flags.value();
+    }
+    return package;
+}
+
 void register_types(sol::state& lua) {
     lua.new_usertype<Package>(
         "Package",
@@ -561,6 +596,11 @@ std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& p
     return packages;
 }
 
+bool LuaBridge::supportsResolvePackage() const {
+    sol::protected_function func = m_pluginTable["resolvePackage"];
+    return func.valid();
+}
+
 std::vector<PluginEventRecord> LuaBridge::takeRecentEvents() {
     std::vector<PluginEventRecord> events = std::move(m_recentEvents);
     m_recentEvents.clear();
@@ -753,6 +793,40 @@ PackageInfo LuaBridge::info(const PluginCallContext& context, const std::string&
         return {};
     }
     return packageInfoFromObject(result.get<sol::object>());
+}
+
+std::optional<Package> LuaBridge::resolvePackage(const PluginCallContext& context, const Package& package) {
+    sol::protected_function func = m_pluginTable["resolvePackage"];
+    if (!func.valid()) {
+        return std::nullopt;
+    }
+
+    const bool silentRuntime = hasSilentRuntimeFlag(context.flags);
+    m_silentRuntimeOutput.store(silentRuntime);
+    auto result = func(context, package);
+    m_silentRuntimeOutput.store(false);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (resolvePackage): ") + err.what());
+        return std::nullopt;
+    }
+    if (result.return_count() == 0) {
+        return std::nullopt;
+    }
+
+    const sol::object value = result.get<sol::object>();
+    if (!value.valid()) {
+        return std::nullopt;
+    }
+    if (value.is<sol::lua_nil_t>()) {
+        return std::nullopt;
+    }
+    if (const auto resolved = package_from_lua_object(value)) {
+        return resolved.value();
+    }
+
+    log_lua_error(m_logger, m_pluginId, "[Lua API Error] resolvePackage(context, package) must return a package or nil.");
+    return std::nullopt;
 }
 
 std::string LuaBridge::serializeLuaPayload(const sol::object& value) const {

@@ -9,7 +9,7 @@
 #include "core/types.h"
 #include "core/version_compare.h"
 
-#define REQPACK_API_VERSION 3
+#define REQPACK_API_VERSION 4
 
 struct ExecResult {
 	bool success{false};
@@ -172,6 +172,9 @@ public:
 	virtual std::vector<std::string> getCategories() = 0;
 	virtual std::vector<std::string> getFileExtensions() const { return {}; }
 	virtual std::vector<Package> getMissingPackages(const std::vector<Package>& packages) = 0;
+	virtual bool supportsResolvePackage() const {
+		return false;
+	}
 	virtual std::vector<PluginEventRecord> takeRecentEvents() {
 		return {};
 	}
@@ -188,4 +191,10 @@ public:
     virtual std::vector<PackageInfo> search(const PluginCallContext& context, const std::string& prompt) = 0;
     
     virtual PackageInfo info(const PluginCallContext& context, const std::string& packageName) = 0;
+
+    virtual std::optional<Package> resolvePackage(const PluginCallContext& context, const Package& package) {
+        (void)context;
+        (void)package;
+        return std::nullopt;
+    }
 };

@@ -1611,6 +1611,25 @@ function plugin.info(context, name)
     return item
 end
 
+function plugin.resolvePackage(context, package)
+    local backend = detect_backend()
+    if backend == nil then
+        return nil
+    end
+
+    local available = package_available_in_backend(package, backend)
+    if available ~= true then
+        local ensured = ensure_nix_available(context)
+        if ensured and package_available_in_backend(package, "nix") == true then
+            available = true
+        else
+            return nil
+        end
+    end
+
+    return package
+end
+
 function plugin.init()
     return true
 end

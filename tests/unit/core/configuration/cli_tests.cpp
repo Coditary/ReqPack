@@ -51,6 +51,7 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.sbomDefaultOutputPath = "~/exports/sbom.json";
     overrides.sbomPrettyPrint = false;
     overrides.sbomIncludeDependencyEdges = false;
+    overrides.sbomSkipMissingPackages = true;
 
     const ReqPackConfig config = apply_config_overrides(base, overrides);
     const std::filesystem::path home = reqpack_user_home();
@@ -85,6 +86,7 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(std::filesystem::path(config.sbom.defaultOutputPath) == home / "exports/sbom.json");
     CHECK_FALSE(config.sbom.prettyPrint);
     CHECK_FALSE(config.sbom.includeDependencyEdges);
+    CHECK(config.sbom.skipMissingPackages);
 }
 
 TEST_CASE("configuration consumes CLI flags with positional and inline values", "[unit][configuration][cli]") {
@@ -179,6 +181,16 @@ TEST_CASE("configuration consumes CLI flags with positional and inline values", 
             REQUIRE(overrides.sbomDefaultFormat.has_value());
             CHECK(overrides.sbomDefaultFormat.value() == SbomOutputFormat::JSON);
         }
+
+        {
+            const std::vector<std::string> arguments{"--sbom-skip-missing-packages"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.sbomSkipMissingPackages.has_value());
+            CHECK(overrides.sbomSkipMissingPackages.value());
+        }
     }
 }
 
@@ -194,6 +206,7 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
         "CVE-2024-1",
         "--sbom-format",
         "cyclonedx-json",
+        "--sbom-skip-missing-packages",
         "--report-format",
         "json",
     };
@@ -219,6 +232,8 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
     CHECK(overrides.ignoreVulnerabilityIds == std::vector<std::string>{"CVE-2024-1"});
     REQUIRE(overrides.sbomDefaultFormat.has_value());
     CHECK(overrides.sbomDefaultFormat.value() == SbomOutputFormat::CYCLONEDX_JSON);
+    REQUIRE(overrides.sbomSkipMissingPackages.has_value());
+    CHECK(overrides.sbomSkipMissingPackages.value());
     REQUIRE(overrides.reportFormat.has_value());
     CHECK(overrides.reportFormat.value() == ReportFormat::JSON);
 }
@@ -329,6 +344,12 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"sbom", "dnf", "curl", "--wide", "--no-wrap"}, config);
         REQUIRE(requests.size() == 1);
         CHECK(requests.front().flags == std::vector<std::string>{"wide", "no-wrap"});
+    }
+
+    SECTION("sbom skips missing packages via config flag without forwarding it to plugins") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"sbom", "dnf", "curl", "--sbom-skip-missing-packages"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().flags.empty());
     }
 
     SECTION("audit rejects invalid format") {

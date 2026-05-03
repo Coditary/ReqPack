@@ -813,6 +813,7 @@ void Cli::print_command_help(ActionType action) {
                 "  --wide                  Use wider table layout for terminal output\n"
                 "  --no-wrap               Do not wrap table columns; let terminal handle overflow\n"
                 "  --force                 Overwrite existing output file without prompting\n"
+                "  --sbom-skip-missing-packages Skip requested packages that cannot be resolved\n"
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"

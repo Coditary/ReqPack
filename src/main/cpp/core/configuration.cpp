@@ -730,6 +730,7 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(sbom.value(), "defaultOutputPath", config.sbom.defaultOutputPath);
         assign_if_present(sbom.value(), "prettyPrint", config.sbom.prettyPrint);
         assign_if_present(sbom.value(), "includeDependencyEdges", config.sbom.includeDependencyEdges);
+        assign_if_present(sbom.value(), "skipMissingPackages", config.sbom.skipMissingPackages);
     }
     if (!config.sbom.defaultOutputPath.empty()) {
         config.sbom.defaultOutputPath = expand_user_path(config.sbom.defaultOutputPath).string();
@@ -830,6 +831,7 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.sbomDefaultOutputPath.has_value()) config.sbom.defaultOutputPath = expand_user_path(overrides.sbomDefaultOutputPath.value()).string();
     if (overrides.sbomPrettyPrint.has_value()) config.sbom.prettyPrint = overrides.sbomPrettyPrint.value();
     if (overrides.sbomIncludeDependencyEdges.has_value()) config.sbom.includeDependencyEdges = overrides.sbomIncludeDependencyEdges.value();
+    if (overrides.sbomSkipMissingPackages.has_value()) config.sbom.skipMissingPackages = overrides.sbomSkipMissingPackages.value();
 
     return config;
 }
@@ -1035,6 +1037,14 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
     if (argument == "--sbom-no-dependency-edges") {
         overrides.sbomIncludeDependencyEdges = false;
+        return true;
+    }
+    if (argument == "--sbom-skip-missing-packages") {
+        overrides.sbomSkipMissingPackages = true;
+        return true;
+    }
+    if (argument == "--sbom-fail-on-missing-package") {
+        overrides.sbomSkipMissingPackages = false;
         return true;
     }
 

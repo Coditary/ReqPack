@@ -181,6 +181,7 @@ struct SbomConfig {
     std::string defaultOutputPath{};
     bool prettyPrint{true};
     bool includeDependencyEdges{true};
+    bool skipMissingPackages{false};
 };
 
 struct RqpConfig {
@@ -296,6 +297,7 @@ struct ReqPackConfigOverrides {
     std::optional<std::string> sbomDefaultOutputPath;
     std::optional<bool> sbomPrettyPrint;
     std::optional<bool> sbomIncludeDependencyEdges;
+    std::optional<bool> sbomSkipMissingPackages;
 };
 
 inline const ReqPackConfig DEFAULT_REQPACK_CONFIG{};

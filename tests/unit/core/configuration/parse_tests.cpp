@@ -256,6 +256,7 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                 defaultOutputPath = "~/sbom-out.json",
                 prettyPrint = false,
                 includeDependencyEdges = false,
+                skipMissingPackages = true,
             },
             rqp = {
                 repositories = {
@@ -314,6 +315,7 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(std::filesystem::path(config.sbom.defaultOutputPath) == home / "sbom-out.json");
     CHECK_FALSE(config.sbom.prettyPrint);
     CHECK_FALSE(config.sbom.includeDependencyEdges);
+    CHECK(config.sbom.skipMissingPackages);
     CHECK(config.rqp.repositories == std::vector<std::string>{
         "https://packages.example.test/rqp/index.json",
         "file:///srv/rqp/index.json",

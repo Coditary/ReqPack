@@ -698,6 +698,58 @@ function plugin.info(context, package)
   context.events.informed(item)
   return item
 end
+function plugin.resolvePackage(context, package)
+  reqpack.exec.run("printf 'resolver-exec'")
+  if package.name == "resolved" then
+    package.version = "4.5.6"
+    return package
+  end
+  return nil
+end
+function plugin.shutdown() return true end
+)";
+
+const char* SBOM_RESOLVE_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    osvEcosystem = "demo-osv",
+    purlType = "generic",
+    versionComparatorProfile = "lexicographic",
+  }
+end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages)
+  local missing = {}
+  for _, package in ipairs(packages) do
+    missing[#missing + 1] = package
+  end
+  return missing
+end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package)
+  return {
+    name = package,
+    version = "unknown",
+    description = "resolvePackage should decide existence",
+  }
+end
+function plugin.resolvePackage(context, package)
+  if package.name == "resolved" then
+    package.version = "4.5.6"
+    return package
+  end
+  return nil
+end
 function plugin.shutdown() return true end
 )";
 
@@ -1046,7 +1098,7 @@ TEST_CASE("orchestrator sbom resolves unversioned package via info without list 
     CHECK(sbom.find("\"version\": \"4.5.6\"") != std::string::npos);
 }
 
-TEST_CASE("orchestrator sbom keeps package unversioned when info cannot resolve version", "[integration][orchestrator][service]") {
+TEST_CASE("orchestrator sbom fails by default when info cannot resolve version", "[integration][orchestrator][service]") {
     TempDir tempDir{"reqpack-orchestrator-sbom-unresolved-version"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
     const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
@@ -1054,7 +1106,8 @@ TEST_CASE("orchestrator sbom keeps package unversioned when info cannot resolve 
 
     add_plugin_script(pluginDirectory, "apply", SBOM_INFO_ONLY_PLUGIN);
 
-    const std::string output = run_reqpack(tempDir.path(), configPath, {
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
         "sbom",
         "apply",
         "missing",
@@ -1062,15 +1115,120 @@ TEST_CASE("orchestrator sbom keeps package unversioned when info cannot resolve 
         "json",
         "--output",
         outputPath.string(),
-    });
+    }, status);
 
     CHECK(output.find("listed:") == std::string::npos);
     CHECK(output.find("informed:") == std::string::npos);
     CHECK(output.find("resolver-exec") == std::string::npos);
+    CHECK(status != 0);
+    CHECK(output.find("sbom missing package: apply:missing") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(outputPath));
+}
+
+TEST_CASE("orchestrator sbom fails when requested package cannot be resolved", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-sbom-missing-fails"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path outputPath = tempDir.path() / "graph.json";
+
+    add_plugin_script(pluginDirectory, "apply", SBOM_RESOLVE_PLUGIN);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "sbom",
+        "apply",
+        "missing",
+        "--format",
+        "json",
+        "--output",
+        outputPath.string(),
+    }, status);
+
+    CHECK(status != 0);
+    CHECK(output.find("sbom missing package: apply:missing") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(outputPath));
+}
+
+TEST_CASE("orchestrator sbom can skip missing package via cli flag", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-sbom-missing-skip-cli"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path outputPath = tempDir.path() / "graph.json";
+
+    add_plugin_script(pluginDirectory, "apply", SBOM_RESOLVE_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {
+        "sbom",
+        "apply",
+        "resolved",
+        "missing",
+        "--sbom-skip-missing-packages",
+        "--format",
+        "json",
+        "--output",
+        outputPath.string(),
+    });
+
+    CHECK(output.find("sbom skipping missing package: apply:missing") != std::string::npos);
     REQUIRE(std::filesystem::exists(outputPath));
     const std::string sbom = read_file(outputPath);
-    CHECK(sbom.find("\"name\": \"missing\"") != std::string::npos);
-    CHECK(sbom.find("\"version\": \"\"") != std::string::npos);
+    CHECK(sbom.find("\"name\": \"resolved\"") != std::string::npos);
+    CHECK(sbom.find("\"name\": \"missing\"") == std::string::npos);
+}
+
+TEST_CASE("orchestrator sbom can skip missing package via config", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-sbom-missing-skip-config"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    const std::filesystem::path outputPath = tempDir.path() / "graph.json";
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  sbom = {\n"
+        "    skipMissingPackages = true,\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (tempDir.path() / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "apply", SBOM_RESOLVE_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {
+        "sbom",
+        "apply",
+        "resolved",
+        "missing",
+        "--format",
+        "json",
+        "--output",
+        outputPath.string(),
+    });
+
+    CHECK(output.find("sbom skipping missing package: apply:missing") != std::string::npos);
+    REQUIRE(std::filesystem::exists(outputPath));
+    const std::string sbom = read_file(outputPath);
+    CHECK(sbom.find("\"name\": \"resolved\"") != std::string::npos);
+    CHECK(sbom.find("\"name\": \"missing\"") == std::string::npos);
 }
 
 TEST_CASE("orchestrator audit command exports sarif without executing plugin install", "[integration][orchestrator][service]") {

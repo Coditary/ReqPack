@@ -310,6 +310,22 @@ function plugin.info(context, name)
     return item
 end
 
+function plugin.resolvePackage(context, package)
+    local spec = package_spec(package)
+    if command_stdout("dnf repoquery --quiet " .. shell_quote(spec) .. " 2>/dev/null") == "" then
+        return nil
+    end
+
+    local resolved = package
+    if resolved.version == nil or resolved.version == "" then
+        local installed_version = installed_package_version(resolved.name)
+        if installed_version ~= "" then
+            resolved.version = installed_version
+        end
+    end
+    return resolved
+end
+
 function plugin.init()
     return reqpack.exec.run("command -v dnf >/dev/null 2>&1").success
 end

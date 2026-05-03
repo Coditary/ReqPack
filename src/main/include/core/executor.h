@@ -76,4 +76,5 @@ public:
 	std::vector<PackageInfo> outdated(const Request& request) const;
 	std::vector<PackageInfo> search(const Request& request) const;
 	PackageInfo info(const Request& request) const;
+	std::optional<Package> resolvePackage(const Request& request, const Package& package) const;
 };

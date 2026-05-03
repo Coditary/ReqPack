@@ -330,6 +330,10 @@ IPluginRuntimeHost* RqPlugin::getRuntimeHost() {
     return &RQ_RUNTIME_HOST;
 }
 
+bool RqPlugin::supportsResolvePackage() const {
+    return true;
+}
+
 std::vector<Package> RqPlugin::getRequirements() {
     return {};
 }
@@ -489,6 +493,31 @@ PackageInfo RqPlugin::info(const PluginCallContext& context, const std::string& 
         return rq_info_item(packageName, {}, "multiple installed versions");
     }
     return packageInfoFromInstalled(matches.front());
+}
+
+std::optional<Package> RqPlugin::resolvePackage(const PluginCallContext& context, const Package& package) {
+    std::vector<RqpInstalledPackage> matches = RqpStateStore(config_).findInstalled(package.name);
+    if (!matches.empty()) {
+        std::sort(matches.begin(), matches.end(), compareInstalledVersions);
+        Package resolved = package;
+        resolved.version = installedVersionString(matches.back().metadata);
+        return resolved;
+    }
+
+    const std::vector<RqRepositoryIndex> indexes = loadRepositoryIndexes(context);
+    const std::optional<RqRepositoryPackage> candidate = rq_repository_resolve_package(
+        indexes,
+        package.name,
+        package.version,
+        rq_host_architecture()
+    );
+    if (!candidate.has_value()) {
+        return std::nullopt;
+    }
+
+    Package resolved = package;
+    resolved.version = candidate->version + "-" + std::to_string(candidate->release) + "+r" + std::to_string(candidate->revision);
+    return resolved;
 }
 
 std::vector<PluginEventRecord> RqPlugin::takeRecentEvents() {

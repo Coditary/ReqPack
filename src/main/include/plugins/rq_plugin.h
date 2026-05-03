@@ -27,6 +27,7 @@ public:
     std::string getScriptPath() const override;
     std::string getBootstrapPath() const override;
     IPluginRuntimeHost* getRuntimeHost() override;
+    bool supportsResolvePackage() const override;
 
     std::vector<Package> getRequirements() override;
     std::vector<std::string> getCategories() override;
@@ -42,6 +43,7 @@ public:
     std::vector<PackageInfo> outdated(const PluginCallContext& context) override;
     std::vector<PackageInfo> search(const PluginCallContext& context, const std::string& prompt) override;
     PackageInfo info(const PluginCallContext& context, const std::string& packageName) override;
+    std::optional<Package> resolvePackage(const PluginCallContext& context, const Package& package) override;
     std::vector<PluginEventRecord> takeRecentEvents() override;
 
 private:

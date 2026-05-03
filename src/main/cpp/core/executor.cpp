@@ -12,6 +12,8 @@
 
 namespace {
 
+constexpr const char* SBOM_INTERNAL_SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
+
 bool samePackage(const Package& left, const Package& right) {
 	return left.action == right.action &&
 		left.system == right.system &&
@@ -167,6 +169,43 @@ PackageInfo Executer::info(const Request& request) const {
 	taskGroup.flags = request.flags;
 	const std::string packageName = request.packages.empty() ? std::string{} : request.packages.front();
 	return plugin->info(this->buildPluginContext(plugin, taskGroup), packageName);
+}
+
+std::optional<Package> Executer::resolvePackage(const Request& request, const Package& package) const {
+	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+		return std::nullopt;
+	}
+	IPlugin* plugin = this->registry->getPlugin(request.system);
+	TaskGroup taskGroup{.action = ActionType::SBOM, .system = request.system};
+	taskGroup.flags = request.flags;
+	if (plugin->supportsResolvePackage()) {
+		taskGroup.flags.push_back(SBOM_INTERNAL_SILENT_RUNTIME_FLAG);
+		if (const std::optional<Package> resolved = plugin->resolvePackage(this->buildPluginContext(plugin, taskGroup), package); resolved.has_value()) {
+			return resolved;
+		}
+		return std::nullopt;
+	}
+
+	if (!package.version.empty()) {
+		return package;
+	}
+
+	Request infoRequest = request;
+	infoRequest.action = ActionType::INFO;
+	infoRequest.packages = {package.name};
+	infoRequest.flags.push_back(SBOM_INTERNAL_SILENT_RUNTIME_FLAG);
+	const PackageInfo info = this->info(infoRequest);
+	if (!info.name.empty() && !info.version.empty() && info.version != "unknown" && info.version != "repo" && info.version != "installed") {
+		Package resolved = package;
+		resolved.name = info.name;
+		resolved.version = info.version;
+		return resolved;
+	}
+	if (info.name.empty() && info.version.empty() && info.description.empty()) {
+		return std::nullopt;
+	}
+
+	return package;
 }
 
 void Executer::execute(Graph *graph) {

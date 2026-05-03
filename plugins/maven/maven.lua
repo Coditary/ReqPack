@@ -412,6 +412,34 @@ function plugin.info(context, name)
     return item
 end
 
+function plugin.resolvePackage(context, package)
+    local artifact, err = artifact_query_from_name(package.name)
+    if artifact == nil then
+        return nil
+    end
+
+    local resolved = package
+    local repoPath = artifact_repo_path(artifact)
+    if path_exists(repoPath) then
+        resolved.version = artifact.version or resolved.version
+        return resolved
+    end
+
+    if artifact.version == nil or trim(artifact.version) == "" then
+        return nil
+    end
+
+    local search = search_maven_central(context, artifact.groupId .. ":" .. artifact.artifactId)
+    for _, item in ipairs(search) do
+        if item.name == artifact.groupId .. ":" .. artifact.artifactId and item.version == artifact.version then
+            resolved.version = artifact.version
+            return resolved
+        end
+    end
+
+    return nil
+end
+
 function plugin.outdated(context)
     local installed = search_local_artifacts("")
     local items = {}
