@@ -230,7 +230,7 @@ plugin.fileExtensions = { ".jar", ".war", ".ear" }
 
 function plugin.getRequirements()
     return {
-        { system = "sys", name = getenv("REQPACK_MAVEN_JAVA_PACKAGE", "java-21-openjdk-devel") },
+        { system = "sys", name = getenv("REQPACK_MAVEN_JAVA_PACKAGE", "java") },
         { system = "sys", name = getenv("REQPACK_MAVEN_PACKAGE", "maven") }
     }
 end

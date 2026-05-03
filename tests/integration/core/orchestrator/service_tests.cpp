@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstdlib>
 #include <csignal>
 #include <filesystem>
 #include <fstream>
@@ -65,6 +66,15 @@ std::filesystem::path add_plugin_script(const std::filesystem::path& pluginRoot,
     const std::filesystem::path scriptPath = pluginRoot / pluginName / (pluginName + ".lua");
     write_file(scriptPath, content);
     return scriptPath;
+}
+
+void copy_repo_plugin(const std::filesystem::path& pluginRoot, const std::string& pluginName) {
+    const std::filesystem::path repoPluginDir = repo_root() / "plugins" / pluginName;
+    write_file(pluginRoot / pluginName / (pluginName + ".lua"), read_file(repoPluginDir / (pluginName + ".lua")));
+    const std::filesystem::path bootstrapPath = repoPluginDir / "bootstrap.lua";
+    if (std::filesystem::exists(bootstrapPath)) {
+        write_file(pluginRoot / pluginName / "bootstrap.lua", read_file(bootstrapPath));
+    }
 }
 
 std::filesystem::path write_config(const std::filesystem::path& root, const std::filesystem::path& pluginDirectory) {
@@ -507,6 +517,44 @@ std::string run_reqpack_with_home_and_status(
     std::string command = "cd " + escape_shell_arg(workspace.string()) +
         " && HOME=" + escape_shell_arg(homePath.string()) +
         " " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " --config " + escape_shell_arg(configPath.string());
+    for (const std::string& argument : arguments) {
+        command += " " + escape_shell_arg(argument);
+    }
+    command += " 2>&1";
+
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr) {
+        throw std::runtime_error("failed to run command: " + command);
+    }
+
+    std::string output;
+    char buffer[4096];
+    while (std::fgets(buffer, static_cast<int>(sizeof(buffer)), pipe) != nullptr) {
+        output += buffer;
+    }
+
+    status = pclose(pipe);
+    if (status == -1) {
+        throw std::runtime_error("failed to close command pipe: " + command);
+    }
+    return output;
+}
+
+std::string run_reqpack_with_home_env_and_status(
+    const std::filesystem::path& workspace,
+    const std::filesystem::path& configPath,
+    const std::filesystem::path& homePath,
+    const std::vector<std::pair<std::string, std::string>>& environment,
+    const std::vector<std::string>& arguments,
+    int& status
+) {
+    std::string command = "cd " + escape_shell_arg(workspace.string()) +
+        " && env HOME=" + escape_shell_arg(homePath.string());
+    for (const auto& [key, value] : environment) {
+        command += " " + key + "=" + escape_shell_arg(value);
+    }
+    command += " " + escape_shell_arg((build_root() / "ReqPack").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
         command += " " + escape_shell_arg(argument);
@@ -1366,4 +1414,409 @@ TEST_CASE("reqpack remote upload respects readonly server mode", "[integration][
     CHECK(status != 0);
     CHECK(output.find("readonly") != std::string::npos);
     CHECK_FALSE(std::filesystem::exists(pluginDirectory / "apply" / "state" / "local.txt"));
+}
+
+TEST_CASE("orchestrator sys plugin maps logical packages to apt backend", "[integration][orchestrator][service][sys]") {
+    TempDir tempDir{"reqpack-orchestrator-sys-apt"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path aptLog = tempDir.path() / "apt.log";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "sys");
+
+    write_file(fakeBin / "apt-get",
+        "#!/bin/sh\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(aptLog.string()) + "\n"
+        "exit 0\n");
+    write_file(fakeBin / "dpkg-query",
+        "#!/bin/sh\n"
+        "exit 1\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "apt-get").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "dpkg-query").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"REQPACK_SYS_BACKEND", "apt"},
+            {"REQPACK_SYS_NO_SUDO", "1"},
+            {"REQPACK_SYS_NIX_BIN", (fakeBin / "missing-nix-env").string()},
+            {"REQPACK_SYS_APT_BIN", (fakeBin / "apt-get").string()},
+            {"REQPACK_SYS_DPKG_QUERY_BIN", (fakeBin / "dpkg-query").string()},
+        },
+        {"install", "sys", "java", "maven"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("[error]") == std::string::npos);
+    CHECK(output.find("INSTALL done:  2 ok,  0 skipped,  0 failed") != std::string::npos);
+    const std::string log = read_file(aptLog);
+    CHECK(log.find("update") != std::string::npos);
+    CHECK(log.find("install -y") != std::string::npos);
+    CHECK(log.find("default-jdk") != std::string::npos);
+    CHECK(log.find("maven") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install maven provisions sys requirements before invoking mvn", "[integration][orchestrator][service][sys]") {
+    TempDir tempDir{"reqpack-orchestrator-sys-maven"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path aptLog = tempDir.path() / "apt.log";
+    const std::filesystem::path mvnLog = tempDir.path() / "mvn.log";
+    const std::filesystem::path provisionedMarker = tempDir.path() / "provisioned.marker";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "sys");
+    copy_repo_plugin(pluginDirectory, "maven");
+
+    write_file(fakeBin / "java",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "javac",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "mvn",
+        "#!/bin/sh\n"
+        "[ -f " + escape_shell_arg(provisionedMarker.string()) + " ] || exit 1\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(mvnLog.string()) + "\n"
+        "exit 0\n");
+    write_file(fakeBin / "dpkg-query",
+        "#!/bin/sh\n"
+        "exit 1\n");
+
+    write_file(fakeBin / "apt-get",
+        "#!/bin/sh\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(aptLog.string()) + "\n"
+        ": > " + escape_shell_arg(provisionedMarker.string()) + "\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "apt-get").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "java").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "javac").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "mvn").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "dpkg-query").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"REQPACK_SYS_BACKEND", "apt"},
+            {"REQPACK_SYS_NO_SUDO", "1"},
+            {"REQPACK_SYS_NIX_BIN", (fakeBin / "missing-nix-env").string()},
+            {"REQPACK_SYS_APT_BIN", (fakeBin / "apt-get").string()},
+            {"REQPACK_SYS_DPKG_QUERY_BIN", (fakeBin / "dpkg-query").string()},
+        },
+        {"install", "maven", "org.junit:junit:4.13"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("[error]") == std::string::npos);
+    CHECK(output.find("INSTALL done:  3 ok,  0 skipped,  0 failed") != std::string::npos);
+    const std::string aptInstallLog = read_file(aptLog);
+    CHECK(aptInstallLog.find("install -y") != std::string::npos);
+    CHECK(aptInstallLog.find("default-jdk") != std::string::npos);
+    CHECK(aptInstallLog.find("maven") != std::string::npos);
+    CHECK(std::filesystem::exists(provisionedMarker));
+    const std::string mavenInstallLog = read_file(mvnLog);
+    CHECK(mavenInstallLog.find("dependency:get") != std::string::npos);
+    CHECK(mavenInstallLog.find("org.junit:junit:4.13") != std::string::npos);
+}
+
+TEST_CASE("orchestrator sys plugin installs packages via nix backend", "[integration][orchestrator][service][sys]") {
+    TempDir tempDir{"reqpack-orchestrator-sys-nix"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path nixLog = tempDir.path() / "nix.log";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "sys");
+
+    write_file(fakeBin / "nix-env",
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-q\" ]; then\n"
+        "  exit 1\n"
+        "fi\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(nixLog.string()) + "\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "nix-env").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"REQPACK_SYS_BACKEND", "nix"},
+            {"REQPACK_SYS_NIX_BIN", (fakeBin / "nix-env").string()},
+        },
+        {"install", "sys", "alpha-tool", "beta-tool"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("[error]") == std::string::npos);
+    CHECK(output.find("INSTALL done:  2 ok,  0 skipped,  0 failed") != std::string::npos);
+    const std::string log = read_file(nixLog);
+    CHECK(log.find("-iA") != std::string::npos);
+    CHECK(log.find("nixpkgs.alpha-tool") != std::string::npos);
+    CHECK(log.find("nixpkgs.beta-tool") != std::string::npos);
+}
+
+TEST_CASE("orchestrator sys plugin falls back to nix when backend package is unavailable", "[integration][orchestrator][service][sys]") {
+    TempDir tempDir{"reqpack-orchestrator-sys-nix-fallback"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path aptLog = tempDir.path() / "apt.log";
+    const std::filesystem::path aptCacheLog = tempDir.path() / "apt-cache.log";
+    const std::filesystem::path nixLog = tempDir.path() / "nix.log";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "sys");
+
+    write_file(fakeBin / "apt-get",
+        "#!/bin/sh\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(aptLog.string()) + "\n"
+        "exit 0\n");
+    write_file(fakeBin / "apt-cache",
+        "#!/bin/sh\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(aptCacheLog.string()) + "\n"
+        "if [ \"$1\" = \"show\" ] && [ \"$2\" = \"fallbackpkg\" ]; then\n"
+        "  exit 1\n"
+        "fi\n"
+        "exit 0\n");
+    write_file(fakeBin / "dpkg-query",
+        "#!/bin/sh\n"
+        "exit 1\n");
+    write_file(fakeBin / "nix-env",
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-q\" ]; then\n"
+        "  exit 1\n"
+        "fi\n"
+        "if [ \"$1\" = \"-qaA\" ] && [ \"$2\" = \"nixpkgs.fallbackpkg\" ]; then\n"
+        "  exit 0\n"
+        "fi\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(nixLog.string()) + "\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "apt-get").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "apt-cache").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "dpkg-query").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "nix-env").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"REQPACK_SYS_BACKEND", "apt"},
+            {"REQPACK_SYS_NO_SUDO", "1"},
+            {"REQPACK_SYS_APT_BIN", (fakeBin / "apt-get").string()},
+            {"REQPACK_SYS_APT_CACHE_BIN", (fakeBin / "apt-cache").string()},
+            {"REQPACK_SYS_DPKG_QUERY_BIN", (fakeBin / "dpkg-query").string()},
+            {"REQPACK_SYS_NIX_BIN", (fakeBin / "nix-env").string()},
+        },
+        {"install", "sys", "fallbackpkg"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("[error]") == std::string::npos);
+    CHECK(output.find("INSTALL done:  1 ok,  0 skipped,  0 failed") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(aptLog));
+    const std::string aptCacheOutput = read_file(aptCacheLog);
+    CHECK(aptCacheOutput.find("show fallbackpkg") != std::string::npos);
+    const std::string nixOutput = read_file(nixLog);
+    CHECK(nixOutput.find("-iA") != std::string::npos);
+    CHECK(nixOutput.find("nixpkgs.fallbackpkg") != std::string::npos);
+}
+
+TEST_CASE("orchestrator sys plugin bootstraps nix when nix backend is selected but missing", "[integration][orchestrator][service][sys]") {
+    TempDir tempDir{"reqpack-orchestrator-sys-nix-bootstrap"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path nixLog = tempDir.path() / "nix.log";
+    const std::filesystem::path bootstrapLog = tempDir.path() / "bootstrap.log";
+    const std::filesystem::path installedNix = tempDir.path() / "home" / ".nix-profile" / "bin" / "nix-env";
+    const std::filesystem::path bootstrapScript = fakeBin / "bootstrap-nix";
+    std::filesystem::create_directories(fakeBin);
+    std::filesystem::create_directories(installedNix.parent_path());
+
+    copy_repo_plugin(pluginDirectory, "sys");
+
+    write_file(bootstrapScript,
+        "#!/bin/sh\n"
+        "printf '%s\\n' bootstrap >> " + escape_shell_arg(bootstrapLog.string()) + "\n"
+        "mkdir -p " + escape_shell_arg(installedNix.parent_path().string()) + "\n"
+        "cat > " + escape_shell_arg(installedNix.string()) + " <<'EOF'\n"
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-q\" ]; then\n"
+        "  exit 1\n"
+        "fi\n"
+        "printf '%s\\n' \"$*\" >> " + escape_shell_arg(nixLog.string()) + "\n"
+        "exit 0\n"
+        "EOF\n"
+        "chmod +x " + escape_shell_arg(installedNix.string()) + "\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg(bootstrapScript.string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+    const std::filesystem::path homePath = tempDir.path() / "home";
+    std::filesystem::create_directories(homePath);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        homePath,
+        {
+            {"PATH", pathValue},
+            {"REQPACK_SYS_BACKEND", "nix"},
+            {"REQPACK_SYS_NIX_INSTALL_CMD", bootstrapScript.string()},
+        },
+        {"install", "sys", "bootstrap-tool"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("[error]") == std::string::npos);
+    CHECK(output.find("INSTALL done:  1 ok,  0 skipped,  0 failed") != std::string::npos);
+    CHECK(std::filesystem::exists(installedNix));
+    CHECK(read_file(bootstrapLog).find("bootstrap") != std::string::npos);
+    const std::string nixOutput = read_file(nixLog);
+    CHECK(nixOutput.find("-iA") != std::string::npos);
+    CHECK(nixOutput.find("nixpkgs.bootstrap-tool") != std::string::npos);
+}
+
+TEST_CASE("orchestrator sys plugin delegates install to additional linux backends", "[integration][orchestrator][service][sys]") {
+    struct BackendCase {
+        std::string backend;
+        std::string binaryEnv;
+        std::string binaryName;
+        std::string queryEnv;
+        std::string queryName;
+        std::string installNeedle;
+        std::string logicalNeedle;
+    };
+
+    const std::vector<BackendCase> cases{
+        {"yum", "REQPACK_SYS_YUM_BIN", "yum", "REQPACK_SYS_RPM_BIN", "rpm", "install -y", "maven"},
+        {"zypper", "REQPACK_SYS_ZYPPER_BIN", "zypper", "REQPACK_SYS_RPM_BIN", "rpm", "install --auto-agree-with-licenses", "maven"},
+        {"pacman", "REQPACK_SYS_PACMAN_BIN", "pacman", "REQPACK_SYS_PACMAN_BIN", "pacman", "-S --noconfirm --needed", "maven"},
+        {"apk", "REQPACK_SYS_APK_BIN", "apk", "REQPACK_SYS_APK_BIN", "apk", "add", "maven"},
+        {"xbps", "REQPACK_SYS_XBPS_INSTALL_BIN", "xbps-install", "REQPACK_SYS_XBPS_QUERY_BIN", "xbps-query", "-Sy", "maven"},
+        {"eopkg", "REQPACK_SYS_EOPKG_BIN", "eopkg", "REQPACK_SYS_EOPKG_BIN", "eopkg", "install -y", "maven"},
+        {"urpmi", "REQPACK_SYS_URPMI_BIN", "urpmi", "REQPACK_SYS_RPM_BIN", "rpm", "--auto", "maven"},
+        {"emerge", "REQPACK_SYS_EMERGE_BIN", "emerge", "REQPACK_SYS_EQUERY_BIN", "equery", "--ask=n", "dev-java/maven-bin"},
+    };
+
+    for (const BackendCase& testCase : cases) {
+        CAPTURE(testCase.backend);
+        TempDir tempDir{"reqpack-orchestrator-sys-" + testCase.backend};
+        const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+        const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+        const std::filesystem::path fakeBin = tempDir.path() / "bin";
+        const std::filesystem::path backendLog = tempDir.path() / (testCase.backend + ".log");
+        std::filesystem::create_directories(fakeBin);
+
+        copy_repo_plugin(pluginDirectory, "sys");
+
+        write_file(fakeBin / testCase.binaryName,
+            "#!/bin/sh\n"
+            "printf '%s\n' \"$*\" >> " + escape_shell_arg(backendLog.string()) + "\n"
+            "exit 0\n");
+        REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / testCase.binaryName).string())).c_str()) == 0);
+
+        std::vector<std::pair<std::string, std::string>> environment{
+            {"REQPACK_SYS_BACKEND", testCase.backend},
+            {"REQPACK_SYS_NO_SUDO", "1"},
+            {"REQPACK_SYS_NIX_BIN", (fakeBin / "missing-nix-env").string()},
+            {testCase.binaryEnv, (fakeBin / testCase.binaryName).string()},
+        };
+
+        if (!testCase.queryEnv.empty()) {
+            std::string queryScript =
+                "#!/bin/sh\n"
+                "exit 1\n";
+            if (testCase.backend == "pacman") {
+                queryScript =
+                    "#!/bin/sh\n"
+                    "if [ \"$1\" = \"-Q\" ]; then exit 1; fi\n"
+                    "printf '%s\n' \"$*\" >> " + escape_shell_arg(backendLog.string()) + "\n"
+                    "exit 0\n";
+            }
+            else if (testCase.backend == "apk") {
+                queryScript =
+                    "#!/bin/sh\n"
+                    "if [ \"$1\" = \"info\" ] && [ \"$2\" = \"-e\" ]; then exit 1; fi\n"
+                    "printf '%s\n' \"$*\" >> " + escape_shell_arg(backendLog.string()) + "\n"
+                    "exit 0\n";
+            }
+            else if (testCase.backend == "eopkg") {
+                queryScript =
+                    "#!/bin/sh\n"
+                    "if [ \"$1\" = \"list-installed\" ]; then exit 1; fi\n"
+                    "printf '%s\n' \"$*\" >> " + escape_shell_arg(backendLog.string()) + "\n"
+                    "exit 0\n";
+            }
+            write_file(fakeBin / testCase.queryName, queryScript);
+            REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / testCase.queryName).string())).c_str()) == 0);
+            environment.push_back({testCase.queryEnv, (fakeBin / testCase.queryName).string()});
+        }
+
+        if (testCase.backend == "emerge") {
+            write_file(fakeBin / "equery",
+                "#!/bin/sh\n"
+                "exit 1\n");
+            REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "equery").string())).c_str()) == 0);
+            environment.push_back({"REQPACK_SYS_EQUERY_BIN", (fakeBin / "equery").string()});
+        }
+
+        const char* currentPath = std::getenv("PATH");
+        const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+        environment.push_back({"PATH", pathValue});
+
+        int status = 0;
+        const std::string output = run_reqpack_with_home_env_and_status(
+            tempDir.path(),
+            configPath,
+            tempDir.path(),
+            environment,
+            {"install", "sys", "maven"},
+            status
+        );
+
+        CHECK(status == 0);
+        CHECK(output.find("[error]") == std::string::npos);
+        CHECK(output.find("INSTALL done:  1 ok,  0 skipped,  0 failed") != std::string::npos);
+        const std::string log = read_file(backendLog);
+        CHECK(log.find(testCase.installNeedle) != std::string::npos);
+        CHECK(log.find(testCase.logicalNeedle) != std::string::npos);
+    }
 }
