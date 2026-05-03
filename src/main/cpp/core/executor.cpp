@@ -12,7 +12,7 @@
 
 namespace {
 
-constexpr const char* SBOM_INTERNAL_SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
+constexpr const char* INTERNAL_SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
 
 bool samePackage(const Package& left, const Package& right) {
 	return left.action == right.action &&
@@ -179,7 +179,7 @@ std::optional<Package> Executer::resolvePackage(const Request& request, const Pa
 	TaskGroup taskGroup{.action = ActionType::SBOM, .system = request.system};
 	taskGroup.flags = request.flags;
 	if (plugin->supportsResolvePackage()) {
-		taskGroup.flags.push_back(SBOM_INTERNAL_SILENT_RUNTIME_FLAG);
+		taskGroup.flags.push_back(INTERNAL_SILENT_RUNTIME_FLAG);
 		if (const std::optional<Package> resolved = plugin->resolvePackage(this->buildPluginContext(plugin, taskGroup), package); resolved.has_value()) {
 			return resolved;
 		}
@@ -193,7 +193,7 @@ std::optional<Package> Executer::resolvePackage(const Request& request, const Pa
 	Request infoRequest = request;
 	infoRequest.action = ActionType::INFO;
 	infoRequest.packages = {package.name};
-	infoRequest.flags.push_back(SBOM_INTERNAL_SILENT_RUNTIME_FLAG);
+	infoRequest.flags.push_back(INTERNAL_SILENT_RUNTIME_FLAG);
 	const PackageInfo info = this->info(infoRequest);
 	if (!info.name.empty() && !info.version.empty() && info.version != "unknown" && info.version != "repo" && info.version != "installed") {
 		Package resolved = package;
@@ -829,6 +829,71 @@ void Executer::deleteCommittedTransactions() const {
 	this->activeRunId.clear();
 }
 
+bool Executer::syncInstalledStateForSystem(const std::string& system, const bool allowEmpty) const {
+	if (this->historyManager == nullptr || !this->config.history.trackInstalled || system.empty() || this->securityGateway.isGatewaySystem(system)) {
+		return false;
+	}
+	if (this->registry->getPlugin(system) == nullptr || !this->registry->loadPlugin(system)) {
+		return false;
+	}
+
+	IPlugin* plugin = this->registry->getPlugin(system);
+	if (plugin == nullptr) {
+		return false;
+	}
+
+	TaskGroup taskGroup{.action = ActionType::LIST, .system = system};
+	taskGroup.flags = {INTERNAL_SILENT_RUNTIME_FLAG};
+	const std::vector<PackageInfo> installedPackages = plugin->list(this->buildPluginContext(plugin, taskGroup));
+
+	std::vector<InstalledEntry> entries;
+	entries.reserve(installedPackages.size());
+	for (const PackageInfo& item : installedPackages) {
+		if (item.name.empty()) {
+			continue;
+		}
+		entries.push_back(InstalledEntry{
+			.name = item.name,
+			.version = item.version,
+			.system = system,
+			.installedAt = {},
+		});
+	}
+
+	if (entries.empty() && !allowEmpty) {
+		return false;
+	}
+
+	return this->historyManager->replaceInstalledState(system, entries);
+}
+
+std::set<std::string> Executer::refreshInstalledState(const std::vector<TransactionRecord>& records) const {
+	std::set<std::string> refreshedSystems;
+	if (this->historyManager == nullptr || !this->config.history.trackInstalled) {
+		return refreshedSystems;
+	}
+
+	std::map<std::string, bool> allowEmptyBySystem;
+	for (const TransactionRecord& record : records) {
+		if (record.status != "success" || !actionUsesDesiredStateFilter(record.action) || record.system.empty()) {
+			continue;
+		}
+
+		auto [it, inserted] = allowEmptyBySystem.emplace(record.system, true);
+		if (record.action != ActionType::REMOVE) {
+			it->second = false;
+		}
+	}
+
+	for (const auto& [system, allowEmpty] : allowEmptyBySystem) {
+		if (this->syncInstalledStateForSystem(system, allowEmpty)) {
+			refreshedSystems.insert(system);
+		}
+	}
+
+	return refreshedSystems;
+}
+
 void Executer::recordHistory(const std::vector<TransactionRecord>& records) const {
 	if (this->historyManager == nullptr) {
 		return;
@@ -844,6 +909,8 @@ void Executer::recordHistory(const std::vector<TransactionRecord>& records) cons
 		}
 	};
 
+	std::vector<HistoryEntry> entries;
+	entries.reserve(records.size());
 	for (const TransactionRecord& record : records) {
 		HistoryEntry entry;
 		// timestamp filled in by HistoryManager::record()
@@ -853,7 +920,17 @@ void Executer::recordHistory(const std::vector<TransactionRecord>& records) cons
 		entry.system         = record.system;
 		entry.status         = record.status;
 		entry.errorMessage   = record.errorMessage;
-		(void)this->historyManager->record(entry);
+		entries.push_back(entry);
+		(void)this->historyManager->appendEvent(entry);
+	}
+
+	const std::set<std::string> refreshedSystems = this->refreshInstalledState(records);
+	for (const HistoryEntry& entry : entries) {
+		const bool isMutatingAction = entry.action == "install" || entry.action == "ensure" || entry.action == "remove" || entry.action == "update";
+		if (!isMutatingAction || refreshedSystems.find(entry.system) != refreshedSystems.end()) {
+			continue;
+		}
+		(void)this->historyManager->updateInstalledState(entry);
 	}
 }
 

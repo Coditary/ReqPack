@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,8 @@ class Executer {
 	void writeTransactionResults(const std::vector<TransactionRecord>& records) const;
 	void markCommittedTransactions() const;
 	void deleteCommittedTransactions() const;
+	bool syncInstalledStateForSystem(const std::string& system, bool allowEmpty) const;
+	std::set<std::string> refreshInstalledState(const std::vector<TransactionRecord>& records) const;
 	void recordHistory(const std::vector<TransactionRecord>& records) const;
 	std::vector<Package> orderedPackages(const Graph& graph) const;
 	bool dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const;

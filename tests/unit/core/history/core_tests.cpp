@@ -56,6 +56,21 @@ std::optional<InstalledEntry> find_entry(
     return *it;
 }
 
+std::optional<InstalledEntry> find_entry_version(
+    const std::vector<InstalledEntry>& entries,
+    const std::string& system,
+    const std::string& name,
+    const std::string& version
+) {
+    const auto it = std::find_if(entries.begin(), entries.end(), [&](const InstalledEntry& entry) {
+        return entry.system == system && entry.name == name && entry.version == version;
+    });
+    if (it == entries.end()) {
+        return std::nullopt;
+    }
+    return *it;
+}
+
 std::string read_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     REQUIRE(input.is_open());
@@ -158,6 +173,81 @@ TEST_CASE("history manager imports legacy installed json only once", "[unit][his
     entries = reloaded.loadInstalledState();
     CHECK(entries.empty());
     CHECK(std::filesystem::exists(tempDir.path() / "installed.json"));
+}
+
+TEST_CASE("history manager keeps multiple installed versions and removes them by name", "[unit][history][installed_state]") {
+    TempDir tempDir{"reqpack-history-multi-version"};
+    const ReqPackConfig config = make_history_config(tempDir.path());
+    HistoryManager history(config);
+
+    REQUIRE(history.updateInstalledState(HistoryEntry{
+        .timestamp = "2026-04-29T14:00:00Z",
+        .action = "install",
+        .packageName = "tool",
+        .packageVersion = "1.0.0",
+        .system = "demo",
+        .status = "success"
+    }));
+    REQUIRE(history.updateInstalledState(HistoryEntry{
+        .timestamp = "2026-04-29T14:01:00Z",
+        .action = "install",
+        .packageName = "tool",
+        .packageVersion = "2.0.0",
+        .system = "demo",
+        .status = "success"
+    }));
+
+    std::vector<InstalledEntry> entries = history.loadInstalledState();
+    REQUIRE(entries.size() == 2);
+    CHECK(find_entry_version(entries, "demo", "tool", "1.0.0").has_value());
+    CHECK(find_entry_version(entries, "demo", "tool", "2.0.0").has_value());
+
+    REQUIRE(history.updateInstalledState(HistoryEntry{
+        .timestamp = "2026-04-29T14:02:00Z",
+        .action = "remove",
+        .packageName = "tool",
+        .system = "demo",
+        .status = "success"
+    }));
+
+    entries = history.loadInstalledState();
+    CHECK(entries.empty());
+}
+
+TEST_CASE("history manager replaces system snapshot from authoritative installed list", "[unit][history][installed_state]") {
+    TempDir tempDir{"reqpack-history-replace-system"};
+    const ReqPackConfig config = make_history_config(tempDir.path());
+    HistoryManager history(config);
+
+    REQUIRE(history.updateInstalledState(HistoryEntry{
+        .timestamp = "2026-04-29T15:00:00Z",
+        .action = "install",
+        .packageName = "tool",
+        .packageVersion = "1.0.0",
+        .system = "demo",
+        .status = "success"
+    }));
+    REQUIRE(history.updateInstalledState(HistoryEntry{
+        .timestamp = "2026-04-29T15:01:00Z",
+        .action = "install",
+        .packageName = "stale",
+        .packageVersion = "9.9.9",
+        .system = "demo",
+        .status = "success"
+    }));
+
+    REQUIRE(history.replaceInstalledState("demo", {
+        InstalledEntry{.name = "tool", .version = "1.0.0", .system = "demo"},
+        InstalledEntry{.name = "tool", .version = "2.0.0", .system = "demo"},
+        InstalledEntry{.name = "fresh", .version = "3.0.0", .system = "demo"},
+    }));
+
+    const std::vector<InstalledEntry> entries = history.loadInstalledState();
+    REQUIRE(entries.size() == 3);
+    CHECK(find_entry_version(entries, "demo", "tool", "1.0.0").has_value());
+    CHECK(find_entry_version(entries, "demo", "tool", "2.0.0").has_value());
+    CHECK(find_entry_version(entries, "demo", "fresh", "3.0.0").has_value());
+    CHECK_FALSE(find_entry(entries, "demo", "stale").has_value());
 }
 
 TEST_CASE("snapshot exporter reads installed state from history database", "[unit][snapshot][history]") {

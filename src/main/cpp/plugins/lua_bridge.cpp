@@ -803,7 +803,10 @@ std::vector<PackageInfo> LuaBridge::list(const PluginCallContext& context) {
         return {};
     }
 
+    const bool silentRuntime = hasSilentRuntimeFlag(context.flags);
+    m_silentRuntimeOutput.store(silentRuntime);
     auto result = func(context);
+    m_silentRuntimeOutput.store(false);
     if (!result.valid()) {
         sol::error err = result;
         log_lua_error(m_logger, m_pluginId, std::string("Lua Error (list): ") + err.what());
@@ -984,18 +987,30 @@ DownloadResult LuaBridge::downloadToPath(const std::string& url, const std::stri
 }
 
 void LuaBridge::logDebug(const std::string& pluginId, const std::string& message) {
+	if (m_silentRuntimeOutput.load()) {
+		return;
+	}
     m_logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::debug, .message = message, .source = "plugin", .scope = pluginId});
 }
 
 void LuaBridge::logInfo(const std::string& pluginId, const std::string& message) {
+	if (m_silentRuntimeOutput.load()) {
+		return;
+	}
     m_logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::info, .message = message, .source = "plugin", .scope = pluginId});
 }
 
 void LuaBridge::logWarn(const std::string& pluginId, const std::string& message) {
+	if (m_silentRuntimeOutput.load()) {
+		return;
+	}
     m_logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::warn, .message = message, .source = "plugin", .scope = pluginId});
 }
 
 void LuaBridge::logError(const std::string& pluginId, const std::string& message) {
+	if (m_silentRuntimeOutput.load()) {
+		return;
+	}
     m_logger.emit(OutputAction::LOG, OutputContext{.level = spdlog::level::err, .message = message, .source = "plugin", .scope = pluginId});
 }
 

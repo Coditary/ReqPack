@@ -61,6 +61,9 @@ public:
     // Update installed-state snapshot (only when history.trackInstalled).
     bool updateInstalledState(const HistoryEntry& entry) const;
 
+    // Replace one system snapshot with authoritative installed-state data.
+    bool replaceInstalledState(const std::string& system, const std::vector<InstalledEntry>& entries) const;
+
     // Convenience: fill timestamp, then call appendEvent + updateInstalledState
     // according to the respective config flags.
     bool record(const HistoryEntry& entry) const;

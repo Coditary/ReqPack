@@ -56,6 +56,7 @@ ReqPackConfig make_executor_test_config(const std::filesystem::path& root) {
     config.registry.shutDownPluginsOnExit = true;
     config.execution.transactionDatabasePath = (root / "transactions").string();
     config.execution.checkVirtualFileSystemWrite = false;
+    config.history.historyPath = (root / "history").string();
     return config;
 }
 
@@ -82,6 +83,20 @@ const TransactionItemRecord* find_item(const std::vector<TransactionItemRecord>&
     for (const TransactionItemRecord& item : items) {
         if (item.package.name == name) {
             return &item;
+        }
+    }
+    return nullptr;
+}
+
+const InstalledEntry* find_installed(
+    const std::vector<InstalledEntry>& entries,
+    const std::string& system,
+    const std::string& name,
+    const std::string& version
+) {
+    for (const InstalledEntry& entry : entries) {
+        if (entry.system == system && entry.name == name && entry.version == version) {
+            return &entry;
         }
     }
     return nullptr;
@@ -326,6 +341,121 @@ function plugin.update(context, packages) return true end
 function plugin.list(context) return {} end
 function plugin.search(context, prompt) return {} end
 function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)";
+
+const char* HISTORY_SYNC_PLUGIN = R"(
+plugin = {}
+
+local function shell_quote(value)
+  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function installed_path(dir)
+  return dir .. "/installed.txt"
+end
+
+local function load_installed(dir)
+  local items = {}
+  local path = installed_path(dir)
+  local result = reqpack.exec.run("test -f " .. shell_quote(path) .. " && cat " .. shell_quote(path))
+  if result.success and result.stdout ~= nil then
+    for line in string.gmatch(result.stdout, "[^\r\n]+") do
+      local name, version = line:match("^(.-)\t(.+)$")
+      if name and version then
+        items[#items + 1] = { name = name, version = version }
+      end
+    end
+  end
+  return items
+end
+
+local function save_installed(dir, items)
+  local lines = {}
+  for _, item in ipairs(items) do
+    lines[#lines + 1] = item.name .. "\t" .. item.version
+  end
+  table.sort(lines)
+  local content = table.concat(lines, "\n")
+  if #content > 0 then
+    content = content .. "\n"
+  end
+  reqpack.exec.run("mkdir -p " .. shell_quote(dir))
+  reqpack.exec.run("printf '%s' " .. shell_quote(content) .. " > " .. shell_quote(installed_path(dir)))
+end
+
+local function resolved_version(package)
+  if package.version ~= nil and package.version ~= "" then
+    return package.version
+  end
+  if package.name == "actual" then
+    return "1.2.3"
+  end
+  return "resolved-" .. package.name
+end
+
+function plugin.getName() return "history-sync-plugin" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "history" } end
+function plugin.getMissingPackages(packages)
+  local missing = {}
+  for _, package in ipairs(packages) do
+    missing[#missing + 1] = package
+  end
+  return missing
+end
+function plugin.install(context, packages)
+  local installed = load_installed(context.plugin.dir)
+  for _, package in ipairs(packages) do
+    installed[#installed + 1] = { name = package.name, version = resolved_version(package) }
+  end
+  save_installed(context.plugin.dir, installed)
+  return true
+end
+function plugin.installLocal(context, path) return false end
+function plugin.remove(context, packages)
+  local installed = load_installed(context.plugin.dir)
+  local kept = {}
+  for _, item in ipairs(installed) do
+    local removed = false
+    for _, package in ipairs(packages) do
+      if item.name == package.name and (package.version == nil or package.version == "" or item.version == package.version) then
+        removed = true
+        break
+      end
+    end
+    if not removed then
+      kept[#kept + 1] = item
+    end
+  end
+  save_installed(context.plugin.dir, kept)
+  return true
+end
+function plugin.update(context, packages)
+  return plugin.install(context, packages)
+end
+function plugin.list(context)
+  local items = load_installed(context.plugin.dir)
+  for _, item in ipairs(items) do
+    item.description = "Installed from plugin state"
+  end
+  return items
+end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package)
+  for _, item in ipairs(load_installed(context.plugin.dir)) do
+    if item.name == package then
+      return { name = item.name, version = item.version, description = "Installed from plugin state" }
+    end
+  end
+  return { name = package, version = "unknown", description = "missing" }
+end
+function plugin.resolvePackage(context, package)
+  local resolved = package
+  resolved.version = resolved_version(package)
+  return resolved
+end
 function plugin.shutdown() return true end
 )";
 
@@ -675,4 +805,31 @@ TEST_CASE("executor keeps partial batch success and marks unavailable packages p
     REQUIRE(missingItem != nullptr);
     CHECK(missingItem->status == "failed");
     CHECK(missingItem->errorMessage == "package unavailable");
+}
+
+TEST_CASE("executor refreshes history snapshot from authoritative plugin list", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-history-sync"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.execution.useTransactionDb = false;
+
+    add_plugin_script(tempDir.path() / "plugins", "history", HISTORY_SYNC_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Graph graph = make_linear_graph({
+        Package{.action = ActionType::INSTALL, .system = "history", .name = "actual"},
+        Package{.action = ActionType::INSTALL, .system = "history", .name = "tool", .version = "1.0.0"},
+        Package{.action = ActionType::INSTALL, .system = "history", .name = "tool", .version = "2.0.0"},
+    });
+
+    executer.setRequestedItemCount(3, true);
+    executer.execute(&graph);
+
+    const std::vector<InstalledEntry> entries = HistoryManager(config).loadInstalledState();
+    REQUIRE(entries.size() == 3);
+    CHECK(find_installed(entries, "history", "actual", "1.2.3") != nullptr);
+    CHECK(find_installed(entries, "history", "tool", "1.0.0") != nullptr);
+    CHECK(find_installed(entries, "history", "tool", "2.0.0") != nullptr);
 }

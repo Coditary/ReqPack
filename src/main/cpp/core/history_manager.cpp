@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -221,8 +222,20 @@ std::optional<InstalledEntry> deserialize_installed_entry(const std::string& pay
     return entry;
 }
 
-std::string installed_state_key(const std::string& system, const std::string& name) {
-    return std::string(INSTALLED_STATE_KEY_PREFIX) + escape_field(system) + '\n' + escape_field(name);
+std::string installed_state_key(const std::string& system, const std::string& name, const std::string& version) {
+    return std::string(INSTALLED_STATE_KEY_PREFIX) + escape_field(system) + '\n' + escape_field(name) + '\n' + escape_field(version);
+}
+
+std::string installed_state_system_prefix(const std::string& system) {
+    return std::string(INSTALLED_STATE_KEY_PREFIX) + escape_field(system) + '\n';
+}
+
+std::string installed_state_name_prefix(const std::string& system, const std::string& name) {
+    return installed_state_system_prefix(system) + escape_field(name) + '\n';
+}
+
+std::string installed_state_identity(const InstalledEntry& entry) {
+    return escape_field(entry.name) + '\n' + escape_field(entry.version);
 }
 
 struct InstalledStateEnvironment {
@@ -346,6 +359,39 @@ bool delete_value(MDB_txn* transaction, MDB_dbi dbi, const std::string& key) {
     return result == MDB_SUCCESS || result == MDB_NOTFOUND;
 }
 
+std::vector<std::string> collect_keys_with_prefix(MDB_txn* transaction, MDB_dbi dbi, const std::string& prefix) {
+    std::vector<std::string> keys;
+
+    MDB_cursor* cursor = nullptr;
+    if (mdb_cursor_open(transaction, dbi, &cursor) != MDB_SUCCESS) {
+        return keys;
+    }
+
+    MDB_val key{prefix.size(), const_cast<char*>(prefix.data())};
+    MDB_val value;
+    int result = mdb_cursor_get(cursor, &key, &value, MDB_SET_RANGE);
+    while (result == MDB_SUCCESS) {
+        const std::string currentKey(static_cast<const char*>(key.mv_data), key.mv_size);
+        if (!starts_with(currentKey, prefix)) {
+            break;
+        }
+        keys.push_back(currentKey);
+        result = mdb_cursor_get(cursor, &key, &value, MDB_NEXT);
+    }
+
+    mdb_cursor_close(cursor);
+    return keys;
+}
+
+bool delete_keys(MDB_txn* transaction, MDB_dbi dbi, const std::vector<std::string>& keys) {
+    for (const std::string& key : keys) {
+        if (!delete_value(transaction, dbi, key)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool ensure_legacy_installed_state_imported(
     const InstalledStateEnvironment& environment,
     const std::filesystem::path& legacyPath
@@ -367,7 +413,7 @@ bool ensure_legacy_installed_state_imported(
 
     const std::vector<InstalledEntry> legacyEntries = read_legacy_installed_state(legacyPath);
     for (const InstalledEntry& entry : legacyEntries) {
-        if (!put_value(transaction, environment.dbi, installed_state_key(entry.system, entry.name), serialize_installed_entry(entry))) {
+        if (!put_value(transaction, environment.dbi, installed_state_key(entry.system, entry.name, entry.version), serialize_installed_entry(entry))) {
             mdb_txn_abort(transaction);
             return false;
         }
@@ -454,7 +500,7 @@ bool upsert_installed_state_database(
     }
 
     if (!put_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY), "1") ||
-        !put_value(transaction, environment.dbi, installed_state_key(entry.system, entry.name), serialize_installed_entry(entry))) {
+        !put_value(transaction, environment.dbi, installed_state_key(entry.system, entry.name, entry.version), serialize_installed_entry(entry))) {
         mdb_txn_abort(transaction);
         return false;
     }
@@ -466,7 +512,8 @@ bool remove_installed_state_database(
     const std::filesystem::path& dbDirectory,
     const std::filesystem::path& legacyPath,
     const std::string& system,
-    const std::string& name
+    const std::string& name,
+    const std::string& version
 ) {
     InstalledStateEnvironment environment = open_installed_state_environment(dbDirectory, true);
     if (!environment) {
@@ -481,10 +528,72 @@ bool remove_installed_state_database(
         return false;
     }
 
+    const std::vector<std::string> keys = version.empty()
+        ? collect_keys_with_prefix(transaction, environment.dbi, installed_state_name_prefix(system, name))
+        : std::vector<std::string>{installed_state_key(system, name, version)};
+
     if (!put_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY), "1") ||
-        !delete_value(transaction, environment.dbi, installed_state_key(system, name))) {
+        !delete_keys(transaction, environment.dbi, keys)) {
         mdb_txn_abort(transaction);
         return false;
+    }
+
+    return mdb_txn_commit(transaction) == MDB_SUCCESS;
+}
+
+bool replace_installed_state_database(
+    const std::filesystem::path& dbDirectory,
+    const std::filesystem::path& legacyPath,
+    const std::string& system,
+    const std::vector<InstalledEntry>& entries
+) {
+    InstalledStateEnvironment environment = open_installed_state_environment(dbDirectory, true);
+    if (!environment) {
+        return false;
+    }
+    if (!ensure_legacy_installed_state_imported(environment, legacyPath)) {
+        return false;
+    }
+
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(environment.env, nullptr, 0, &transaction) != MDB_SUCCESS) {
+        return false;
+    }
+
+    const std::vector<std::string> existingKeys = collect_keys_with_prefix(transaction, environment.dbi, installed_state_system_prefix(system));
+    std::map<std::string, InstalledEntry> existingByIdentity;
+    for (const std::string& key : existingKeys) {
+        const std::optional<std::string> payload = read_value(transaction, environment.dbi, key);
+        if (!payload.has_value()) {
+            continue;
+        }
+        if (const auto entry = deserialize_installed_entry(payload.value())) {
+            existingByIdentity[installed_state_identity(entry.value())] = entry.value();
+        }
+    }
+
+    if (!put_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY), "1") ||
+        !delete_keys(transaction, environment.dbi, existingKeys)) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
+    const std::string syncedAt = utc_timestamp_now();
+    for (InstalledEntry entry : entries) {
+        if (entry.name.empty()) {
+            continue;
+        }
+
+        entry.system = system;
+        if (entry.installedAt.empty()) {
+            const auto existing = existingByIdentity.find(installed_state_identity(entry));
+            entry.installedAt = existing != existingByIdentity.end() ? existing->second.installedAt : syncedAt;
+        }
+
+        if (!put_value(transaction, environment.dbi, installed_state_key(entry.system, entry.name, entry.version), serialize_installed_entry(entry))) {
+            mdb_txn_abort(transaction);
+            return false;
+        }
     }
 
     return mdb_txn_commit(transaction) == MDB_SUCCESS;
@@ -696,7 +805,11 @@ bool HistoryManager::updateInstalledState(const HistoryEntry& entry) const {
 
     std::lock_guard<std::mutex> lock(mutex);
     if (isRemove) {
-        return remove_installed_state_database(installedStateDatabasePath(), legacyInstalledStatePath(), entry.system, entry.packageName);
+        return remove_installed_state_database(installedStateDatabasePath(), legacyInstalledStatePath(), entry.system, entry.packageName, entry.packageVersion);
+    }
+
+    if (isUpdate && !remove_installed_state_database(installedStateDatabasePath(), legacyInstalledStatePath(), entry.system, entry.packageName, {})) {
+        return false;
     }
 
     return upsert_installed_state_database(
@@ -709,6 +822,15 @@ bool HistoryManager::updateInstalledState(const HistoryEntry& entry) const {
             .installedAt = entry.timestamp
         }
     );
+}
+
+bool HistoryManager::replaceInstalledState(const std::string& system, const std::vector<InstalledEntry>& entries) const {
+    if (!config.history.trackInstalled) {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex);
+    return replace_installed_state_database(installedStateDatabasePath(), legacyInstalledStatePath(), system, entries);
 }
 
 bool HistoryManager::record(const HistoryEntry& entry) const {
