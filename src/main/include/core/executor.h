@@ -3,6 +3,7 @@
 #include "core/configuration.h"
 #include "core/history_manager.h"
 #include "core/registry.h"
+#include "core/security_gateway_service.h"
 #include "core/transaction_database.h"
 #include "core/types.h"
 
@@ -34,6 +35,7 @@ class Executer {
 	};
 
 	Registry* registry;
+	SecurityGatewayService securityGateway;
 	std::unique_ptr<TransactionDatabase> transactionDatabase;
 	std::unique_ptr<HistoryManager> historyManager;
 	mutable std::string activeRunId;
@@ -54,6 +56,7 @@ class Executer {
 	std::vector<TransactionRecord> executeTaskGroup(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> executeTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const;
 	PluginCallContext buildPluginContext(IPlugin* plugin, const TaskGroup& taskGroup) const;
+	bool dispatchTaskGroupToSecurityGateway(const TaskGroup& taskGroup) const;
 	void writeTransactionResults(const std::vector<TransactionRecord>& records) const;
 	void markCommittedTransactions() const;
 	void deleteCommittedTransactions() const;

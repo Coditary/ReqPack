@@ -1001,6 +1001,73 @@ TEST_CASE("reqpack serve stdin executes commands line by line and continues afte
     CHECK(output.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
 }
 
+TEST_CASE("reqpack install returns non-zero when security validation blocks execution", "[integration][orchestrator][security]") {
+    TempDir tempDir{"reqpack-orchestrator-security-block"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-demo",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "critical demo package issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "demo-osv", "name": "sample"},
+                "versions": ["1.0.0"]
+            }]
+        }
+    ])");
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    osvFeedUrl = '" + feedPath.string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'always',\n"
+        "    severityThreshold = 'critical',\n"
+        "    onUnsafe = 'abort',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {"install", "apply", "sample@1.0.0"},
+        status
+    );
+
+    REQUIRE(status != 0);
+    CHECK(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 1);
+    CHECK(output.find("execution blocked by security policy") != std::string::npos);
+    CHECK(output.find("critical demo package issue") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(pluginDirectory / "apply" / "state" / "install.txt"));
+}
+
 TEST_CASE("reqpack serve remote text mode supports token auth", "[integration][orchestrator][remote]") {
     TempDir tempDir{"reqpack-orchestrator-remote-text"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
@@ -1024,6 +1091,76 @@ TEST_CASE("reqpack serve remote text mode supports token auth", "[integration][o
     const auto listResponse = read_text_protocol_response(client);
     CHECK(listResponse.first == "OK");
     CHECK(listResponse.second.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+    ::close(client);
+}
+
+TEST_CASE("reqpack serve remote returns error when security validation blocks execution", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-security-block"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-demo",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "critical demo package issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "demo-osv", "name": "sample"},
+                "versions": ["1.0.0"]
+            }]
+        }
+    ])");
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    osvFeedUrl = '" + feedPath.string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'always',\n"
+        "    severityThreshold = 'critical',\n"
+        "    onUnsafe = 'abort',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const int client = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(client, "auth token secret\n"));
+    const auto authResponse = read_text_protocol_response(client);
+    CHECK(authResponse.first == "OK");
+
+    REQUIRE(send_socket_text(client, "install apply sample@1.0.0\n"));
+    const auto installResponse = read_text_protocol_response(client);
+    CHECK(installResponse.first == "ERR");
+    CHECK(installResponse.second.find("execution blocked by security policy") != std::string::npos);
+    CHECK(installResponse.second.find("critical demo package issue") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(pluginDirectory / "apply" / "state" / "install.txt"));
     ::close(client);
 }
 

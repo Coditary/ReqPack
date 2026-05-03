@@ -186,6 +186,10 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                 filePath = "~/logs/reqpack.log",
             },
             security = {
+                autoFetch = true,
+                defaultGateway = "security",
+                cachePath = "~/security-cache",
+                indexPath = "~/security-index",
                 severityThreshold = "not-real",
                 onUnsafe = "ask",
                 osvDatabasePath = "~/osv-db",
@@ -198,6 +202,22 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                 allowVulnerabilityIds = { "CVE-3" },
                 osvEcosystemMap = {
                     DNF = "Debian",
+                },
+                ecosystemMap = {
+                    Maven = "Maven",
+                },
+                gateways = {
+                    security = {
+                        backends = { "osv", "snyk" },
+                    },
+                },
+                backends = {
+                    osv = {
+                        feedUrl = "https://mirror.example.test/osv",
+                        refreshMode = "always",
+                        refreshIntervalSeconds = 123,
+                        overlayPath = "~/backend-overlay.json",
+                    },
                 },
             },
             reports = {
@@ -249,6 +269,10 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(std::filesystem::path(config.logging.filePath) == home / "logs/reqpack.log");
     CHECK(config.security.severityThreshold == SeverityLevel::HIGH);
     CHECK(config.security.onUnsafe == UnsafeAction::PROMPT);
+    CHECK(config.security.autoFetch);
+    CHECK(config.security.defaultGateway == "security");
+    CHECK(std::filesystem::path(config.security.cachePath) == home / "security-cache");
+    CHECK(std::filesystem::path(config.security.indexPath) == home / "security-index");
     CHECK(std::filesystem::path(config.security.osvDatabasePath) == home / "osv-db");
     CHECK(std::filesystem::path(config.security.osvOverlayPath) == home / "security-overlay.lua");
     CHECK(config.security.osvRefreshMode == OsvRefreshMode::PERIODIC);
@@ -259,6 +283,15 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(config.security.allowVulnerabilityIds == std::vector<std::string>{"CVE-3"});
     REQUIRE(config.security.osvEcosystemMap.contains("dnf"));
     CHECK(config.security.osvEcosystemMap.at("dnf") == "Debian");
+    REQUIRE(config.security.ecosystemMap.contains("maven"));
+    CHECK(config.security.ecosystemMap.at("maven") == "Maven");
+    REQUIRE(config.security.gateways.contains("security"));
+    CHECK(config.security.gateways.at("security").backends == std::vector<std::string>{"osv", "snyk"});
+    REQUIRE(config.security.backends.contains("osv"));
+    CHECK(config.security.backends.at("osv").feedUrl == "https://mirror.example.test/osv");
+    CHECK(config.security.backends.at("osv").refreshMode == OsvRefreshMode::ALWAYS);
+    CHECK(config.security.backends.at("osv").refreshIntervalSeconds == 123);
+    CHECK(std::filesystem::path(config.security.backends.at("osv").overlayPath) == home / "backend-overlay.json");
     CHECK(config.reports.enabled);
     CHECK(config.reports.format == ReportFormat::JSON);
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/reqpack.json");

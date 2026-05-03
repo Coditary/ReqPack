@@ -37,6 +37,27 @@ std::string file_extension(const std::string& path) {
     return ext;
 }
 
+void log_validation_blocked(const std::vector<ValidationFinding>& findings) {
+    Logger::instance().err("execution blocked by security policy");
+    std::size_t shown = 0;
+    for (const ValidationFinding& finding : findings) {
+        if (finding.kind != "vulnerability" && finding.kind != "sync_error" && finding.kind != "unsupported_ecosystem" &&
+            finding.kind != "unresolved_version") {
+            continue;
+        }
+
+        std::string message = finding.message.empty() ? finding.id : finding.message;
+        if (!finding.package.system.empty() && !finding.package.name.empty()) {
+            message += " [" + finding.package.system + ":" + finding.package.name + "]";
+        }
+        Logger::instance().err(message);
+        ++shown;
+        if (shown >= 5) {
+            break;
+        }
+    }
+}
+
 } // namespace
 
 Orchestrator::Orchestrator(std::vector<Request> requests, const ReqPackConfig& config)
@@ -75,7 +96,7 @@ int Orchestrator::countRequestedItems() const {
 	return count;
 }
 
-void Orchestrator::run() {
+int Orchestrator::run() {
 	(void)this->registry->getDatabase()->ensureReady();
 	this->registry->scanDirectory(this->config.registry.pluginDirectory);
 	const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";
@@ -83,8 +104,14 @@ void Orchestrator::run() {
 	if (std::filesystem::exists(workspacePluginDirectory) && workspacePluginDirectory != configuredPluginDirectory) {
 		this->registry->scanDirectory(workspacePluginDirectory.string());
 	}
+	auto cleanupTempFiles = [](const std::vector<std::filesystem::path>& tempFiles) {
+		for (const std::filesystem::path& tempFile : tempFiles) {
+			std::error_code ec;
+			std::filesystem::remove(tempFile, ec);
+		}
+	};
 	if (this->requests.empty()) {
-		return;
+		return 0;
 	}
 
 	// ── URL pre-processing ────────────────────────────────────────────────────
@@ -103,13 +130,15 @@ void Orchestrator::run() {
 			if (ext.empty()) {
 				Logger::instance().err("cannot determine system for local target with no file extension: " + request.localPath +
 					"\nUse: ReqPack install <system> <path>");
-				return;
+				cleanupTempFiles(tempFiles);
+				return 1;
 			}
 			const std::string resolved = this->registry->resolveSystemForExtension(ext);
 			if (resolved.empty()) {
 				Logger::instance().err("no plugin found for file extension '" + ext + "': " + request.localPath +
 					"\nUse: ReqPack install <system> <path>");
-				return;
+				cleanupTempFiles(tempFiles);
+				return 1;
 			}
 			request.system = resolved;
 		}
@@ -129,7 +158,8 @@ void Orchestrator::run() {
 		Downloader downloader(this->registry->getDatabase(), this->config);
 		if (!downloader.download(request.localPath, tempFile.string())) {
 			Logger::instance().err("failed to download: " + request.localPath);
-			return;
+			cleanupTempFiles(tempFiles);
+			return 1;
 		}
 
 		tempFiles.push_back(tempFile);
@@ -143,7 +173,7 @@ void Orchestrator::run() {
 				Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "list");
 			}
 		}
-		return;
+		return 0;
 	}
 
 	if (this->requests.front().action == ActionType::OUTDATED) {
@@ -152,12 +182,12 @@ void Orchestrator::run() {
 				Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "outdated");
 			}
 		}
-		return;
+		return 0;
 	}
 
 	if (this->requests.front().action == ActionType::SNAPSHOT) {
 		(void)this->snapshotExporter->exportSnapshot(this->requests.front());
-		return;
+		return 0;
 	}
 
 	if (this->requests.front().action == ActionType::SEARCH) {
@@ -166,7 +196,7 @@ void Orchestrator::run() {
 				Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "search");
 			}
 		}
-		return;
+		return 0;
 	}
 
 	if (this->requests.front().action == ActionType::INFO) {
@@ -174,7 +204,7 @@ void Orchestrator::run() {
 			const PackageInfo item = this->executor->info(request);
 			Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "info");
 		}
-		return;
+		return 0;
 	}
 
 	Graph* graph = this->planner->plan(this->requests);
@@ -183,16 +213,23 @@ void Orchestrator::run() {
 			(void)this->sbomExporter->exportGraph(*graph, this->requests.front());
 		}
 		delete graph;
-		return;
+		cleanupTempFiles(tempFiles);
+		return 0;
 	}
-	graph = this->validator->validate(graph);
+	Graph* validatedGraph = this->validator->validate(graph);
+	if (validatedGraph == nullptr) {
+		if (graph != nullptr) {
+			log_validation_blocked(this->validator->getLastFindings());
+		}
+		delete graph;
+		cleanupTempFiles(tempFiles);
+		return 1;
+	}
+	graph = validatedGraph;
 	this->executor->setRequestedItemCount(this->countRequestedItems(), true);
 	this->executor->execute(graph);
 	delete graph;
 
-	// Clean up any temp files downloaded for URL-based installs.
-	for (const std::filesystem::path& tempFile : tempFiles) {
-		std::error_code ec;
-		std::filesystem::remove(tempFile, ec);
-	}
+	cleanupTempFiles(tempFiles);
+	return 0;
 }

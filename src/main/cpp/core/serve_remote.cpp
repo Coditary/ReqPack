@@ -811,9 +811,9 @@ RemoteResponse execute_command(
     DisplayGuard displayGuard(logger, display);
     StdIoCapture capture;
     Orchestrator orchestrator(requests, effectiveConfig);
-    orchestrator.run();
+    const int result = orchestrator.run();
     logger.flushSync();
-    return RemoteResponse{.ok = true, .body = capture.finish()};
+    return RemoteResponse{.ok = result == 0, .body = capture.finish()};
 }
 
 RemoteResponse execute_upload_install_command(

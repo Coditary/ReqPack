@@ -7,12 +7,18 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
+#include <map>
 #include <sstream>
 
 namespace {
 
 using boost::property_tree::ptree;
+
+bool starts_with(const std::string& value, const std::string& prefix) {
+    return value.rfind(prefix, 0) == 0;
+}
 
 std::string read_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
@@ -40,8 +46,204 @@ std::optional<ptree> parse_json_tree(const std::string& json) {
     }
 }
 
+int severity_rank(const std::string& severity) {
+    if (severity == "critical") {
+        return 4;
+    }
+    if (severity == "high") {
+        return 3;
+    }
+    if (severity == "medium") {
+        return 2;
+    }
+    if (severity == "low") {
+        return 1;
+    }
+    return 0;
+}
+
+double severity_floor_score(const std::string& severity) {
+    if (severity == "critical") {
+        return 9.0;
+    }
+    if (severity == "high") {
+        return 7.0;
+    }
+    if (severity == "medium") {
+        return 4.0;
+    }
+    if (severity == "low") {
+        return 0.1;
+    }
+    return 0.0;
+}
+
+void apply_severity_and_score(const std::string& candidateSeverity, const double candidateScore, std::string& severity, double& score) {
+    const int candidateRank = severity_rank(candidateSeverity);
+    if (candidateRank == 0) {
+        return;
+    }
+
+    const int currentRank = severity_rank(severity);
+    if (candidateRank > currentRank || (candidateRank == currentRank && candidateScore > score)) {
+        severity = candidateSeverity;
+        score = std::max(score, candidateScore);
+    }
+}
+
+double round_cvss_score(const double score) {
+    if (score <= 0.0) {
+        return 0.0;
+    }
+    return std::ceil(score * 10.0 - 1e-9) / 10.0;
+}
+
+std::optional<double> cvss_v3_base_score_from_vector(const std::string& value) {
+    if (!starts_with(value, "CVSS:3.0/") && !starts_with(value, "CVSS:3.1/")) {
+        return std::nullopt;
+    }
+
+    std::map<std::string, std::string> metrics;
+    std::size_t segmentStart = value.find('/');
+    while (segmentStart != std::string::npos) {
+        const std::size_t segmentEnd = value.find('/', segmentStart + 1);
+        const std::string segment = value.substr(segmentStart + 1, segmentEnd - segmentStart - 1);
+        if (const std::size_t separator = segment.find(':'); separator != std::string::npos) {
+            metrics[segment.substr(0, separator)] = segment.substr(separator + 1);
+        }
+        segmentStart = segmentEnd;
+    }
+
+    const auto scopeIt = metrics.find("S");
+    const auto attackVectorIt = metrics.find("AV");
+    const auto attackComplexityIt = metrics.find("AC");
+    const auto privilegesRequiredIt = metrics.find("PR");
+    const auto userInteractionIt = metrics.find("UI");
+    const auto confidentialityIt = metrics.find("C");
+    const auto integrityIt = metrics.find("I");
+    const auto availabilityIt = metrics.find("A");
+    if (scopeIt == metrics.end() ||
+        attackVectorIt == metrics.end() ||
+        attackComplexityIt == metrics.end() ||
+        privilegesRequiredIt == metrics.end() ||
+        userInteractionIt == metrics.end() ||
+        confidentialityIt == metrics.end() ||
+        integrityIt == metrics.end() ||
+        availabilityIt == metrics.end()) {
+        return std::nullopt;
+    }
+
+    const std::string& scope = scopeIt->second;
+    const auto attackVector = [&]() -> std::optional<double> {
+        if (attackVectorIt->second == "N") return 0.85;
+        if (attackVectorIt->second == "A") return 0.62;
+        if (attackVectorIt->second == "L") return 0.55;
+        if (attackVectorIt->second == "P") return 0.20;
+        return std::nullopt;
+    }();
+    const auto attackComplexity = [&]() -> std::optional<double> {
+        if (attackComplexityIt->second == "L") return 0.77;
+        if (attackComplexityIt->second == "H") return 0.44;
+        return std::nullopt;
+    }();
+    const auto privilegesRequired = [&]() -> std::optional<double> {
+        if (privilegesRequiredIt->second == "N") return 0.85;
+        if (scope == "U") {
+            if (privilegesRequiredIt->second == "L") return 0.62;
+            if (privilegesRequiredIt->second == "H") return 0.27;
+        }
+        if (scope == "C") {
+            if (privilegesRequiredIt->second == "L") return 0.68;
+            if (privilegesRequiredIt->second == "H") return 0.50;
+        }
+        return std::nullopt;
+    }();
+    const auto userInteraction = [&]() -> std::optional<double> {
+        if (userInteractionIt->second == "N") return 0.85;
+        if (userInteractionIt->second == "R") return 0.62;
+        return std::nullopt;
+    }();
+    const auto confidentiality = [&]() -> std::optional<double> {
+        if (confidentialityIt->second == "H") return 0.56;
+        if (confidentialityIt->second == "L") return 0.22;
+        if (confidentialityIt->second == "N") return 0.0;
+        return std::nullopt;
+    }();
+    const auto integrity = [&]() -> std::optional<double> {
+        if (integrityIt->second == "H") return 0.56;
+        if (integrityIt->second == "L") return 0.22;
+        if (integrityIt->second == "N") return 0.0;
+        return std::nullopt;
+    }();
+    const auto availability = [&]() -> std::optional<double> {
+        if (availabilityIt->second == "H") return 0.56;
+        if (availabilityIt->second == "L") return 0.22;
+        if (availabilityIt->second == "N") return 0.0;
+        return std::nullopt;
+    }();
+    if (!attackVector.has_value() ||
+        !attackComplexity.has_value() ||
+        !privilegesRequired.has_value() ||
+        !userInteraction.has_value() ||
+        !confidentiality.has_value() ||
+        !integrity.has_value() ||
+        !availability.has_value()) {
+        return std::nullopt;
+    }
+
+    const double impactSubscore = 1.0 -
+        (1.0 - confidentiality.value()) *
+        (1.0 - integrity.value()) *
+        (1.0 - availability.value());
+    const double impact = scope == "C"
+        ? 7.52 * (impactSubscore - 0.029) - 3.25 * std::pow(impactSubscore - 0.02, 15.0)
+        : 6.42 * impactSubscore;
+    if (impact <= 0.0) {
+        return 0.0;
+    }
+
+    const double exploitability = 8.22 *
+        attackVector.value() *
+        attackComplexity.value() *
+        privilegesRequired.value() *
+        userInteraction.value();
+    const double baseScore = scope == "C"
+        ? std::min(1.08 * (impact + exploitability), 10.0)
+        : std::min(impact + exploitability, 10.0);
+    return round_cvss_score(baseScore);
+}
+
+std::string normalize_database_severity(const std::string& value) {
+    const std::string normalized = osv_to_lower_copy(value);
+    if (normalized == "critical") {
+        return "critical";
+    }
+    if (normalized == "high") {
+        return "high";
+    }
+    if (normalized == "moderate" || normalized == "medium") {
+        return "medium";
+    }
+    if (normalized == "low") {
+        return "low";
+    }
+    return "unassigned";
+}
+
+void apply_database_severity_fallback(const ptree& node, std::string& severity, double& score) {
+    const std::string normalizedSeverity = normalize_database_severity(node.get<std::string>("database_specific.severity", {}));
+    apply_severity_and_score(normalizedSeverity, severity_floor_score(normalizedSeverity), severity, score);
+}
+
 double score_from_string(const std::string& value) {
     try {
+        if (const auto cvssV3Score = cvss_v3_base_score_from_vector(value); cvssV3Score.has_value()) {
+            return cvssV3Score.value();
+        }
+        if (starts_with(value, "CVSS:")) {
+            return 0.0;
+        }
+
         std::size_t start = value.find_first_of("0123456789");
         if (start == std::string::npos) {
             return 0.0;
@@ -77,9 +279,8 @@ void update_severity_and_score(const ptree& severityNode, std::string& severity,
     for (const auto& [_, item] : severityNode) {
         const std::string value = item.get<std::string>("score", {});
         const double parsedScore = score_from_string(value);
-        if (parsedScore > score) {
-            score = parsedScore;
-            severity = severity_from_score(parsedScore);
+        if (parsedScore > 0.0) {
+            apply_severity_and_score(severity_from_score(parsedScore), parsedScore, severity, score);
         }
     }
 }
@@ -157,6 +358,7 @@ std::optional<OsvAdvisory> osv_parse_advisory(const std::string& json) {
     if (const auto severities = tree.get_child_optional("severity")) {
         update_severity_and_score(severities.value(), advisory.severity, advisory.score);
     }
+    apply_database_severity_fallback(tree, advisory.severity, advisory.score);
 
     if (const auto affected = tree.get_child_optional("affected")) {
         for (const auto& [_, affectedItem] : affected.value()) {
@@ -169,6 +371,7 @@ std::optional<OsvAdvisory> osv_parse_advisory(const std::string& json) {
             if (const auto packageSeverities = affectedItem.get_child_optional("severity")) {
                 update_severity_and_score(packageSeverities.value(), package.severity, package.score);
             }
+            apply_database_severity_fallback(affectedItem, package.severity, package.score);
 
             if (const auto versions = affectedItem.get_child_optional("versions")) {
                 for (const auto& [_, item] : versions.value()) {

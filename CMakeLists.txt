@@ -81,6 +81,7 @@ set(SOURCES
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/security_gateway_service.cpp
     src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/core/validator.cpp
@@ -124,6 +125,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/security_gateway_service.cpp
     src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/output/logger.cpp
@@ -187,6 +189,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/rqp_state_store.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/security_gateway_service.cpp
     src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/core/history_manager.cpp

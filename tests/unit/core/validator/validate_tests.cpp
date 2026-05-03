@@ -2,6 +2,7 @@
 
 #include <boost/graph/adjacency_list.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -44,6 +45,19 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
 Graph make_graph() {
     Graph graph;
     boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "dnf", .name = "ripgrep"}, graph);
+    return graph;
+}
+
+Graph make_remove_graph() {
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::REMOVE, .system = "dnf", .name = "ripgrep", .version = "14.1"}, graph);
+    return graph;
+}
+
+Graph make_mixed_graph() {
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::REMOVE, .system = "dnf", .name = "ripgrep", .version = "14.1"}, graph);
+    boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "dnf", .name = "jq", .version = "1.7"}, graph);
     return graph;
 }
 
@@ -135,6 +149,22 @@ TEST_CASE("validator aborts immediately when findings exceed threshold and promp
     CHECK(validator.promptCalls == 0);
 }
 
+TEST_CASE("validator stores last findings for aborted validation", "[unit][validator][validate]") {
+    ReqPackConfig config;
+    config.security.severityThreshold = SeverityLevel::HIGH;
+
+    TestValidator validator(nullptr, config);
+    validator.findings = {make_finding("critical")};
+
+    Graph graph = make_graph();
+    CHECK(validator.validate(&graph) == nullptr);
+    REQUIRE(validator.getLastFindings().size() == 1);
+    CHECK(validator.getLastFindings().front().severity == "critical");
+
+    CHECK(validator.validate(nullptr) == nullptr);
+    CHECK(validator.getLastFindings().empty());
+}
+
 TEST_CASE("validator prompts once when unsafe findings require user approval", "[unit][validator][validate]") {
     ReqPackConfig config;
     config.security.severityThreshold = SeverityLevel::HIGH;
@@ -188,6 +218,38 @@ TEST_CASE("validator applies allow rules before threshold evaluation", "[unit][v
     CHECK(validator.promptCalls == 0);
 }
 
+TEST_CASE("validator does not block remove-only graph for vulnerability findings", "[unit][validator][validate]") {
+    ReqPackConfig config;
+    config.security.severityThreshold = SeverityLevel::CRITICAL;
+    config.security.onUnsafe = UnsafeAction::ABORT;
+
+    TestValidator validator(nullptr, config);
+    ValidationFinding finding = make_finding("critical", 10.0);
+    finding.kind = "vulnerability";
+    finding.id = "GHSA-demo";
+    validator.findings = {finding};
+
+    Graph graph = make_remove_graph();
+    CHECK(validator.validate(&graph) == &graph);
+    REQUIRE(validator.getLastFindings().size() == 1);
+    CHECK(validator.getLastFindings().front().id == "GHSA-demo");
+}
+
+TEST_CASE("validator still blocks mixed-action graph for vulnerability findings", "[unit][validator][validate]") {
+    ReqPackConfig config;
+    config.security.severityThreshold = SeverityLevel::CRITICAL;
+    config.security.onUnsafe = UnsafeAction::ABORT;
+
+    TestValidator validator(nullptr, config);
+    ValidationFinding finding = make_finding("critical", 10.0);
+    finding.kind = "vulnerability";
+    finding.id = "GHSA-demo";
+    validator.findings = {finding};
+
+    Graph graph = make_mixed_graph();
+    CHECK(validator.validate(&graph) == nullptr);
+}
+
 TEST_CASE("validator matches local OSV feed against graph packages", "[unit][validator][validate]") {
     TempDir tempDir{"reqpack-validator-osv"};
     const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
@@ -215,6 +277,96 @@ TEST_CASE("validator matches local OSV feed against graph packages", "[unit][val
     Graph graph;
     boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "dnf", .name = "ripgrep", .version = "14.1"}, graph);
     CHECK(validator.validate(&graph) == nullptr);
+}
+
+TEST_CASE("validator allows explicit update when target version is safe", "[unit][validator][validate]") {
+    TempDir tempDir{"reqpack-validator-update-safe"};
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-1",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "ripgrep issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "Debian", "name": "ripgrep"},
+                "versions": ["14.1"]
+            }]
+        }
+    ])");
+
+    ReqPackConfig config;
+    config.security.osvDatabasePath = (tempDir.path() / "osv-db").string();
+    config.security.osvFeedUrl = feedPath.string();
+    config.security.osvRefreshMode = OsvRefreshMode::ALWAYS;
+    config.security.osvEcosystemMap["dnf"] = "Debian";
+    config.security.severityThreshold = SeverityLevel::HIGH;
+    config.security.onUnsafe = UnsafeAction::ABORT;
+
+    Validator validator(nullptr, config);
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::UPDATE, .system = "dnf", .name = "ripgrep", .version = "14.2"}, graph);
+    CHECK(validator.validate(&graph) == &graph);
+}
+
+TEST_CASE("validator blocks explicit update when target version is unsafe", "[unit][validator][validate]") {
+    TempDir tempDir{"reqpack-validator-update-unsafe"};
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-1",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "ripgrep issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "Debian", "name": "ripgrep"},
+                "versions": ["14.1"]
+            }]
+        }
+    ])");
+
+    ReqPackConfig config;
+    config.security.osvDatabasePath = (tempDir.path() / "osv-db").string();
+    config.security.osvFeedUrl = feedPath.string();
+    config.security.osvRefreshMode = OsvRefreshMode::ALWAYS;
+    config.security.osvEcosystemMap["dnf"] = "Debian";
+    config.security.severityThreshold = SeverityLevel::HIGH;
+    config.security.onUnsafe = UnsafeAction::ABORT;
+
+    Validator validator(nullptr, config);
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::UPDATE, .system = "dnf", .name = "ripgrep", .version = "14.1"}, graph);
+    CHECK(validator.validate(&graph) == nullptr);
+}
+
+TEST_CASE("validator allows unversioned update because target version is unknown", "[unit][validator][validate]") {
+    TempDir tempDir{"reqpack-validator-update-unversioned"};
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-1",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "ripgrep issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "Debian", "name": "ripgrep"},
+                "versions": ["14.1"]
+            }]
+        }
+    ])");
+
+    ReqPackConfig config;
+    config.security.osvDatabasePath = (tempDir.path() / "osv-db").string();
+    config.security.osvFeedUrl = feedPath.string();
+    config.security.osvRefreshMode = OsvRefreshMode::ALWAYS;
+    config.security.osvEcosystemMap["dnf"] = "Debian";
+    config.security.severityThreshold = SeverityLevel::HIGH;
+    config.security.onUnsafe = UnsafeAction::ABORT;
+
+    Validator validator(nullptr, config);
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::UPDATE, .system = "dnf", .name = "ripgrep"}, graph);
+    CHECK(validator.validate(&graph) == &graph);
 }
 
 TEST_CASE("validator matches indexed advisory data without preloading whole database", "[unit][validator][validate]") {
@@ -344,4 +496,136 @@ TEST_CASE("scope change forces full resync with new ecosystem subset", "[unit][v
     REQUIRE(rubygemsIds.size() == 1);
     CHECK(rubygemsIds[0] == "CVE-2026-rubygems");
     CHECK(database.getSyncState("ecosystem_scope").value_or({}) == "Debian\nRubyGems");
+}
+
+TEST_CASE("validator auto-fetches only required gateway ecosystem into per-ecosystem index", "[unit][validator][validate]") {
+    TempDir tempDir{"reqpack-validator-gateway-auto-fetch"};
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-debian",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "ripgrep issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "Debian", "name": "ripgrep"},
+                "versions": ["14.1"]
+            }]
+        },
+        {
+            "id": "CVE-2026-rubygems",
+            "modified": "2026-01-02T00:00:00Z",
+            "affected": [{
+                "package": {"ecosystem": "RubyGems", "name": "rails"},
+                "versions": ["7.0.0"]
+            }]
+        }
+    ])");
+
+    ReqPackConfig config;
+    config.security.autoFetch = true;
+    config.security.indexPath = (tempDir.path() / "security-index").string();
+    config.security.osvFeedUrl = feedPath.string();
+    config.security.osvRefreshMode = OsvRefreshMode::MANUAL;
+    config.security.gateways["security"].backends = {"osv"};
+
+    StaticMetadataProvider metadataProvider;
+    metadataProvider.metadata["dnf"].osvEcosystem = "Debian";
+
+    Validator validator(&metadataProvider, config);
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "dnf", .name = "ripgrep", .version = "14.1"}, graph);
+    CHECK(validator.validate(&graph) == nullptr);
+
+    ReqPackConfig debianConfig = config;
+    debianConfig.security.osvDatabasePath = (tempDir.path() / "security-index" / "Debian").string();
+    VulnerabilityDatabase debianDatabase(debianConfig);
+    REQUIRE(debianDatabase.ensureReady());
+    const std::vector<std::string> debianIds = debianDatabase.advisoryIdsForPackage("Debian", "ripgrep");
+    REQUIRE(debianIds.size() == 1);
+    CHECK(debianIds[0] == "CVE-2026-debian");
+
+    const std::filesystem::path rubyIndexPath = tempDir.path() / "security-index" / "RubyGems";
+    CHECK_FALSE(std::filesystem::exists(rubyIndexPath));
+}
+
+TEST_CASE("validator skips auto-fetch for unmapped systems", "[unit][validator][validate]") {
+    TempDir tempDir{"reqpack-validator-unmapped-system"};
+
+    ReqPackConfig config;
+    config.security.autoFetch = true;
+    config.security.indexPath = (tempDir.path() / "security-index").string();
+    config.security.osvDatabasePath = (tempDir.path() / "osv-db").string();
+    config.security.osvFeedUrl = (tempDir.path() / "missing-feed.json").string();
+    config.security.osvRefreshMode = OsvRefreshMode::ALWAYS;
+    config.security.gateways["security"].backends = {"osv"};
+
+    StaticMetadataProvider metadataProvider;
+
+    Validator validator(&metadataProvider, config);
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::REMOVE, .system = "dnf", .name = "texlive-xurl"}, graph);
+
+    CHECK(validator.validate(&graph) == &graph);
+    const auto& findings = validator.getLastFindings();
+    CHECK(std::none_of(findings.begin(), findings.end(), [](const ValidationFinding& finding) {
+        return finding.kind == "sync_error";
+    }));
+    CHECK(std::any_of(findings.begin(), findings.end(), [](const ValidationFinding& finding) {
+        return finding.kind == "unsupported_ecosystem" && finding.id == "dnf";
+    }));
+    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "security-index" / "dnf"));
+}
+
+TEST_CASE("validator blocks vulnerable Maven package from scoped OSV index", "[unit][validator][validate]") {
+    TempDir tempDir{"reqpack-validator-maven-log4j"};
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    write_file(feedPath, R"([
+        {
+            "id": "GHSA-jfh8-c2jp-5v3q",
+            "modified": "2025-10-22T19:37:02Z",
+            "summary": "Remote code injection in Log4j",
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H/E:H"}],
+            "database_specific": {"severity": "CRITICAL"},
+            "affected": [{
+                "package": {"ecosystem": "Maven", "name": "org.apache.logging.log4j:log4j-core"},
+                "ranges": [{
+                    "type": "ECOSYSTEM",
+                    "events": [
+                        {"introduced": "2.13.0"},
+                        {"fixed": "2.15.0"}
+                    ]
+                }],
+                "versions": ["2.13.0", "2.13.1", "2.13.2", "2.13.3", "2.14.0", "2.14.1"]
+            }]
+        }
+    ])");
+
+    ReqPackConfig config;
+    config.security.autoFetch = true;
+    config.security.indexPath = (tempDir.path() / "security-index").string();
+    config.security.osvFeedUrl = feedPath.string();
+    config.security.osvRefreshMode = OsvRefreshMode::MANUAL;
+    config.security.gateways["security"].backends = {"osv"};
+    config.security.severityThreshold = SeverityLevel::CRITICAL;
+    config.security.onUnsafe = UnsafeAction::ABORT;
+
+    StaticMetadataProvider metadataProvider;
+    metadataProvider.metadata["maven"].osvEcosystem = "Maven";
+    metadataProvider.metadata["maven"].purlType = "maven";
+    metadataProvider.metadata["maven"].versionComparator.profile = "maven-comparable";
+
+    Validator validator(&metadataProvider, config);
+    Graph graph;
+    boost::add_vertex(Package{
+        .action = ActionType::INSTALL,
+        .system = "maven",
+        .name = "org.apache.logging.log4j:log4j-core",
+        .version = "2.14.1"
+    }, graph);
+
+    CHECK(validator.validate(&graph) == nullptr);
+    REQUIRE_FALSE(validator.getLastFindings().empty());
+    CHECK(validator.getLastFindings().front().id == "GHSA-jfh8-c2jp-5v3q");
+    CHECK(validator.getLastFindings().front().severity == "critical");
 }

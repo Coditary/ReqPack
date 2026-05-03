@@ -3,6 +3,7 @@
 #include "core/configuration.h"
 #include "core/osv_core.h"
 #include "core/plugin_metadata_provider.h"
+#include "core/security_gateway_service.h"
 #include "core/types.h"
 #include "core/validator_core.h"
 #include "core/vulnerability_database.h"
@@ -17,7 +18,9 @@ class Validator {
 	PluginMetadataProvider* metadataProvider;
 	VulnerabilityDatabase database;
 	VulnerabilitySyncService syncService;
+	SecurityGatewayService securityGateway;
 	VulnerabilityMatcher matcher;
+	std::vector<ValidationFinding> lastFindings;
 
 	std::vector<Package> collectPackages(const Graph& graph) const;
 	std::vector<OsvAdvisory> loadAdvisories() const;
@@ -32,4 +35,5 @@ public:
 	virtual ~Validator();
 
 	Graph* validate(Graph *graph);
+	const std::vector<ValidationFinding>& getLastFindings() const;
 };

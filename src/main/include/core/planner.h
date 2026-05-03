@@ -3,6 +3,7 @@
 #include "core/configuration.h"
 #include "core/downloader.h"
 #include "core/planner_core.h"
+#include "core/security_gateway_service.h"
 #include "core/types.h"
 #include "core/registry.h"
 
@@ -10,10 +11,12 @@ class Planner {
 	ReqPackConfig config;
 	Downloader downloader;
 	Registry* registry;
+	SecurityGatewayService securityGateway;
 
 	std::vector<Request> expandProxies(const std::vector<Request>& requests) const;
 	void ensurePluginsAvailable(const std::vector<Request>& requests) const;
 	bool pluginExists(const std::string& system) const;
+	bool gatewayExists(const std::string& system) const;
 	void queuePluginDownload(const std::string& system) const;
 	bool shouldInstallPluginDependencies(const std::string& system) const;
 	bool pluginRequirementsSatisfied(const std::string& system) const;

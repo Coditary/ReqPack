@@ -62,8 +62,22 @@ struct LoggingConfig {
     std::string pattern{"[%^%l%$] %v"};
 };
 
+struct SecurityGatewayConfig {
+    bool enabled{true};
+    std::vector<std::string> backends{};
+};
+
+struct SecurityBackendConfig {
+    bool enabled{true};
+    std::string feedUrl{};
+    OsvRefreshMode refreshMode{OsvRefreshMode::MANUAL};
+    long refreshIntervalSeconds{24L * 60L * 60L};
+    std::string overlayPath{};
+};
+
 struct SecurityConfig {
     bool enabled{true};
+    bool autoFetch{true};
     bool runSnykScan{false};
     bool runOwaspScan{false};
     SeverityLevel severityThreshold{SeverityLevel::CRITICAL};
@@ -71,6 +85,9 @@ struct SecurityConfig {
     UnsafeAction onUnsafe{UnsafeAction::CONTINUE};
     bool promptOnUnsafe{false};
     bool allowUnassigned{true};
+    std::string defaultGateway{"security"};
+    std::string cachePath{"~/.reqpack/security/cache"};
+    std::string indexPath{"~/.reqpack/security/index"};
     std::string osvDatabasePath{"~/.reqpack/osv"};
     std::string osvFeedUrl{"https://storage.googleapis.com/osv-vulnerabilities"};
     OsvRefreshMode osvRefreshMode{OsvRefreshMode::MANUAL};
@@ -78,7 +95,10 @@ struct SecurityConfig {
     std::string osvOverlayPath{};
     std::vector<std::string> ignoreVulnerabilityIds{};
     std::vector<std::string> allowVulnerabilityIds{};
+    std::map<std::string, std::string> ecosystemMap{};
     std::map<std::string, std::string> osvEcosystemMap{};
+    std::map<std::string, SecurityGatewayConfig> gateways{};
+    std::map<std::string, SecurityBackendConfig> backends{};
     UnsafeAction onUnresolvedVersion{UnsafeAction::CONTINUE};
     bool strictEcosystemMapping{false};
     bool includeWithdrawnInReport{false};

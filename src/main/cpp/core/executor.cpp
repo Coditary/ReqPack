@@ -105,7 +105,7 @@ bool groupDependsOnFailure(const Graph& graph, const std::vector<Package>& packa
 
 }  // namespace
 
-Executer::Executer(Registry* registry, const ReqPackConfig& config) : config(config) {
+Executer::Executer(Registry* registry, const ReqPackConfig& config) : config(config), registry(registry), securityGateway(registry, registry, config) {
 	this->registry = registry;
 	this->transactionDatabase = std::make_unique<TransactionDatabase>(config);
 	// Create HistoryManager when at least one tracking feature is active.
@@ -445,6 +445,10 @@ std::vector<Executer::TaskGroup> Executer::filterExecutableTaskGroups(const std:
 		}
 
 		IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
+		if (this->securityGateway.isGatewaySystem(taskGroup.system)) {
+			filteredTaskGroups.push_back(taskGroup);
+			continue;
+		}
 		if (plugin == nullptr || !this->registry->loadPlugin(taskGroup.system)) {
 			filteredTaskGroups.push_back(taskGroup);
 			continue;
@@ -549,6 +553,18 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const {
 	if (taskGroup.packages.empty() && !taskGroup.usesLocalTarget) {
 		return {};
+	}
+
+	if (this->securityGateway.isGatewaySystem(taskGroup.system)) {
+		const bool ok = this->dispatchTaskGroupToSecurityGateway(taskGroup);
+		std::vector<TransactionRecord> records = ok ? this->buildSuccessRecords(taskGroup) : this->buildFailureRecords(taskGroup);
+		for (TransactionRecord& record : records) {
+			record.runId = runId;
+			if (!ok) {
+				record.errorMessage = "security gateway action failed";
+			}
+		}
+		return records;
 	}
 
 	if (this->registry->getPlugin(taskGroup.system) == nullptr || !this->registry->loadPlugin(taskGroup.system)) {
@@ -844,6 +860,9 @@ std::vector<Package> Executer::orderedPackages(const Graph& graph) const {
 }
 
 bool Executer::dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const {
+	if (this->securityGateway.isGatewaySystem(taskGroup.system)) {
+		return this->dispatchTaskGroupToSecurityGateway(taskGroup);
+	}
 	IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
 	if (plugin == nullptr) {
 		return false;
@@ -868,6 +887,20 @@ bool Executer::dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const {
 		default:
 			return false;
 	}
+}
+
+bool Executer::dispatchTaskGroupToSecurityGateway(const TaskGroup& taskGroup) const {
+	const std::vector<ValidationFinding> findings = this->securityGateway.executeGatewayRequest(taskGroup.action, taskGroup.system, taskGroup.packages);
+	for (const ValidationFinding& finding : findings) {
+		if (finding.kind == "sync_warning") {
+			Logger::instance().warn(finding.message);
+		}
+		if (finding.kind == "sync_error") {
+			Logger::instance().err(finding.message);
+			return false;
+		}
+	}
+	return true;
 }
 
 std::vector<Executer::TransactionRecord> Executer::buildSuccessRecords(const TaskGroup& taskGroup) const {

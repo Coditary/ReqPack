@@ -37,7 +37,8 @@ Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& pac
 
 }  // namespace
 
-Planner::Planner(Registry* registry, RegistryDatabase* database, const ReqPackConfig& config) : config(config), downloader(database, config) {
+Planner::Planner(Registry* registry, RegistryDatabase* database, const ReqPackConfig& config)
+    : config(config), downloader(database, config), registry(registry), securityGateway(registry, registry, config) {
 	this->registry = registry;
 }
 
@@ -84,7 +85,14 @@ void Planner::ensurePluginsAvailable(const std::vector<Request>& requests) const
 }
 
 bool Planner::pluginExists(const std::string& system) const {
+	if (this->gatewayExists(system)) {
+		return true;
+	}
 	return this->registry->getPlugin(system) != nullptr;
+}
+
+bool Planner::gatewayExists(const std::string& system) const {
+	return this->securityGateway.isGatewaySystem(system);
 }
 
 void Planner::queuePluginDownload(const std::string& system) const {
@@ -158,6 +166,10 @@ std::vector<Request> Planner::filterRequestedPackages(const std::vector<Request>
 		}
 
 		IPlugin* plugin = this->registry->getPlugin(request.system);
+		if (this->gatewayExists(request.system)) {
+			filteredRequests.push_back(request);
+			continue;
+		}
 		if (plugin == nullptr || !this->registry->loadPlugin(request.system)) {
 			filteredRequests.push_back(request);
 			continue;
@@ -185,6 +197,9 @@ std::vector<Package> Planner::collectPluginDependencies(const std::vector<Reques
 	std::vector<Package> dependencies;
 
 	for (const Request& request : requests) {
+		if (this->gatewayExists(request.system)) {
+			continue;
+		}
 		IPlugin* plugin = this->registry->getPlugin(request.system);
 		if (plugin == nullptr) {
 			continue;
@@ -205,6 +220,11 @@ std::vector<Package> Planner::filterMissingDependencies(const std::vector<Packag
 
 	for (const Package& dependency : dependencies) {
 		if (dependency.system.empty()) {
+			missingDependencies.push_back(dependency);
+			continue;
+		}
+
+		if (this->gatewayExists(dependency.system)) {
 			missingDependencies.push_back(dependency);
 			continue;
 		}
@@ -248,6 +268,9 @@ void Planner::ensurePluginDependenciesAvailable(const std::vector<Package>& depe
 }
 
 bool Planner::dependencyExists(const Package& dependency) const {
+	if (!dependency.system.empty() && this->gatewayExists(dependency.system)) {
+		return true;
+	}
 	return !dependency.system.empty() && this->registry->getPlugin(dependency.system) != nullptr;
 }
 
@@ -270,7 +293,7 @@ Graph* Planner::buildDag(const std::vector<Request>& requests) const {
 	for (const Request& request : requests) {
 		const std::string resolvedSystem = this->registry->resolvePluginName(request.system);
 		bool includeDependencies = false;
-		if (request.action == ActionType::INSTALL) {
+		if (request.action == ActionType::INSTALL && !this->gatewayExists(request.system)) {
 			const auto it = includeDependenciesBySystem.find(resolvedSystem);
 			if (it == includeDependenciesBySystem.end()) {
 				includeDependencies = this->shouldInstallPluginDependencies(resolvedSystem);
@@ -330,6 +353,11 @@ void Planner::addPackageToGraph(Graph& graph, const Package& package) const {
 		}
 
 		activeSystems.push_back(currentPackage.system);
+
+		if (this->gatewayExists(currentPackage.system)) {
+			activeSystems.pop_back();
+			return packageVertex;
+		}
 
 		IPlugin* plugin = this->registry->getPlugin(currentPackage.system);
 		if (plugin == nullptr && this->config.planner.autoDownloadMissingDependencies) {

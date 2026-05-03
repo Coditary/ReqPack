@@ -183,6 +183,72 @@ std::map<std::string, std::string> load_string_map(const sol::object& object) {
     return values;
 }
 
+template <typename Enum>
+void assign_if_present(const sol::table& table, const char* key, std::optional<Enum> (*converter)(const std::string&), Enum& target);
+
+template <typename T>
+void assign_if_present(const sol::table& table, const char* key, T& target);
+
+std::map<std::string, SecurityGatewayConfig> load_security_gateway_map(const sol::object& object) {
+    std::map<std::string, SecurityGatewayConfig> values;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return values;
+    }
+
+    for (const auto& [key, value] : object.as<sol::table>()) {
+        if (key.get_type() != sol::type::string || value.get_type() != sol::type::table) {
+            continue;
+        }
+
+        SecurityGatewayConfig gateway;
+        const sol::table gatewayTable = value.as<sol::table>();
+        assign_if_present(gatewayTable, "enabled", gateway.enabled);
+        const std::vector<std::string> backends = load_string_array(gatewayTable["backends"]);
+        if (!backends.empty()) {
+            gateway.backends.clear();
+            for (const std::string& backend : backends) {
+                gateway.backends.push_back(to_lower(backend));
+            }
+        }
+
+        values[to_lower(key.as<std::string>())] = std::move(gateway);
+    }
+
+    return values;
+}
+
+std::map<std::string, SecurityBackendConfig> load_security_backend_map(const sol::object& object) {
+    std::map<std::string, SecurityBackendConfig> values;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return values;
+    }
+
+    for (const auto& [key, value] : object.as<sol::table>()) {
+        if (key.get_type() != sol::type::string || value.get_type() != sol::type::table) {
+            continue;
+        }
+
+        SecurityBackendConfig backend;
+        const sol::table backendTable = value.as<sol::table>();
+        assign_if_present(backendTable, "enabled", backend.enabled);
+        assign_if_present(backendTable, "feedUrl", backend.feedUrl);
+        assign_if_present(backendTable, "refreshMode", osv_refresh_mode_from_string, backend.refreshMode);
+        assign_if_present(backendTable, "refreshIntervalSeconds", backend.refreshIntervalSeconds);
+        assign_if_present(backendTable, "overlayPath", backend.overlayPath);
+
+        if (!backend.feedUrl.empty()) {
+            backend.feedUrl = expand_user_path(backend.feedUrl).string();
+        }
+        if (!backend.overlayPath.empty()) {
+            backend.overlayPath = expand_user_path(backend.overlayPath).string();
+        }
+
+        values[to_lower(key.as<std::string>())] = std::move(backend);
+    }
+
+    return values;
+}
+
 void merge_registry_sources(RegistrySourceMap& target, const RegistrySourceMap& source) {
     for (const auto& [name, entry] : source) {
         target[name] = entry;
@@ -461,11 +527,15 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
     const sol::optional<sol::table> security = root["security"];
     if (security.has_value()) {
         assign_if_present(security.value(), "enabled", config.security.enabled);
+        assign_if_present(security.value(), "autoFetch", config.security.autoFetch);
         assign_if_present(security.value(), "runSnykScan", config.security.runSnykScan);
         assign_if_present(security.value(), "runOwaspScan", config.security.runOwaspScan);
         assign_if_present(security.value(), "scoreThreshold", config.security.scoreThreshold);
         assign_if_present(security.value(), "promptOnUnsafe", config.security.promptOnUnsafe);
         assign_if_present(security.value(), "allowUnassigned", config.security.allowUnassigned);
+        assign_if_present(security.value(), "defaultGateway", config.security.defaultGateway);
+        assign_if_present(security.value(), "cachePath", config.security.cachePath);
+        assign_if_present(security.value(), "indexPath", config.security.indexPath);
         assign_if_present(security.value(), "severityThreshold", severity_level_from_string, config.security.severityThreshold);
         assign_if_present(security.value(), "onUnsafe", unsafe_action_from_string, config.security.onUnsafe);
         assign_if_present(security.value(), "osvDatabasePath", config.security.osvDatabasePath);
@@ -491,10 +561,54 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         for (const auto& [system, ecosystem] : ecosystemMap) {
             config.security.osvEcosystemMap[system] = ecosystem;
         }
+
+        const std::map<std::string, std::string> securityEcosystemMap = load_string_map(security.value()["ecosystemMap"]);
+        for (const auto& [system, ecosystem] : securityEcosystemMap) {
+            config.security.ecosystemMap[system] = ecosystem;
+        }
+
+        const std::map<std::string, SecurityGatewayConfig> gateways = load_security_gateway_map(security.value()["gateways"]);
+        for (const auto& [name, gateway] : gateways) {
+            config.security.gateways[name] = gateway;
+        }
+
+        const std::map<std::string, SecurityBackendConfig> backends = load_security_backend_map(security.value()["backends"]);
+        for (const auto& [name, backend] : backends) {
+            config.security.backends[name] = backend;
+        }
     }
+    const std::string defaultIndexPath = expand_user_path(SecurityConfig{}.indexPath).string();
+    const std::string defaultOsvDatabasePath = expand_user_path(SecurityConfig{}.osvDatabasePath).string();
+    if (config.security.indexPath == defaultIndexPath && config.security.osvDatabasePath != defaultOsvDatabasePath) {
+        config.security.indexPath = config.security.osvDatabasePath;
+    }
+    config.security.defaultGateway = to_lower(config.security.defaultGateway);
+    config.security.cachePath = expand_user_path(config.security.cachePath).string();
+    config.security.indexPath = expand_user_path(config.security.indexPath).string();
     config.security.osvDatabasePath = expand_user_path(config.security.osvDatabasePath).string();
     if (!config.security.osvOverlayPath.empty()) {
         config.security.osvOverlayPath = expand_user_path(config.security.osvOverlayPath).string();
+    }
+    if (!config.security.ecosystemMap.empty()) {
+        for (const auto& [system, ecosystem] : config.security.ecosystemMap) {
+            config.security.osvEcosystemMap[system] = ecosystem;
+        }
+    }
+    if (!config.security.backends.contains("osv")) {
+        SecurityBackendConfig osvBackend;
+        osvBackend.feedUrl = config.security.osvFeedUrl;
+        osvBackend.refreshMode = config.security.osvRefreshMode;
+        osvBackend.refreshIntervalSeconds = config.security.osvRefreshIntervalSeconds;
+        osvBackend.overlayPath = config.security.osvOverlayPath;
+        config.security.backends["osv"] = std::move(osvBackend);
+    } else {
+        SecurityBackendConfig& osvBackend = config.security.backends["osv"];
+        if (osvBackend.feedUrl.empty()) {
+            osvBackend.feedUrl = config.security.osvFeedUrl;
+        }
+        if (osvBackend.overlayPath.empty()) {
+            osvBackend.overlayPath = config.security.osvOverlayPath;
+        }
     }
 
     const sol::optional<sol::table> reports = root["reports"];
@@ -671,6 +785,10 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.onUnresolvedVersion.has_value()) config.security.onUnresolvedVersion = overrides.onUnresolvedVersion.value();
     if (overrides.strictEcosystemMapping.has_value()) config.security.strictEcosystemMapping = overrides.strictEcosystemMapping.value();
     if (overrides.includeWithdrawnInReport.has_value()) config.security.includeWithdrawnInReport = overrides.includeWithdrawnInReport.value();
+    if (config.security.indexPath == expand_user_path(SecurityConfig{}.indexPath).string() &&
+        config.security.osvDatabasePath != expand_user_path(SecurityConfig{}.osvDatabasePath).string()) {
+        config.security.indexPath = config.security.osvDatabasePath;
+    }
     if (!overrides.ignoreVulnerabilityIds.empty()) config.security.ignoreVulnerabilityIds = overrides.ignoreVulnerabilityIds;
     if (!overrides.allowVulnerabilityIds.empty()) config.security.allowVulnerabilityIds = overrides.allowVulnerabilityIds;
 

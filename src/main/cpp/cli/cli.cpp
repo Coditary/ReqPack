@@ -890,6 +890,12 @@ std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config)
         }
     }
 
+    for (const auto& [name, gateway] : config.security.gateways) {
+        if (gateway.enabled) {
+            systems.insert(to_lower(name));
+        }
+    }
+
     if (std::filesystem::exists(directory)) {
         for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
             if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
@@ -927,6 +933,11 @@ std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {
     }
 
     if (!std::filesystem::exists(directory)) {
+        for (const auto& [name, gateway] : config.security.gateways) {
+            if (gateway.enabled) {
+                systems.insert(to_lower(name));
+            }
+        }
         for (const auto& [alias, target] : config.planner.systemAliases) {
             systems.insert(to_lower(alias));
             systems.insert(to_lower(target));
@@ -949,6 +960,12 @@ std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {
     for (const auto& [alias, target] : config.planner.systemAliases) {
         systems.insert(to_lower(alias));
         systems.insert(to_lower(target));
+    }
+
+    for (const auto& [name, gateway] : config.security.gateways) {
+        if (gateway.enabled) {
+            systems.insert(to_lower(name));
+        }
     }
 
     return systems;

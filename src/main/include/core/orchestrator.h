@@ -29,5 +29,5 @@ public:
 	~Orchestrator();
 
 	int countRequestedItems() const;
-	void run();
+	int run();
 };
