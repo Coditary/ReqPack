@@ -139,6 +139,252 @@ local function url_encode(s)
     end))
 end
 
+local function xml_escape(value)
+    local escaped = tostring(value or "")
+    escaped = escaped:gsub("&", "&amp;")
+    escaped = escaped:gsub("<", "&lt;")
+    escaped = escaped:gsub(">", "&gt;")
+    escaped = escaped:gsub('"', "&quot;")
+    escaped = escaped:gsub("'", "&apos;")
+    return escaped
+end
+
+local LUA_PATTERN_MAGIC = {
+    ["^"] = true,
+    ["$"] = true,
+    ["("] = true,
+    [")"] = true,
+    ["%"] = true,
+    ["."] = true,
+    ["["] = true,
+    ["]"] = true,
+    ["+"] = true,
+    ["-"] = true,
+}
+
+local function glob_to_lua_pattern(glob)
+    local parts = { "^" }
+    local value = tostring(glob or "")
+    for index = 1, #value do
+        local char = value:sub(index, index)
+        if char == "*" then
+            table.insert(parts, ".*")
+        elseif char == "?" then
+            table.insert(parts, ".")
+        elseif LUA_PATTERN_MAGIC[char] then
+            table.insert(parts, "%" .. char)
+        else
+            table.insert(parts, char)
+        end
+    end
+    table.insert(parts, "$")
+    return table.concat(parts)
+end
+
+local function glob_matches(glob, value)
+    local normalized = trim(glob)
+    if normalized == "" then
+        return false
+    end
+    return tostring(value or ""):match(glob_to_lua_pattern(normalized)) ~= nil
+end
+
+local function artifact_scope_name(artifact)
+    return artifact.groupId .. ":" .. artifact.artifactId
+end
+
+local function artifact_is_snapshot(artifact)
+    local version = trim(artifact.version or "")
+    return version ~= "" and version:match("%-SNAPSHOT$") ~= nil
+end
+
+local function repository_scope_matches(repo, artifact)
+    local scope = repo.scope or {}
+    local include = scope.include or {}
+    local exclude = scope.exclude or {}
+    local artifactName = artifact_scope_name(artifact)
+
+    local included = #include == 0
+    for _, pattern in ipairs(include) do
+        if glob_matches(pattern, artifactName) then
+            included = true
+            break
+        end
+    end
+    if not included then
+        return false
+    end
+
+    for _, pattern in ipairs(exclude) do
+        if glob_matches(pattern, artifactName) then
+            return false
+        end
+    end
+    return true
+end
+
+local function repository_matches_artifact(repo, artifact)
+    if repo == nil or repo.enabled == false then
+        return false
+    end
+    if not repository_scope_matches(repo, artifact) then
+        return false
+    end
+
+    if artifact_is_snapshot(artifact) then
+        return repo.snapshots ~= false
+    end
+    return repo.releases ~= false
+end
+
+local function active_repositories(context, artifact)
+    local configured = context.repositories or {}
+    if #configured == 0 then
+        return {}, false
+    end
+
+    local matched = {}
+    for _, repo in ipairs(configured) do
+        if repository_matches_artifact(repo, artifact) then
+            table.insert(matched, repo)
+        end
+    end
+    return matched, true
+end
+
+local function repository_checksum_policy(repo)
+    local validation = repo.validation or {}
+    local checksum = trim(validation.checksum or "warn")
+    if checksum == "fail" or checksum == "warn" then
+        return checksum
+    end
+    return ""
+end
+
+local function repository_layout(repo)
+    local layout = trim(repo.layout or "")
+    if layout == "" then
+        return "default"
+    end
+    return layout
+end
+
+local function repository_policy_xml(enabled, checksumPolicy)
+    local xml = "<enabled>" .. (enabled and "true" or "false") .. "</enabled>"
+    if checksumPolicy ~= "" then
+        xml = xml .. "<checksumPolicy>" .. xml_escape(checksumPolicy) .. "</checksumPolicy>"
+    end
+    return xml
+end
+
+local function repository_server_xml(repo)
+    local auth = repo.auth or {}
+    local authType = trim(auth.type or "none")
+    if authType == "basic" then
+        return "<server><id>" .. xml_escape(repo.id) .. "</id>" ..
+            "<username>" .. xml_escape(auth.username or "") .. "</username>" ..
+            "<password>" .. xml_escape(auth.password or "") .. "</password></server>"
+    end
+    if authType == "token" then
+        local headerName = trim(auth.headerName or "")
+        local headerValue = trim(auth.token or "")
+        if headerName == "" then
+            headerName = "Authorization"
+            headerValue = "Bearer " .. headerValue
+        end
+        return "<server><id>" .. xml_escape(repo.id) .. "</id><configuration><httpHeaders><property>" ..
+            "<name>" .. xml_escape(headerName) .. "</name>" ..
+            "<value>" .. xml_escape(headerValue) .. "</value>" ..
+            "</property></httpHeaders></configuration></server>"
+    end
+    return ""
+end
+
+local function repository_xml(repo)
+    local checksumPolicy = repository_checksum_policy(repo)
+    local releasesEnabled = repo.releases ~= false
+    local snapshotsEnabled = repo.snapshots ~= false
+    return "<repository>" ..
+        "<id>" .. xml_escape(repo.id) .. "</id>" ..
+        "<url>" .. xml_escape(repo.url) .. "</url>" ..
+        "<layout>" .. xml_escape(repository_layout(repo)) .. "</layout>" ..
+        "<releases>" .. repository_policy_xml(releasesEnabled, checksumPolicy) .. "</releases>" ..
+        "<snapshots>" .. repository_policy_xml(snapshotsEnabled, checksumPolicy) .. "</snapshots>" ..
+        "</repository>"
+end
+
+local function write_maven_settings(context, repositories)
+    local tmp = context.fs.get_tmp_dir()
+    if trim(tmp) == "" then
+        return nil, "failed to create maven settings directory"
+    end
+
+    local repositoriesXml = {}
+    local serversXml = {}
+    for _, repo in ipairs(repositories) do
+        table.insert(repositoriesXml, repository_xml(repo))
+        local serverXml = repository_server_xml(repo)
+        if serverXml ~= "" then
+            table.insert(serversXml, serverXml)
+        end
+    end
+
+    local settingsXml = "<?xml version='1.0' encoding='UTF-8'?>" ..
+        "<settings xmlns='http://maven.apache.org/SETTINGS/1.0.0' xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance'" ..
+        " xsi:schemaLocation='http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd'>" ..
+        "<servers>" .. join(serversXml, "") .. "</servers>" ..
+        "<profiles><profile><id>reqpack</id><repositories>" .. join(repositoriesXml, "") ..
+        "</repositories></profile></profiles><activeProfiles><activeProfile>reqpack</activeProfile></activeProfiles></settings>"
+    local settingsPath = tmp .. "/settings.xml"
+    local writeResult = context.exec.run("printf '%s' " .. shell_quote(settingsXml) .. " > " .. shell_quote(settingsPath))
+    if not writeResult.success then
+        return nil, "failed to write maven settings"
+    end
+    return settingsPath, nil
+end
+
+local function repositories_need_insecure_tls(repositories)
+    for _, repo in ipairs(repositories) do
+        if repo.validation ~= nil and repo.validation.tlsVerify == false then
+            return true
+        end
+    end
+    return false
+end
+
+local function remote_repository_specs(repositories)
+    local specs = {}
+    for _, repo in ipairs(repositories) do
+        table.insert(specs, repo.id .. "::" .. repository_layout(repo) .. "::" .. repo.url)
+    end
+    return specs
+end
+
+local function dependency_get_command(context, artifact, forceUpdate)
+    local repositories, hasConfiguredRepositories = active_repositories(context, artifact)
+    if hasConfiguredRepositories and #repositories == 0 then
+        return nil, "no configured maven repository matched " .. artifact_scope_name(artifact)
+    end
+
+    local command = "mvn -q -Dmaven.repo.local=" .. shell_quote(maven_repo_dir())
+    if forceUpdate then
+        command = command .. " -U"
+    end
+    if #repositories > 0 then
+        local settingsPath, settingsError = write_maven_settings(context, repositories)
+        if settingsPath == nil then
+            return nil, settingsError
+        end
+        command = command .. " -s " .. shell_quote(settingsPath)
+        command = command .. " -DremoteRepositories=" .. shell_quote(join(remote_repository_specs(repositories), ","))
+        if repositories_need_insecure_tls(repositories) then
+            command = command .. " -Dmaven.wagon.http.ssl.insecure=true -Dmaven.wagon.http.ssl.allowall=true"
+        end
+    end
+    command = command .. " dependency:get -Dtransitive=true -Dartifact=" .. shell_quote(artifact_coordinate(artifact))
+    return command, nil
+end
+
 local function search_maven_central(context, prompt)
     local normalized = trim(prompt)
     if normalized == "" then return {} end
@@ -302,7 +548,12 @@ function plugin.install(context, packages)
             return false
         end
 
-        table.insert(commands, "mvn -q dependency:get -Dtransitive=true -Dartifact=" .. shell_quote(artifact_coordinate(artifact)))
+        local command, command_error = dependency_get_command(context, artifact, false)
+        if command == nil then
+            context.tx.failed(command_error)
+            return false
+        end
+        table.insert(commands, command)
     end
 
     context.tx.begin_step("install maven artifacts")
@@ -376,7 +627,12 @@ function plugin.update(context, packages)
             return false
         end
 
-        table.insert(commands, "mvn -q dependency:get -U -Dtransitive=true -Dartifact=" .. shell_quote(artifact_coordinate(artifact)))
+        local command, command_error = dependency_get_command(context, artifact, true)
+        if command == nil then
+            context.tx.failed(command_error)
+            return false
+        end
+        table.insert(commands, command)
     end
 
     context.tx.begin_step("update maven artifacts")

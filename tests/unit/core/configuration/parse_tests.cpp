@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
@@ -30,6 +31,29 @@ public:
 
 private:
     std::filesystem::path path_;
+};
+
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(std::string name, std::string value)
+        : name_(std::move(name)) {
+        if (const char* existing = std::getenv(name_.c_str())) {
+            previous_ = std::string(existing);
+        }
+        ::setenv(name_.c_str(), value.c_str(), 1);
+    }
+
+    ~ScopedEnvVar() {
+        if (previous_.has_value()) {
+            ::setenv(name_.c_str(), previous_->c_str(), 1);
+        } else {
+            ::unsetenv(name_.c_str());
+        }
+    }
+
+private:
+    std::string name_;
+    std::optional<std::string> previous_;
 };
 
 void write_file(const std::filesystem::path& path, const std::string& content) {
@@ -349,6 +373,130 @@ TEST_CASE("configuration falls back for missing or invalid lua config files", "[
     )");
     const ReqPackConfig globalConfig = load_config_from_lua(globalConfigPath, fallback);
     CHECK_FALSE(globalConfig.interaction.interactive);
+}
+
+TEST_CASE("configuration parses structured repositories and preserves flat extras", "[unit][configuration][load]") {
+    TempDir tempDir{"reqpack-config-repositories"};
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    const std::filesystem::path home = reqpack_user_home();
+    ScopedEnvVar token{"REQPACK_TEST_REPO_TOKEN", "secret-token"};
+
+    write_file(configPath, R"(
+        return {
+            repositories = {
+                Maven = {
+                    {
+                        id = "corp",
+                        url = "https://repo.example.test/maven-public",
+                        priority = 5,
+                        enabled = false,
+                        type = "default",
+                        auth = {
+                            type = "token",
+                            token = "$REQPACK_TEST_REPO_TOKEN",
+                            headerName = "X-Repo-Token",
+                        },
+                        validation = {
+                            checksum = "fail",
+                            tlsVerify = false,
+                        },
+                        scope = {
+                            include = { "com.mycompany.*" },
+                            exclude = { "com.mycompany.legacy.*" },
+                        },
+                        snapshots = true,
+                        layout = "default",
+                        score = 2.5,
+                        tags = { "internal", "fast" },
+                        metadata = {
+                            nested = "ignored",
+                        },
+                    },
+                    {
+                        id = "ssh-repo",
+                        url = "ssh://git@example.test/repo",
+                        auth = {
+                            type = "ssh",
+                            sshKey = "~/.ssh/repo.key",
+                        },
+                    },
+                    {
+                        id = "corp",
+                        url = "https://duplicate.example.test/repo",
+                    },
+                    {
+                        id = "invalid-auth",
+                        url = "https://invalid-auth.example.test/repo",
+                        auth = {
+                            type = "token",
+                        },
+                    },
+                    {
+                        id = "warn-default",
+                        url = "https://warn.example.test/repo",
+                        validation = {
+                            checksum = "broken",
+                        },
+                        scope = {
+                            include = "not-a-list",
+                            exclude = { 1, 2 },
+                        },
+                    },
+                },
+            },
+        }
+    )");
+
+    const ReqPackConfig config = load_config_from_lua(configPath);
+    REQUIRE(config.repositories.contains("maven"));
+    CHECK_FALSE(config.repositories.contains("Maven"));
+
+    const std::vector<RepositoryEntry>& repositories = config.repositories.at("maven");
+    REQUIRE(repositories.size() == 3);
+
+    const RepositoryEntry& corp = repositories[0];
+    CHECK(corp.id == "corp");
+    CHECK(corp.url == "https://repo.example.test/maven-public");
+    CHECK(corp.priority == 5);
+    CHECK_FALSE(corp.enabled);
+    CHECK(corp.type == "default");
+    CHECK(corp.auth.type == RepositoryAuthType::TOKEN);
+    CHECK(corp.auth.token == "secret-token");
+    CHECK(corp.auth.headerName == "X-Repo-Token");
+    CHECK(corp.validation.checksum == RepositoryChecksumPolicy::FAIL);
+    CHECK_FALSE(corp.validation.tlsVerify);
+    CHECK(corp.scope.include == std::vector<std::string>{"com.mycompany.*"});
+    CHECK(corp.scope.exclude == std::vector<std::string>{"com.mycompany.legacy.*"});
+    REQUIRE(corp.extras.contains("snapshots"));
+    CHECK(std::get<bool>(corp.extras.at("snapshots")));
+    REQUIRE(corp.extras.contains("layout"));
+    CHECK(std::get<std::string>(corp.extras.at("layout")) == "default");
+    REQUIRE(corp.extras.contains("score"));
+    CHECK(std::get<double>(corp.extras.at("score")) == Approx(2.5));
+    REQUIRE(corp.extras.contains("tags"));
+    CHECK(std::get<std::vector<std::string>>(corp.extras.at("tags")) == std::vector<std::string>{"internal", "fast"});
+    CHECK_FALSE(corp.extras.contains("metadata"));
+
+    const RepositoryEntry& sshRepo = repositories[1];
+    CHECK(sshRepo.id == "ssh-repo");
+    CHECK(sshRepo.priority == 100);
+    CHECK(sshRepo.enabled);
+    CHECK(sshRepo.auth.type == RepositoryAuthType::SSH);
+    CHECK(std::filesystem::path(sshRepo.auth.sshKey) == home / ".ssh" / "repo.key");
+    CHECK(sshRepo.validation.checksum == RepositoryChecksumPolicy::WARN);
+    CHECK(sshRepo.validation.tlsVerify);
+
+    const RepositoryEntry& warnDefault = repositories[2];
+    CHECK(warnDefault.id == "warn-default");
+    CHECK(warnDefault.validation.checksum == RepositoryChecksumPolicy::WARN);
+    CHECK(warnDefault.scope.include.empty());
+    CHECK(warnDefault.scope.exclude.empty());
+
+    const std::vector<RepositoryEntry> ordered = repositories_for_ecosystem(config, "MAVEN");
+    REQUIRE(ordered.size() == 3);
+    CHECK(ordered[0].id == "corp");
+    CHECK(ordered[1].id == "ssh-repo");
+    CHECK(ordered[2].id == "warn-default");
 }
 
 TEST_CASE("remote user loader parses users and defaults admin flag", "[unit][configuration][remote]") {

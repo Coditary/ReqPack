@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <set>
 #include <pwd.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -25,6 +26,39 @@ std::optional<bool> bool_from_string(const std::string& value) {
     }
     if (normalized == "false" || normalized == "0" || normalized == "no" || normalized == "off") {
         return false;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<RepositoryAuthType> repository_auth_type_from_string(const std::string& value) {
+    const std::string normalized = to_lower(value);
+    if (normalized == "none") {
+        return RepositoryAuthType::NONE;
+    }
+    if (normalized == "basic") {
+        return RepositoryAuthType::BASIC;
+    }
+    if (normalized == "token") {
+        return RepositoryAuthType::TOKEN;
+    }
+    if (normalized == "ssh") {
+        return RepositoryAuthType::SSH;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<RepositoryChecksumPolicy> repository_checksum_policy_from_string(const std::string& value) {
+    const std::string normalized = to_lower(value);
+    if (normalized == "fail") {
+        return RepositoryChecksumPolicy::FAIL;
+    }
+    if (normalized == "warn" || normalized == "warning") {
+        return RepositoryChecksumPolicy::WARN;
+    }
+    if (normalized == "ignore") {
+        return RepositoryChecksumPolicy::IGNORE;
     }
 
     return std::nullopt;
@@ -99,6 +133,38 @@ std::filesystem::path expand_user_path(const std::filesystem::path& path) {
     }
 
     return path;
+}
+
+std::string expand_env_reference(const std::string& value) {
+    if (value.size() < 2 || value.front() != '$') {
+        return value;
+    }
+
+    std::string name;
+    if (value[1] == '{') {
+        const std::size_t closing = value.find('}', 2);
+        if (closing == std::string::npos || closing + 1 != value.size()) {
+            return value;
+        }
+        name = value.substr(2, closing - 2);
+    } else {
+        name = value.substr(1);
+        if (name.empty()) {
+            return value;
+        }
+        if (!std::all_of(name.begin(), name.end(), [](unsigned char c) {
+                return std::isalnum(c) || c == '_';
+            })) {
+            return value;
+        }
+    }
+
+    if (name.empty()) {
+        return value;
+    }
+
+    const char* resolved = std::getenv(name.c_str());
+    return resolved != nullptr ? std::string(resolved) : std::string{};
 }
 
 RegistrySourceMap load_registry_sources_from_table(const sol::table& table) {
@@ -183,6 +249,26 @@ std::map<std::string, std::string> load_string_map(const sol::object& object) {
     return values;
 }
 
+bool load_string_array_strict(const sol::object& object, std::vector<std::string>& values) {
+    values.clear();
+    if (!object.valid()) {
+        return true;
+    }
+    if (object.get_type() != sol::type::table) {
+        return false;
+    }
+
+    for (const auto& [key, value] : object.as<sol::table>()) {
+        if (key.get_type() != sol::type::number || value.get_type() != sol::type::string) {
+            values.clear();
+            return false;
+        }
+        values.push_back(value.as<std::string>());
+    }
+
+    return true;
+}
+
 template <typename Enum>
 void assign_if_present(const sol::table& table, const char* key, std::optional<Enum> (*converter)(const std::string&), Enum& target);
 
@@ -244,6 +330,189 @@ std::map<std::string, SecurityBackendConfig> load_security_backend_map(const sol
         }
 
         values[to_lower(key.as<std::string>())] = std::move(backend);
+    }
+
+    return values;
+}
+
+std::optional<RepositoryAuthConfig> load_repository_auth_config(const sol::object& object) {
+    RepositoryAuthConfig auth;
+    if (!object.valid()) {
+        return auth;
+    }
+    if (object.get_type() != sol::type::table) {
+        return std::nullopt;
+    }
+
+    const sol::table authTable = object.as<sol::table>();
+    if (const sol::optional<std::string> typeValue = authTable["type"]; typeValue.has_value()) {
+        const auto convertedType = repository_auth_type_from_string(typeValue.value());
+        if (!convertedType.has_value()) {
+            return std::nullopt;
+        }
+        auth.type = convertedType.value();
+    }
+
+    if (const sol::optional<std::string> username = authTable["username"]; username.has_value()) {
+        auth.username = expand_env_reference(username.value());
+    }
+    if (const sol::optional<std::string> password = authTable["password"]; password.has_value()) {
+        auth.password = expand_env_reference(password.value());
+    }
+    if (const sol::optional<std::string> token = authTable["token"]; token.has_value()) {
+        auth.token = expand_env_reference(token.value());
+    }
+    if (const sol::optional<std::string> sshKey = authTable["sshKey"]; sshKey.has_value()) {
+        auth.sshKey = expand_user_path(expand_env_reference(sshKey.value())).string();
+    }
+    if (const sol::optional<std::string> headerName = authTable["headerName"]; headerName.has_value()) {
+        auth.headerName = expand_env_reference(headerName.value());
+    }
+
+    switch (auth.type) {
+        case RepositoryAuthType::NONE:
+            if (!auth.username.empty() || !auth.password.empty() || !auth.token.empty() || !auth.sshKey.empty() || !auth.headerName.empty()) {
+                return std::nullopt;
+            }
+            return auth;
+        case RepositoryAuthType::BASIC:
+            return (!auth.username.empty() && !auth.password.empty()) ? std::optional<RepositoryAuthConfig>(auth) : std::nullopt;
+        case RepositoryAuthType::TOKEN:
+            return !auth.token.empty() ? std::optional<RepositoryAuthConfig>(auth) : std::nullopt;
+        case RepositoryAuthType::SSH:
+            return !auth.sshKey.empty() ? std::optional<RepositoryAuthConfig>(auth) : std::nullopt;
+        default:
+            return std::nullopt;
+    }
+}
+
+RepositoryValidationConfig load_repository_validation_config(const sol::object& object) {
+    RepositoryValidationConfig validation;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return validation;
+    }
+
+    const sol::table validationTable = object.as<sol::table>();
+    if (const sol::optional<std::string> checksum = validationTable["checksum"]; checksum.has_value()) {
+        if (const auto converted = repository_checksum_policy_from_string(checksum.value())) {
+            validation.checksum = converted.value();
+        }
+    }
+    assign_if_present(validationTable, "tlsVerify", validation.tlsVerify);
+    return validation;
+}
+
+RepositoryScopeConfig load_repository_scope_config(const sol::object& object) {
+    RepositoryScopeConfig scope;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return scope;
+    }
+
+    const sol::table scopeTable = object.as<sol::table>();
+    if (!load_string_array_strict(scopeTable["include"], scope.include)) {
+        scope.include.clear();
+    }
+    if (!load_string_array_strict(scopeTable["exclude"], scope.exclude)) {
+        scope.exclude.clear();
+    }
+    return scope;
+}
+
+std::optional<RepositoryExtraValue> load_repository_extra_value(const sol::object& object) {
+    if (!object.valid()) {
+        return std::nullopt;
+    }
+    if (object.get_type() == sol::type::string) {
+        return RepositoryExtraValue{object.as<std::string>()};
+    }
+    if (object.get_type() == sol::type::boolean) {
+        return RepositoryExtraValue{object.as<bool>()};
+    }
+    if (object.get_type() == sol::type::number) {
+        return RepositoryExtraValue{object.as<double>()};
+    }
+    if (object.get_type() != sol::type::table) {
+        return std::nullopt;
+    }
+
+    std::vector<std::string> values;
+    if (!load_string_array_strict(object, values)) {
+        return std::nullopt;
+    }
+    return RepositoryExtraValue{std::move(values)};
+}
+
+std::optional<RepositoryEntry> load_repository_entry(const sol::table& table) {
+    RepositoryEntry entry;
+    assign_if_present(table, "id", entry.id);
+    assign_if_present(table, "url", entry.url);
+    if (entry.id.empty() || entry.url.empty()) {
+        return std::nullopt;
+    }
+
+    assign_if_present(table, "priority", entry.priority);
+    assign_if_present(table, "enabled", entry.enabled);
+    assign_if_present(table, "type", entry.type);
+
+    const auto auth = load_repository_auth_config(table["auth"]);
+    if (!auth.has_value()) {
+        return std::nullopt;
+    }
+    entry.auth = auth.value();
+    entry.validation = load_repository_validation_config(table["validation"]);
+    entry.scope = load_repository_scope_config(table["scope"]);
+
+    for (const auto& [key, value] : table) {
+        if (key.get_type() != sol::type::string) {
+            continue;
+        }
+
+        const std::string field = key.as<std::string>();
+        if (field == "id" || field == "url" || field == "priority" || field == "enabled" || field == "type" ||
+            field == "auth" || field == "validation" || field == "scope") {
+            continue;
+        }
+
+        if (const auto extra = load_repository_extra_value(value)) {
+            entry.extras[field] = extra.value();
+        }
+    }
+
+    return entry;
+}
+
+std::map<std::string, std::vector<RepositoryEntry>> load_repository_map(const sol::object& object) {
+    std::map<std::string, std::vector<RepositoryEntry>> values;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return values;
+    }
+
+    for (const auto& [key, value] : object.as<sol::table>()) {
+        if (key.get_type() != sol::type::string || value.get_type() != sol::type::table) {
+            continue;
+        }
+
+        const std::string ecosystem = to_lower(key.as<std::string>());
+        std::set<std::string> seenIds;
+        std::vector<RepositoryEntry> entries;
+        for (const auto& [_, item] : value.as<sol::table>()) {
+            if (item.get_type() != sol::type::table) {
+                continue;
+            }
+
+            const auto entry = load_repository_entry(item.as<sol::table>());
+            if (!entry.has_value()) {
+                continue;
+            }
+            if (!seenIds.insert(entry->id).second) {
+                continue;
+            }
+            entries.push_back(entry.value());
+        }
+
+        if (!entries.empty()) {
+            values[ecosystem] = std::move(entries);
+        }
     }
 
     return values;
@@ -495,6 +764,19 @@ RegistrySourceMap collect_registry_sources(const ReqPackConfig& config) {
     return sources;
 }
 
+std::vector<RepositoryEntry> repositories_for_ecosystem(const ReqPackConfig& config, const std::string& ecosystem) {
+    const auto it = config.repositories.find(to_lower(ecosystem));
+    if (it == config.repositories.end()) {
+        return {};
+    }
+
+    std::vector<RepositoryEntry> repositories = it->second;
+    std::stable_sort(repositories.begin(), repositories.end(), [](const RepositoryEntry& left, const RepositoryEntry& right) {
+        return left.priority < right.priority;
+    });
+    return repositories;
+}
+
 ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, const ReqPackConfig& fallback) {
     ReqPackConfig config = fallback;
     const std::filesystem::path resolvedConfigPath = expand_user_path(configPath);
@@ -743,6 +1025,14 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
     }
     if (!config.rqp.statePath.empty()) {
         config.rqp.statePath = expand_user_path(config.rqp.statePath).string();
+    }
+
+    const sol::optional<sol::table> repositories = root["repositories"];
+    if (repositories.has_value()) {
+        const auto parsedRepositories = load_repository_map(repositories.value());
+        for (const auto& [ecosystem, entries] : parsedRepositories) {
+            config.repositories[ecosystem] = entries;
+        }
     }
 
     const sol::optional<sol::table> history = root["history"];

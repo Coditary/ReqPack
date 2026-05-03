@@ -147,6 +147,44 @@ std::filesystem::path write_config_with_rq_repositories(
     return configPath;
 }
 
+std::filesystem::path write_config_with_maven_repositories(
+    const std::filesystem::path& root,
+    const std::filesystem::path& pluginDirectory,
+    const std::string& repositoriesLua
+) {
+    const std::filesystem::path configPath = root / "config.lua";
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (root / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (root / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  repositories = {\n"
+        "    maven = {\n" + repositoriesLua +
+        "    },\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (root / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+    return configPath;
+}
+
 std::filesystem::path build_rqp_package(
     const std::filesystem::path& root,
     const std::string& name,
@@ -2300,6 +2338,160 @@ TEST_CASE("orchestrator install maven provisions sys requirements before invokin
     const std::string mavenInstallLog = read_file(mvnLog);
     CHECK(mavenInstallLog.find("dependency:get") != std::string::npos);
     CHECK(mavenInstallLog.find("org.junit:junit:4.13") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install maven uses configured repositories and auth settings", "[integration][orchestrator][service][sys]") {
+    TempDir tempDir{"reqpack-orchestrator-maven-repositories"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config_with_maven_repositories(
+        tempDir.path(),
+        pluginDirectory,
+        "      {\n"
+        "        id = 'corp',\n"
+        "        url = 'https://repo.example.test/maven-public',\n"
+        "        priority = 1,\n"
+        "        auth = {\n"
+        "          type = 'token',\n"
+        "          token = '${REQPACK_TEST_NEXUS_TOKEN}',\n"
+        "          headerName = 'X-Repo-Token',\n"
+        "        },\n"
+        "        validation = {\n"
+        "          checksum = 'fail',\n"
+        "          tlsVerify = false,\n"
+        "        },\n"
+        "        scope = {\n"
+        "          include = { 'org.junit:*' },\n"
+        "        },\n"
+        "        snapshots = false,\n"
+        "        releases = true,\n"
+        "      },\n"
+        "      {\n"
+        "        id = 'fallback',\n"
+        "        url = 'https://repo.example.test/fallback',\n"
+        "        priority = 50,\n"
+        "      },\n"
+    );
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path mvnLog = tempDir.path() / "mvn.log";
+    const std::filesystem::path settingsCopy = tempDir.path() / "captured-settings.xml";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "sys");
+    copy_repo_plugin(pluginDirectory, "maven");
+
+    write_file(fakeBin / "java",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "javac",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "mvn",
+        "#!/bin/sh\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(mvnLog.string()) + "\n"
+        "settings=''\n"
+        "prev=''\n"
+        "for arg in \"$@\"; do\n"
+        "  if [ \"$prev\" = '-s' ]; then settings=\"$arg\"; break; fi\n"
+        "  prev=\"$arg\"\n"
+        "done\n"
+        "if [ -n \"$settings\" ]; then cp \"$settings\" " + escape_shell_arg(settingsCopy.string()) + "; fi\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "java").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "javac").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "mvn").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"REQPACK_TEST_NEXUS_TOKEN", "secret-token"},
+            {"REQPACK_MAVEN_REPO", (tempDir.path() / "custom-m2").string()},
+        },
+        {"install", "maven", "org.junit:junit:4.13"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("[error]") == std::string::npos);
+    const std::string mavenInstallLog = read_file(mvnLog);
+    CHECK(mavenInstallLog.find("-Dmaven.repo.local=" + (tempDir.path() / "custom-m2").string()) != std::string::npos);
+    CHECK(mavenInstallLog.find("-DremoteRepositories=corp::default::https://repo.example.test/maven-public,fallback::default::https://repo.example.test/fallback") != std::string::npos);
+    CHECK(mavenInstallLog.find("-Dmaven.wagon.http.ssl.insecure=true") != std::string::npos);
+    CHECK(mavenInstallLog.find("-Dmaven.wagon.http.ssl.allowall=true") != std::string::npos);
+    CHECK(mavenInstallLog.find("-s ") != std::string::npos);
+    CHECK(mavenInstallLog.find("dependency:get") != std::string::npos);
+
+    REQUIRE(std::filesystem::exists(settingsCopy));
+    const std::string settings = read_file(settingsCopy);
+    CHECK(settings.find("<id>corp</id>") != std::string::npos);
+    CHECK(settings.find("<url>https://repo.example.test/maven-public</url>") != std::string::npos);
+    CHECK(settings.find("<name>X-Repo-Token</name>") != std::string::npos);
+    CHECK(settings.find("<value>secret-token</value>") != std::string::npos);
+    CHECK(settings.find("<checksumPolicy>fail</checksumPolicy>") != std::string::npos);
+    CHECK(settings.find("<enabled>false</enabled>") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install maven fails when configured repositories do not match scope", "[integration][orchestrator][service][sys]") {
+    TempDir tempDir{"reqpack-orchestrator-maven-scope-miss"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config_with_maven_repositories(
+        tempDir.path(),
+        pluginDirectory,
+        "      {\n"
+        "        id = 'corp',\n"
+        "        url = 'https://repo.example.test/maven-public',\n"
+        "        priority = 1,\n"
+        "        scope = {\n"
+        "          include = { 'com.mycompany.*' },\n"
+        "        },\n"
+        "      },\n"
+    );
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path mvnLog = tempDir.path() / "mvn.log";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "sys");
+    copy_repo_plugin(pluginDirectory, "maven");
+
+    write_file(fakeBin / "java",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "javac",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "mvn",
+        "#!/bin/sh\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(mvnLog.string()) + "\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "java").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "javac").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "mvn").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+        },
+        {"install", "maven", "org.junit:junit:4.13"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("no configured maven repository matched org.junit:junit") != std::string::npos);
+    CHECK(output.find("INSTALL done:  0 ok,  0 skipped,  1 failed") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(mvnLog));
 }
 
 TEST_CASE("orchestrator sys plugin installs packages via nix backend", "[integration][orchestrator][service][sys]") {

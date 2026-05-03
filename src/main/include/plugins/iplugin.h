@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "core/configuration.h"
 #include "core/types.h"
 #include "core/version_compare.h"
 
@@ -66,6 +67,7 @@ struct PluginCallContext {
 	/// When non-empty, passed as the first arg to IPluginRuntimeHost callbacks
 	/// so the display can correlate events to the right item row.
 	std::string currentItemId{};
+	std::vector<RepositoryEntry> repositories{};
 
 	ExecResult execute(const std::string& command) const {
 		return host != nullptr ? host->execute(pluginId, command) : ExecResult{};

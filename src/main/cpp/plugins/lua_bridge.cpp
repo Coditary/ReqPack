@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <type_traits>
 #include <optional>
 #include <sstream>
 
@@ -243,6 +244,65 @@ std::string escape_shell_double_quotes(const std::string& value) {
     return escaped;
 }
 
+sol::table make_string_array_table(sol::state& lua, const std::vector<std::string>& values) {
+    sol::table table = lua.create_table(static_cast<int>(values.size()), 0);
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        table[static_cast<int>(index + 1)] = values[index];
+    }
+    return table;
+}
+
+sol::table make_repository_entry_table(sol::state& lua, const RepositoryEntry& repository) {
+    sol::table entry = lua.create_table();
+    entry["id"] = repository.id;
+    entry["url"] = repository.url;
+    entry["priority"] = repository.priority;
+    entry["enabled"] = repository.enabled;
+    entry["type"] = repository.type;
+
+    sol::table auth = lua.create_table();
+    auth["type"] = to_string(repository.auth.type);
+    if (!repository.auth.username.empty()) {
+        auth["username"] = repository.auth.username;
+    }
+    if (!repository.auth.password.empty()) {
+        auth["password"] = repository.auth.password;
+    }
+    if (!repository.auth.token.empty()) {
+        auth["token"] = repository.auth.token;
+    }
+    if (!repository.auth.sshKey.empty()) {
+        auth["sshKey"] = repository.auth.sshKey;
+    }
+    if (!repository.auth.headerName.empty()) {
+        auth["headerName"] = repository.auth.headerName;
+    }
+    entry["auth"] = auth;
+
+    sol::table validation = lua.create_table();
+    validation["checksum"] = to_string(repository.validation.checksum);
+    validation["tlsVerify"] = repository.validation.tlsVerify;
+    entry["validation"] = validation;
+
+    sol::table scope = lua.create_table();
+    scope["include"] = make_string_array_table(lua, repository.scope.include);
+    scope["exclude"] = make_string_array_table(lua, repository.scope.exclude);
+    entry["scope"] = scope;
+
+    for (const auto& [key, value] : repository.extras) {
+        std::visit([&](const auto& item) {
+            using ValueType = std::decay_t<decltype(item)>;
+            if constexpr (std::is_same_v<ValueType, std::vector<std::string>>) {
+                entry[key] = make_string_array_table(lua, item);
+            } else {
+                entry[key] = item;
+            }
+        }, value);
+    }
+
+    return entry;
+}
+
 }  // namespace
 
 LuaBridge::LuaBridge(const std::string& scriptPath, const ReqPackConfig& config)
@@ -373,6 +433,13 @@ void LuaBridge::register_context_types() {
             plugin["bootstrap"] = context.bootstrapPath;
             return plugin;
         }),
+        "repositories", sol::readonly_property([this](const PluginCallContext& context) {
+            sol::table repositories = m_lua.create_table(static_cast<int>(context.repositories.size()), 0);
+            for (std::size_t index = 0; index < context.repositories.size(); ++index) {
+                repositories[static_cast<int>(index + 1)] = make_repository_entry_table(m_lua, context.repositories[index]);
+            }
+            return repositories;
+        }),
         "log", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table log = m_lua.create_table();
             log.set_function("debug", [context](const std::string& message) { context.logDebug(message); });
@@ -497,7 +564,8 @@ PluginCallContext LuaBridge::makeContext(const std::vector<std::string>& flags) 
         .scriptPath = m_scriptPath,
         .bootstrapPath = m_bootstrapPath,
         .flags = flags,
-        .host = const_cast<LuaBridge*>(this)
+		.host = const_cast<LuaBridge*>(this),
+		.repositories = repositories_for_ecosystem(m_config, m_pluginId)
     };
 }
 

@@ -585,7 +585,8 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 		.bootstrapPath = plugin->getBootstrapPath(),
 		.flags = taskGroup.flags,
 		.host = plugin->getRuntimeHost(),
-		.currentItemId = itemId
+		.currentItemId = itemId,
+		.repositories = repositories_for_ecosystem(this->config, plugin->getPluginId())
 	};
 }
 

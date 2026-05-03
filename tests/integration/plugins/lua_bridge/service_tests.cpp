@@ -129,7 +129,7 @@ std::string read_file(const std::filesystem::path& path) {
     return buffer.str();
 }
 
-PluginCallContext make_context(LuaBridge& bridge, std::vector<std::string> flags = {}) {
+PluginCallContext make_context(LuaBridge& bridge, const ReqPackConfig& config, std::vector<std::string> flags = {}) {
     return PluginCallContext{
         .pluginId = bridge.getPluginId(),
         .pluginDirectory = bridge.getPluginDirectory(),
@@ -137,6 +137,7 @@ PluginCallContext make_context(LuaBridge& bridge, std::vector<std::string> flags
         .bootstrapPath = bridge.getBootstrapPath(),
         .flags = std::move(flags),
         .host = bridge.getRuntimeHost(),
+        .repositories = repositories_for_ecosystem(config, bridge.getPluginId()),
     };
 }
 
@@ -295,6 +296,48 @@ function plugin.info(context, package) return { name = package, version = "1.0.0
 function plugin.shutdown() return true end
 )";
 
+const char* REPOSITORY_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return "repo-bridge" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "repo" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package)
+  local repos = context.repositories
+  local first = repos[1]
+  local second = repos[2]
+  local lines = {
+    tostring(#repos),
+    first.id,
+    tostring(first.priority),
+    first.auth.type,
+    first.auth.token,
+    first.validation.checksum,
+    tostring(first.validation.tlsVerify),
+    first.scope.include[1],
+    tostring(first.snapshots),
+    second.id,
+    second.type,
+    second.scope.exclude[1],
+    second.tags[1],
+  }
+  return {
+    name = package,
+    version = table.concat(lines, "|"),
+    description = repos[3] == nil and "only-current-ecosystem" or "unexpected-extra-repo",
+  }
+end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("lua bridge loads bootstrap state and parses query values", "[integration][lua_bridge][service]") {
@@ -349,7 +392,7 @@ TEST_CASE("lua bridge loads bootstrap state and parses query values", "[integrat
     CHECK(missing[0].localTarget);
     CHECK(missing[0].flags == std::vector<std::string>{"flag-a"});
 
-    const PluginCallContext context = make_context(bridge, {"--query-flag"});
+    const PluginCallContext context = make_context(bridge, config, {"--query-flag"});
     const std::vector<PackageInfo> listed = bridge.list(context);
     REQUIRE(listed.size() == 1);
     CHECK(listed[0].name == "booted");
@@ -385,7 +428,7 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
 
     StdoutCapture capture;
     const bool installed = bridge.install(
-        make_context(bridge, {"--bridge-flag"}),
+        make_context(bridge, config, {"--bridge-flag"}),
         {Package{.action = ActionType::INSTALL, .system = "bridge", .name = "demo"}}
     );
     Logger::instance().flush();
@@ -430,4 +473,47 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
     CHECK(output.find("global-exec") != std::string::npos);
     CHECK(output.find("progress=41%") != std::string::npos);
     CHECK(output.find("line_progress: 41") != std::string::npos);
+}
+
+TEST_CASE("lua bridge exposes ordered repositories for current plugin", "[integration][lua_bridge][service]") {
+    TempDir tempDir{"reqpack-lua-bridge-repositories"};
+    ReqPackConfig config;
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins" / "maven";
+    const std::filesystem::path scriptPath = pluginDirectory / "maven.lua";
+
+    RepositoryEntry lowPriority;
+    lowPriority.id = "corp";
+    lowPriority.url = "https://repo.example.test/maven-public";
+    lowPriority.priority = 1;
+    lowPriority.auth.type = RepositoryAuthType::TOKEN;
+    lowPriority.auth.token = "secret-token";
+    lowPriority.validation.checksum = RepositoryChecksumPolicy::FAIL;
+    lowPriority.validation.tlsVerify = false;
+    lowPriority.scope.include = {"com.mycompany.*"};
+    lowPriority.extras["snapshots"] = true;
+
+    RepositoryEntry highPriority;
+    highPriority.id = "central";
+    highPriority.url = "https://repo1.maven.org/maven2";
+    highPriority.priority = 20;
+    highPriority.type = "default";
+    highPriority.scope.exclude = {"com.mycompany.legacy.*"};
+    highPriority.extras["tags"] = std::vector<std::string>{"public"};
+
+    RepositoryEntry unrelated;
+    unrelated.id = "pypi";
+    unrelated.url = "https://pypi.org/simple";
+
+    config.repositories["maven"] = {highPriority, lowPriority};
+    config.repositories["pip"] = {unrelated};
+
+    write_file(scriptPath, REPOSITORY_PLUGIN);
+
+    LuaBridge bridge(scriptPath.string(), config);
+    REQUIRE(bridge.init());
+
+    const PackageInfo info = bridge.info(make_context(bridge, config), "demo");
+    CHECK(info.name == "demo");
+    CHECK(info.version == "2|corp|1|token|secret-token|fail|false|com.mycompany.*|true|central|default|com.mycompany.legacy.*|public");
+    CHECK(info.description == "only-current-ecosystem");
 }

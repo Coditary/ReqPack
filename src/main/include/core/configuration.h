@@ -4,6 +4,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 enum class SeverityLevel {
@@ -57,6 +58,19 @@ enum class AuditOutputFormat {
 enum class DisplayRenderer {
     PLAIN,
     COLOR
+};
+
+enum class RepositoryAuthType {
+    NONE,
+    BASIC,
+    TOKEN,
+    SSH
+};
+
+enum class RepositoryChecksumPolicy {
+    FAIL,
+    WARN,
+    IGNORE
 };
 
 struct LoggingConfig {
@@ -189,6 +203,39 @@ struct RqpConfig {
     std::string statePath{"~/.reqpack/rqp/state"};
 };
 
+struct RepositoryAuthConfig {
+    RepositoryAuthType type{RepositoryAuthType::NONE};
+    std::string username{};
+    std::string password{};
+    std::string token{};
+    std::string sshKey{};
+    std::string headerName{};
+};
+
+struct RepositoryValidationConfig {
+    RepositoryChecksumPolicy checksum{RepositoryChecksumPolicy::WARN};
+    bool tlsVerify{true};
+};
+
+struct RepositoryScopeConfig {
+    std::vector<std::string> include{};
+    std::vector<std::string> exclude{};
+};
+
+using RepositoryExtraValue = std::variant<std::string, bool, double, std::vector<std::string>>;
+
+struct RepositoryEntry {
+    std::string id{};
+    std::string url{};
+    int priority{100};
+    bool enabled{true};
+    std::string type{};
+    RepositoryAuthConfig auth{};
+    RepositoryValidationConfig validation{};
+    RepositoryScopeConfig scope{};
+    std::map<std::string, RepositoryExtraValue> extras{};
+};
+
 struct HistoryConfig {
     // Controls history.jsonl – the append-only event log.
     bool enabled{true};
@@ -243,6 +290,7 @@ struct ReqPackConfig {
     RemoteConfig remote{};
     SbomConfig sbom{};
     RqpConfig rqp{};
+    std::map<std::string, std::vector<RepositoryEntry>> repositories{};
     HistoryConfig history{};
     DisplayConfig display{};
 
@@ -319,6 +367,7 @@ std::filesystem::path registry_source_file_path(const std::filesystem::path& reg
 
 RegistrySourceMap load_registry_sources_from_lua(const std::filesystem::path& sourcePath);
 RegistrySourceMap collect_registry_sources(const ReqPackConfig& config);
+std::vector<RepositoryEntry> repositories_for_ecosystem(const ReqPackConfig& config, const std::string& ecosystem);
 
 ReqPackConfig load_config_from_lua(
     const std::filesystem::path& configPath,
@@ -440,5 +489,31 @@ inline std::string to_string(DisplayRenderer renderer) {
         case DisplayRenderer::PLAIN:
         default:
             return "plain";
+    }
+}
+
+inline std::string to_string(RepositoryAuthType type) {
+    switch (type) {
+        case RepositoryAuthType::BASIC:
+            return "basic";
+        case RepositoryAuthType::TOKEN:
+            return "token";
+        case RepositoryAuthType::SSH:
+            return "ssh";
+        case RepositoryAuthType::NONE:
+        default:
+            return "none";
+    }
+}
+
+inline std::string to_string(RepositoryChecksumPolicy policy) {
+    switch (policy) {
+        case RepositoryChecksumPolicy::FAIL:
+            return "fail";
+        case RepositoryChecksumPolicy::IGNORE:
+            return "ignore";
+        case RepositoryChecksumPolicy::WARN:
+        default:
+            return "warn";
     }
 }
