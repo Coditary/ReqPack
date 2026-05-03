@@ -56,6 +56,7 @@ public:
     // Returns the plugin name (system) that declares the given file extension,
     // or an empty string if no loaded plugin claims it.
     std::string resolveSystemForExtension(const std::string& extension) const;
+    std::string resolveSystemForLocalTarget(const std::filesystem::path& path) const;
 
     IPlugin* getPlugin(const std::string& name);
 };

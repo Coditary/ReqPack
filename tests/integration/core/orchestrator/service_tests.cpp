@@ -241,6 +241,23 @@ return {
     return packagePath;
 }
 
+std::filesystem::path build_zip_archive(
+    const std::filesystem::path& root,
+    const std::string& archiveName,
+    const std::vector<std::pair<std::string, std::string>>& files
+) {
+    const std::filesystem::path sourceRoot = root / (archiveName + "-src");
+    std::filesystem::create_directories(sourceRoot);
+    for (const auto& [relativePath, content] : files) {
+        write_file(sourceRoot / relativePath, content);
+    }
+
+    const std::filesystem::path archivePath = root / archiveName;
+    const std::string zipCommand = "cd " + escape_shell_arg(sourceRoot.string()) + " && zip -qr " + escape_shell_arg(archivePath.string()) + " .";
+    REQUIRE(std::system(zipCommand.c_str()) == 0);
+    return archivePath;
+}
+
 std::string sha256_file_hex(const std::filesystem::path& path) {
     const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(path.string()));
     const std::size_t pos = hashOutput.rfind(' ');
@@ -830,6 +847,79 @@ TEST_CASE("orchestrator install local rqp resolves to built-in rqp by extension"
     CHECK(std::filesystem::exists(stateDir / "manifest.json"));
 }
 
+TEST_CASE("orchestrator install local archive passes extracted directory to plugin", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-archive"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path)
+  local state = context.plugin.dir .. "/state"
+  context.exec.run("mkdir -p '" .. state .. "'")
+  local copy = context.exec.run("test -d '" .. path .. "' && cp '" .. path .. "/artifact.txt' '" .. state .. "/artifact.txt' && cp '" .. path .. "/nested/inner.txt' '" .. state .. "/inner.txt'")
+  return copy.success
+end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)" );
+
+    const std::filesystem::path archivePath = build_zip_archive(
+        tempDir.path(),
+        "artifact.zip",
+        {{"artifact.txt", "hello-local-archive"}, {"nested/inner.txt", "nested"}}
+    );
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "apply", archivePath.string()});
+    const std::filesystem::path marker = pluginDirectory / "apply" / "state" / "local.txt";
+    INFO(output);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.txt") == "hello-local-archive");
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "inner.txt") == "nested");
+}
+
+TEST_CASE("orchestrator install file-url archive resolves system after extraction", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-file-url-archive"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", R"(
+plugin = {}
+plugin.fileExtensions = { ".txt" }
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return false end
+function plugin.installLocal(context, path)
+  return context.exec.run("test -d '" .. path .. "' && test -f '" .. path .. "/artifact.txt'").success
+end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)" );
+
+    const std::filesystem::path archivePath = build_zip_archive(tempDir.path(), "remote-artifact.zip", {{"artifact.txt", "hello-url-archive"}});
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "file://" + archivePath.string()});
+    INFO(output);
+    CHECK(output.find("INSTALL: apply:local") != std::string::npos);
+    CHECK(output.find("1 ok") != std::string::npos);
+}
+
 TEST_CASE("orchestrator install named rqp package resolves from repository index", "[integration][orchestrator][service]") {
     TempDir tempDir{"reqpack-orchestrator-install-rqp-repo"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
@@ -860,6 +950,39 @@ TEST_CASE("orchestrator install named rqp package resolves from repository index
     CHECK(std::filesystem::exists(stateDir / "installed.txt"));
     CHECK(read_file(stateDir / "installed.txt") == "hello-from-repo");
     CHECK(read_file(stateDir / "source.json").find("\"source\": \"repository\"") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install named rqp package resolves repository zip artifact", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-rqp-repo-zip"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path artifactPath = build_rqp_package(
+        tempDir.path(),
+        "repo-zipped-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-from-zipped-repo"))
+    );
+    const std::filesystem::path archivePath = build_zip_archive(
+        tempDir.path(),
+        "repo-zipped-artifact.zip",
+        {{artifactPath.filename().string(), read_file(artifactPath)}}
+    );
+    const std::filesystem::path indexPath = write_rq_repository_index(
+        tempDir.path(),
+        "repo-zipped-artifact",
+        "1.0.0",
+        archivePath
+    );
+    const std::filesystem::path configPath = write_config_with_rq_repositories(
+        tempDir.path(),
+        pluginDirectory,
+        {"file://" + indexPath.string()}
+    );
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "rqp:repo-zipped-artifact@1.0.0"});
+    const std::filesystem::path stateDir = tempDir.path() / "rqp-state" / "repo-zipped-artifact" / "repo-zipped-artifact@1.0.0-1+r0";
+    INFO(output);
+    CHECK(std::filesystem::exists(stateDir / "installed.txt"));
+    CHECK(read_file(stateDir / "installed.txt") == "hello-from-zipped-repo");
 }
 
 TEST_CASE("orchestrator install rqp package aborts on repository artifact hash mismatch", "[integration][orchestrator][service]") {

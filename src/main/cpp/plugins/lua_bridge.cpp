@@ -1,5 +1,6 @@
 #include "plugins/lua_bridge.h"
 
+#include "core/archive_resolver.h"
 #include "core/downloader.h"
 #include "plugins/exec_rules.h"
 
@@ -429,7 +430,8 @@ void LuaBridge::register_context_types() {
         "net", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table net = m_lua.create_table();
             net.set_function("download", [context](const std::string& url, const std::string& destinationPath) {
-                return context.downloadFile(url, destinationPath);
+                const DownloadResult result = context.downloadFile(url, destinationPath);
+                return result.success;
             });
             return net;
         })
@@ -534,11 +536,18 @@ bool LuaBridge::init() {
 
 bool LuaBridge::shutdown() {
     sol::protected_function luaShutdown = m_pluginTable["shutdown"];
-    if (luaShutdown.valid()) {
+    const bool shutdownOk = luaShutdown.valid() ? [&]() {
         auto result = luaShutdown();
         return result.valid() ? (result.return_count() == 0 ? true : result.get<bool>()) : false;
+    }() : true;
+
+    for (const std::string& path : m_tempDirectories) {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
     }
-    return true;
+    m_tempDirectories.clear();
+
+    return shutdownOk;
 }
 
 std::vector<Package> LuaBridge::getRequirements() {
@@ -862,9 +871,48 @@ ExecResult LuaBridge::runCommand(const std::string& command, const bool silent) 
     return run_plugin_command(m_logger, m_pluginId, command, silent);
 }
 
-bool LuaBridge::downloadToPath(const std::string& url, const std::string& destinationPath) const {
+DownloadResult LuaBridge::downloadToPath(const std::string& url, const std::string& destinationPath) {
     Downloader downloader(nullptr, m_config);
-    return downloader.download(url, destinationPath);
+    const std::filesystem::path sourcePath = [url]() {
+        if (url.rfind("file://", 0) == 0) {
+            return std::filesystem::path(url.substr(7));
+        }
+        return std::filesystem::path(url);
+    }();
+    const std::string suffix = generic_archive_suffix(sourcePath);
+    const std::filesystem::path targetPath = suffix.empty() ? std::filesystem::path(destinationPath)
+                                                             : std::filesystem::path(destinationPath + suffix);
+    if (!downloader.download(url, targetPath.string())) {
+        return {};
+    }
+
+    DownloadResult result;
+    result.success = true;
+    result.resolvedPath = destinationPath;
+
+    try {
+        if (extract_archive_in_place(targetPath)) {
+            if (targetPath != std::filesystem::path(destinationPath)) {
+                std::error_code error;
+                std::filesystem::remove_all(destinationPath, error);
+                std::filesystem::rename(targetPath, destinationPath, error);
+                if (error) {
+                    return {};
+                }
+            }
+            result.resolvedPath = destinationPath;
+        } else if (targetPath != std::filesystem::path(destinationPath)) {
+            std::error_code error;
+            std::filesystem::rename(targetPath, destinationPath, error);
+            if (error) {
+                return {};
+            }
+        }
+    } catch (...) {
+        return {};
+    }
+
+    return result;
 }
 
 void LuaBridge::logDebug(const std::string& pluginId, const std::string& message) {
@@ -966,7 +1014,7 @@ std::string LuaBridge::createTempDirectory(const std::string& pluginId) {
     return created;
 }
 
-bool LuaBridge::download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) {
+DownloadResult LuaBridge::download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) {
     (void)pluginId;
     return downloadToPath(url, destinationPath);
 }

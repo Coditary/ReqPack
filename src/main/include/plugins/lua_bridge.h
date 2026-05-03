@@ -40,7 +40,7 @@ private:
 	bool hasSilentRuntimeFlag(const std::vector<std::string>& flags) const;
 	ExecResult runCommand(const std::string& command) const;
 	ExecResult runCommand(const std::string& command, bool silent) const;
-	bool downloadToPath(const std::string& url, const std::string& destinationPath) const;
+	DownloadResult downloadToPath(const std::string& url, const std::string& destinationPath);
 
 public:
     LuaBridge(const std::string& scriptPath, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
@@ -90,5 +90,5 @@ public:
 	void registerArtifact(const std::string& pluginId, const std::string& payload) override;
 	ExecResult execute(const std::string& pluginId, const std::string& command) override;
 	std::string createTempDirectory(const std::string& pluginId) override;
-	bool download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) override;
+	DownloadResult download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) override;
 };

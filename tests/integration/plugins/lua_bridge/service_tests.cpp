@@ -13,6 +13,7 @@
 #include <catch2/catch.hpp>
 
 #include "plugins/lua_bridge.h"
+#include "test_helpers.h"
 
 namespace {
 
@@ -275,9 +276,9 @@ function plugin.install(context, packages)
   })
   local global = reqpack.exec.run("printf 'global-exec'")
 
-  local src = context.plugin.dir .. "/source.txt"
+  local src = context.plugin.dir .. "/source.zip"
   local dst = context.plugin.dir .. "/downloaded.txt"
-  local net_ok = context.net.download(src, dst)
+  local net_ok = context.net.download(src, dst) and context.exec.run("test -d '" .. dst .. "' && test -f '" .. dst .. "/source.txt'").success
 
   local meta_path = context.plugin.dir .. "/meta.txt"
   local meta_cmd = "printf '%s\\n%s\\n%s\\n%s\\n%s' '" .. context.flags[1] .. "' '" .. context.plugin.id .. "' '" .. plain.stdout .. "' '" .. global.stdout .. "' '" .. tmp .. "' > '" .. meta_path .. "'"
@@ -374,6 +375,8 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
     const std::filesystem::path scriptPath = pluginDirectory / "bridge.lua";
 
     write_file(pluginDirectory / "source.txt", "download-payload\n");
+    const std::string zipCommand = "zip -qj " + escape_shell_arg((pluginDirectory / "source.zip").string()) + " " + escape_shell_arg((pluginDirectory / "source.txt").string());
+    REQUIRE(std::system(zipCommand.c_str()) == 0);
     write_file(scriptPath, CONTEXT_PLUGIN);
 
     Logger::instance().setLevel(spdlog::level::debug);
@@ -392,9 +395,9 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
 
     const std::filesystem::path downloadedPath = pluginDirectory / "downloaded.txt";
     const std::filesystem::path metaPath = pluginDirectory / "meta.txt";
-    REQUIRE(std::filesystem::exists(downloadedPath));
     REQUIRE(std::filesystem::exists(metaPath));
-    CHECK(read_file(downloadedPath) == "download-payload\n");
+    CHECK(std::filesystem::is_directory(downloadedPath));
+    CHECK(read_file(downloadedPath / "source.txt") == "download-payload\n");
 
     std::istringstream metaStream(read_file(metaPath));
     std::vector<std::string> metaLines;

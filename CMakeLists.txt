@@ -68,6 +68,7 @@ set(SOURCES
     src/main/cpp/plugins/rq_plugin.cpp
     src/main/cpp/core/configuration.cpp
     src/main/cpp/core/manifest_loader.cpp
+    src/main/cpp/core/archive_resolver.cpp
     src/main/cpp/core/downloader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/registry_database.cpp
@@ -141,6 +142,7 @@ add_executable(core_integration_tests
     src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/plugins/rq_plugin.cpp
     src/main/cpp/core/configuration.cpp
+    src/main/cpp/core/archive_resolver.cpp
     src/main/cpp/core/downloader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/rq_package.cpp
@@ -183,6 +185,7 @@ add_executable(core_unit_tests
     tests/unit/output/logger/format_tests.cpp
     src/main/cpp/core/configuration.cpp
     src/main/cpp/cli/cli.cpp
+    src/main/cpp/core/archive_resolver.cpp
     src/main/cpp/core/manifest_loader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/osv_core.cpp

@@ -60,6 +60,33 @@ local function shell_join(values)
     return table.concat(quoted, " ")
 end
 
+local function resolve_local_file(path, extension)
+    local file_type = reqpack.exec.run("test -d " .. shell_quote(path) .. " && printf dir || printf file")
+    if not file_type.success or trim(file_type.stdout or "") ~= "dir" then
+        return path, nil
+    end
+
+    local result = reqpack.exec.run("find " .. shell_quote(path) .. " -type f -name " .. shell_quote("*" .. extension) .. " 2>/dev/null | sort")
+    if not result.success then
+        return nil, "failed to inspect extracted local package"
+    end
+
+    local matches = {}
+    for line in (result.stdout or ""):gmatch("[^\r\n]+") do
+        if trim(line) ~= "" then
+            table.insert(matches, trim(line))
+        end
+    end
+
+    if #matches == 0 then
+        return nil, "no local " .. extension .. " package found in extracted archive"
+    end
+    if #matches > 1 then
+        return nil, "multiple local " .. extension .. " packages found in extracted archive"
+    end
+    return matches[1], nil
+end
+
 local function package_request_installed(pkg)
     if pkg.version ~= nil and pkg.version ~= "" then
         return package_installed(package_spec(pkg))
@@ -191,14 +218,20 @@ function plugin.install(context, packages)
 end
 
 function plugin.installLocal(context, path)
+    local resolved_path, resolve_error = resolve_local_file(path, ".rpm")
+    if resolved_path == nil then
+        context.tx.failed(resolve_error)
+        return false
+    end
+
     context.tx.begin_step("install local rpm")
-    local result = context.exec.run("sudo dnf install -y " .. shell_quote(path))
+    local result = context.exec.run("sudo dnf install -y " .. shell_quote(resolved_path))
     if not result.success then
         context.tx.failed("dnf local install failed")
         return false
     end
 
-    context.events.installed({ path = path, localTarget = true })
+    context.events.installed({ path = resolved_path, localTarget = true })
     context.tx.success()
     return true
 end

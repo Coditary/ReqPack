@@ -160,6 +160,35 @@ local function sudo_binary()
     return getenv("REQPACK_SYS_SUDO_BIN", "sudo")
 end
 
+local function resolve_local_file(path)
+    local file_type = reqpack.exec.run("test -d " .. shell_quote(path) .. " && printf dir || printf file")
+    if not file_type.success or trim(file_type.stdout or "") ~= "dir" then
+        return path, nil
+    end
+
+    local result = reqpack.exec.run(
+        "find " .. shell_quote(path) .. " -type f \\( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.xbps' -o -name '*.eopkg' -o -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \\) 2>/dev/null | sort"
+    )
+    if not result.success then
+        return nil, "failed to inspect extracted local system package"
+    end
+
+    local matches = {}
+    for line in (result.stdout or ""):gmatch("[^\r\n]+") do
+        if trim(line) ~= "" then
+            table.insert(matches, trim(line))
+        end
+    end
+
+    if #matches == 0 then
+        return nil, "no local system package found in extracted archive"
+    end
+    if #matches > 1 then
+        return nil, "multiple local system packages found in extracted archive"
+    end
+    return matches[1], nil
+end
+
 local LOGICAL_PACKAGES = {
     java = {
         apt = "default-jdk",
@@ -1181,6 +1210,12 @@ function plugin.install(context, packages)
 end
 
 function plugin.installLocal(context, path)
+    local resolved_path, resolve_error = resolve_local_file(path)
+    if resolved_path == nil then
+        context.tx.failed(resolve_error)
+        return false
+    end
+
     local backend, error_message = backend_available(context)
     if backend == nil then
         context.tx.failed(error_message)
@@ -1191,31 +1226,31 @@ function plugin.installLocal(context, path)
     local binary = shell_quote(backend_binary(backend))
     local command = ""
     if backend == "apt" then
-        command = sudo_prefix(backend) .. binary .. " install -y " .. shell_quote(path)
+        command = sudo_prefix(backend) .. binary .. " install -y " .. shell_quote(resolved_path)
     elseif backend == "dnf" or backend == "yum" or backend == "zypper" or backend == "urpmi" then
-        command = sudo_prefix(backend) .. binary .. " install -y " .. shell_quote(path)
+        command = sudo_prefix(backend) .. binary .. " install -y " .. shell_quote(resolved_path)
     elseif backend == "pacman" then
-        command = sudo_prefix(backend) .. binary .. " -U --noconfirm " .. shell_quote(path)
+        command = sudo_prefix(backend) .. binary .. " -U --noconfirm " .. shell_quote(resolved_path)
     elseif backend == "apk" then
-        command = sudo_prefix(backend) .. binary .. " add --allow-untrusted " .. shell_quote(path)
+        command = sudo_prefix(backend) .. binary .. " add --allow-untrusted " .. shell_quote(resolved_path)
     elseif backend == "xbps" then
-        command = sudo_prefix(backend) .. binary .. " -y " .. shell_quote(path)
+        command = sudo_prefix(backend) .. binary .. " -y " .. shell_quote(resolved_path)
     elseif backend == "eopkg" then
-        command = sudo_prefix(backend) .. binary .. " install -y " .. shell_quote(path)
+        command = sudo_prefix(backend) .. binary .. " install -y " .. shell_quote(resolved_path)
     elseif backend == "emerge" then
         context.tx.failed("sys local install not supported via emerge")
         return false
     elseif backend == "nix" then
-        command = binary .. " -i " .. shell_quote(path)
+        command = binary .. " -i " .. shell_quote(resolved_path)
     else
-        command = binary .. " install " .. shell_quote(path)
+        command = binary .. " install " .. shell_quote(resolved_path)
     end
     local result = context.exec.run(command)
     if not result.success then
         context.tx.failed("sys local install failed via " .. backend)
         return false
     end
-    context.events.installed({ path = path, localTarget = true })
+    context.events.installed({ path = resolved_path, localTarget = true })
     context.tx.success()
     return true
 end

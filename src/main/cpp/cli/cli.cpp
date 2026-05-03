@@ -34,7 +34,7 @@ bool is_existing_regular_file(const std::string& value) {
 }
 
 bool is_url(const std::string& value) {
-    return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0;
+    return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0 || value.rfind("file://", 0) == 0;
 }
 
 bool supports_manifest_path(ActionType action) {

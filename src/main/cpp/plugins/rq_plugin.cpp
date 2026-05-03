@@ -1,5 +1,6 @@
 #include "plugins/rq_plugin.h"
 
+#include "core/archive_resolver.h"
 #include "core/rq_package.h"
 #include "core/rq_repository.h"
 #include "core/rqp_state_store.h"
@@ -51,6 +52,26 @@ std::optional<ptree> parse_json_tree(const std::string& json) {
 
 std::size_t write_to_file(void* contents, std::size_t size, std::size_t nmemb, void* userp) {
     return std::fwrite(contents, size, nmemb, static_cast<FILE*>(userp));
+}
+
+std::optional<std::filesystem::path> unique_nested_file_with_extension(const std::filesystem::path& root, const std::string& extension) {
+    std::optional<std::filesystem::path> match;
+    std::error_code error;
+    for (auto it = std::filesystem::recursive_directory_iterator(root, error);
+         it != std::filesystem::recursive_directory_iterator();
+         it.increment(error)) {
+        if (error || !it->is_regular_file()) {
+            continue;
+        }
+        if (it->path().extension() != extension) {
+            continue;
+        }
+        if (match.has_value()) {
+            throw std::runtime_error("multiple installable rqp files found in extracted archive");
+        }
+        match = it->path();
+    }
+    return match;
 }
 
 bool rq_package_installed(const std::filesystem::path& stateRoot, const Package& package) {
@@ -162,34 +183,49 @@ public:
         return created;
     }
 
-    bool download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) override {
+    DownloadResult download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) override {
         (void)pluginId;
         const std::filesystem::path targetPath(destinationPath);
+        auto finalize = [&](const std::filesystem::path& path) -> DownloadResult {
+            try {
+                (void)extract_archive_in_place(path);
+            } catch (...) {
+                return {};
+            }
+            return DownloadResult{.success = true, .resolvedPath = path.string()};
+        };
+
         std::error_code error;
         std::filesystem::create_directories(targetPath.parent_path(), error);
         if (error) {
-            return false;
+            return {};
         }
 
         if (url.rfind("file://", 0) == 0) {
             std::filesystem::copy_file(url.substr(7), targetPath, std::filesystem::copy_options::overwrite_existing, error);
-            return !error;
+            if (error) {
+                return {};
+            }
+            return finalize(targetPath);
         }
         if (url.find("://") == std::string::npos) {
             std::filesystem::copy_file(url, targetPath, std::filesystem::copy_options::overwrite_existing, error);
-            return !error;
+            if (error) {
+                return {};
+            }
+            return finalize(targetPath);
         }
 
         const std::filesystem::path tempPath = std::filesystem::path(destinationPath + ".tmp");
         FILE* file = std::fopen(tempPath.string().c_str(), "wb");
         if (file == nullptr) {
-            return false;
+            return {};
         }
 
         CURL* curl = curl_easy_init();
         if (curl == nullptr) {
             std::fclose(file);
-            return false;
+            return {};
         }
 
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -208,15 +244,15 @@ public:
 
         if (result != CURLE_OK || statusCode >= 400) {
             std::filesystem::remove(tempPath, error);
-            return false;
+            return {};
         }
 
         std::filesystem::rename(tempPath, targetPath, error);
         if (error) {
             std::filesystem::remove(tempPath, error);
-            return false;
+            return {};
         }
-        return true;
+        return finalize(targetPath);
     }
 
 private:
@@ -390,7 +426,19 @@ bool RqPlugin::install(const PluginCallContext& context, const std::vector<Packa
 
 bool RqPlugin::installLocal(const PluginCallContext& context, const std::string& path) {
     recentEvents_.clear();
-    return installPackagePath(context, path, "local-file", path);
+    std::filesystem::path sourcePath(path);
+    std::error_code error;
+    if (std::filesystem::is_directory(sourcePath, error) && !error) {
+        if (!std::filesystem::exists(sourcePath / "reqpack.lua", error) || error) {
+            const std::optional<std::filesystem::path> nestedPackage = unique_nested_file_with_extension(sourcePath, ".rqp");
+            if (!nestedPackage.has_value()) {
+                context.emitFailure("no installable rqp file found in extracted archive");
+                return false;
+            }
+            sourcePath = nestedPackage.value();
+        }
+    }
+    return installPackagePath(context, sourcePath, "local-file", path);
 }
 
 bool RqPlugin::remove(const PluginCallContext& context, const std::vector<Package>& packages) {
@@ -989,7 +1037,7 @@ std::filesystem::path RqPlugin::localPathForUrl(const std::string& url) {
 
 std::filesystem::path RqPlugin::downloadPackageArtifact(const PluginCallContext& context, const std::string& url) {
     const std::filesystem::path localPath = localPathForUrl(url);
-    if (localPath != std::filesystem::path(url)) {
+    if (localPath != std::filesystem::path(url) && !is_generic_archive_path(localPath)) {
         return localPath;
     }
 
@@ -997,9 +1045,26 @@ std::filesystem::path RqPlugin::downloadPackageArtifact(const PluginCallContext&
     if (tempDirectory.empty()) {
         return {};
     }
-    const std::filesystem::path targetPath = std::filesystem::path(tempDirectory) / "download.rqp";
-    if (!context.downloadFile(url, targetPath.string())) {
+    const std::filesystem::path sourcePath = (localPath != std::filesystem::path(url)) ? localPath : std::filesystem::path(url);
+    const std::string suffix = generic_archive_suffix(sourcePath);
+    const std::string extension = suffix.empty() ? sourcePath.extension().string() : suffix;
+    const std::filesystem::path targetPath = std::filesystem::path(tempDirectory) / (extension.empty() ? "download.rqp" : "download" + extension);
+    const DownloadResult download = context.downloadFile(url, targetPath.string());
+    if (!download.success) {
         return {};
     }
-    return targetPath;
+
+    std::filesystem::path resolvedPath = download.resolvedPath.empty() ? targetPath : std::filesystem::path(download.resolvedPath);
+    if (std::filesystem::is_directory(resolvedPath)) {
+        const std::filesystem::path nestedPackage = resolvedPath / "download.rqp";
+        if (std::filesystem::is_regular_file(nestedPackage)) {
+            return nestedPackage;
+        }
+
+        const std::optional<std::filesystem::path> discoveredPackage = unique_nested_file_with_extension(resolvedPath, ".rqp");
+        if (discoveredPackage.has_value()) {
+            return discoveredPackage.value();
+        }
+    }
+    return resolvedPath;
 }

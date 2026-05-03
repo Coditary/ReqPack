@@ -18,6 +18,11 @@ struct ExecResult {
 	std::string stderrText;
 };
 
+struct DownloadResult {
+	bool success{false};
+	std::string resolvedPath;
+};
+
 struct PluginSecurityMetadata {
 	std::string osvEcosystem{};
 	std::string purlType{};
@@ -47,7 +52,7 @@ public:
 	virtual void registerArtifact(const std::string& pluginId, const std::string& payload) = 0;
 	virtual ExecResult execute(const std::string& pluginId, const std::string& command) = 0;
 	virtual std::string createTempDirectory(const std::string& pluginId) = 0;
-	virtual bool download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) = 0;
+	virtual DownloadResult download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) = 0;
 };
 
 struct PluginCallContext {
@@ -70,8 +75,8 @@ struct PluginCallContext {
 		return host != nullptr ? host->createTempDirectory(pluginId) : std::string{};
 	}
 
-	bool downloadFile(const std::string& url, const std::string& destinationPath) const {
-		return host != nullptr ? host->download(pluginId, url, destinationPath) : false;
+	DownloadResult downloadFile(const std::string& url, const std::string& destinationPath) const {
+		return host != nullptr ? host->download(pluginId, url, destinationPath) : DownloadResult{};
 	}
 
 	void logDebug(const std::string& message) const {

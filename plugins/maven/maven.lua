@@ -104,6 +104,35 @@ local function path_exists(path)
     return reqpack.exec.run("test -e " .. shell_quote(path)).success
 end
 
+local function resolve_local_file(path)
+    local file_type = reqpack.exec.run("test -d " .. shell_quote(path) .. " && printf dir || printf file")
+    if not file_type.success or trim(file_type.stdout or "") ~= "dir" then
+        return path, nil
+    end
+
+    local result = reqpack.exec.run(
+        "find " .. shell_quote(path) .. " -type f \\( -name '*.jar' -o -name '*.war' -o -name '*.ear' \\) 2>/dev/null | sort"
+    )
+    if not result.success then
+        return nil, "failed to inspect extracted local artifact"
+    end
+
+    local matches = {}
+    for line in (result.stdout or ""):gmatch("[^\r\n]+") do
+        if trim(line) ~= "" then
+            table.insert(matches, trim(line))
+        end
+    end
+
+    if #matches == 0 then
+        return nil, "no local maven artifact found in extracted archive"
+    end
+    if #matches > 1 then
+        return nil, "multiple local maven artifacts found in extracted archive"
+    end
+    return matches[1], nil
+end
+
 local function url_encode(s)
     return (tostring(s or ""):gsub("[^%w%-%.%_%~]", function(c)
         return string.format("%%%02X", string.byte(c))
@@ -289,14 +318,20 @@ function plugin.install(context, packages)
 end
 
 function plugin.installLocal(context, path)
+    local resolved_path, resolve_error = resolve_local_file(path)
+    if resolved_path == nil then
+        context.tx.failed(resolve_error)
+        return false
+    end
+
     context.tx.begin_step("install local maven artifact")
-    local result = context.exec.run("mvn -q install:install-file -Dfile=" .. shell_quote(path) .. " -DgeneratePom=true")
+    local result = context.exec.run("mvn -q install:install-file -Dfile=" .. shell_quote(resolved_path) .. " -DgeneratePom=true")
     if not result.success then
         context.tx.failed("maven local install failed")
         return false
     end
 
-    context.events.installed({ path = path, localTarget = true })
+    context.events.installed({ path = resolved_path, localTarget = true })
     context.tx.success()
     return true
 end

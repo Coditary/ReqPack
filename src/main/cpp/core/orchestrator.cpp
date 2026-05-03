@@ -1,5 +1,6 @@
 #include "core/orchestrator.h"
 
+#include "core/archive_resolver.h"
 #include "core/downloader.h"
 #include "core/planner_core.h"
 #include "output/logger.h"
@@ -12,7 +13,7 @@
 namespace {
 
 bool is_url(const std::string& value) {
-    return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0;
+    return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0 || value.rfind("file://", 0) == 0;
 }
 
 std::string package_specifier_from_info(const PackageInfo& item) {
@@ -37,6 +38,10 @@ std::string url_filename(const std::string& url) {
 // Extract the lowercase file extension from a filename/URL.
 std::string file_extension(const std::string& path) {
     const std::string filename = url_filename(path);
+    const std::string archiveSuffix = generic_archive_suffix(filename);
+    if (!archiveSuffix.empty()) {
+        return archiveSuffix;
+    }
     const std::size_t dot = filename.rfind('.');
     if (dot == std::string::npos || dot == 0) {
         return {};
@@ -44,6 +49,44 @@ std::string file_extension(const std::string& path) {
     std::string ext = filename.substr(dot);
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
     return ext;
+}
+
+void append_cleanup_paths(std::vector<std::filesystem::path>& tempFiles, const std::vector<std::filesystem::path>& cleanupPaths) {
+    tempFiles.insert(tempFiles.end(), cleanupPaths.begin(), cleanupPaths.end());
+}
+
+bool resolve_local_target(Request& request, Registry* registry, std::vector<std::filesystem::path>& tempFiles, std::string* errorMessage) {
+    try {
+        const ArchiveResolution resolution = extract_archive_to_temp_directory(request.localPath);
+        if (resolution.changed) {
+            append_cleanup_paths(tempFiles, resolution.cleanupPaths);
+            request.localPath = resolution.installPath.string();
+        }
+    } catch (const std::exception& error) {
+        if (errorMessage != nullptr) {
+            *errorMessage = error.what();
+        }
+        return false;
+    }
+
+    if (!request.system.empty()) {
+        return true;
+    }
+
+    request.system = registry->resolveSystemForLocalTarget(request.localPath);
+    if (!request.system.empty()) {
+        return true;
+    }
+
+    const std::string ext = file_extension(request.localPath);
+    if (errorMessage != nullptr) {
+        if (ext.empty()) {
+            *errorMessage = "cannot determine system for local target: " + request.localPath + "\nUse: ReqPack install <system> <path>";
+        } else {
+            *errorMessage = "no plugin found for file extension '" + ext + "': " + request.localPath + "\nUse: ReqPack install <system> <path>";
+        }
+    }
+    return false;
 }
 
 void log_validation_blocked(const std::vector<ValidationFinding>& findings) {
@@ -187,7 +230,7 @@ int Orchestrator::run() {
 	auto cleanupTempFiles = [](const std::vector<std::filesystem::path>& tempFiles) {
 		for (const std::filesystem::path& tempFile : tempFiles) {
 			std::error_code ec;
-			std::filesystem::remove(tempFile, ec);
+			std::filesystem::remove_all(tempFile, ec);
 		}
 	};
 	if (this->requests.empty()) {
@@ -205,25 +248,13 @@ int Orchestrator::run() {
 			continue;
 		}
 
-		if (request.system.empty()) {
-			const std::string ext = file_extension(request.localPath);
-			if (ext.empty()) {
-				Logger::instance().err("cannot determine system for local target with no file extension: " + request.localPath +
-					"\nUse: ReqPack install <system> <path>");
-				cleanupTempFiles(tempFiles);
-				return 1;
-			}
-			const std::string resolved = this->registry->resolveSystemForExtension(ext);
-			if (resolved.empty()) {
-				Logger::instance().err("no plugin found for file extension '" + ext + "': " + request.localPath +
-					"\nUse: ReqPack install <system> <path>");
-				cleanupTempFiles(tempFiles);
-				return 1;
-			}
-			request.system = resolved;
-		}
-
 		if (!is_url(request.localPath)) {
+			std::string errorMessage;
+			if (!resolve_local_target(request, this->registry, tempFiles, &errorMessage)) {
+				Logger::instance().err(errorMessage);
+				cleanupTempFiles(tempFiles);
+				return 1;
+			}
 			continue;
 		}
 
@@ -244,6 +275,12 @@ int Orchestrator::run() {
 
 		tempFiles.push_back(tempFile);
 		request.localPath = tempFile.string();
+		std::string errorMessage;
+		if (!resolve_local_target(request, this->registry, tempFiles, &errorMessage)) {
+			Logger::instance().err(errorMessage);
+			cleanupTempFiles(tempFiles);
+			return 1;
+		}
 	}
 	// ─────────────────────────────────────────────────────────────────────────
 
