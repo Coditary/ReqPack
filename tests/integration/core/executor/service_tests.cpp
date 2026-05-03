@@ -459,6 +459,31 @@ end
 function plugin.shutdown() return true end
 )";
 
+const char* PROXY_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return "proxy-plugin" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "proxy", "test" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.resolveProxyRequest(context, request)
+  return {
+    targetSystem = context.proxy.default,
+    packages = request.packages,
+    flags = { "--proxy-routed" },
+  }
+end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("executor list dispatches flags and plugin context", "[integration][executor][service]") {
@@ -539,6 +564,32 @@ TEST_CASE("executor info forwards first package and flags", "[integration][execu
     CHECK(info.homepage == (tempDir.path() / "plugins" / "query").string());
     CHECK(info.author == "query");
     CHECK(info.email == "query@example.test");
+}
+
+TEST_CASE("executor resolves proxy plugin requests before query dispatch", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-proxy-query"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.planner.proxies["java"].defaultTarget = "query";
+    config.planner.proxies["java"].targets = {"query"};
+
+    const std::filesystem::path scriptPath = add_plugin_script(tempDir.path() / "plugins", "query", QUERY_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "java", PROXY_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Request request;
+    request.action = ActionType::SEARCH;
+    request.system = "java";
+    request.packages = {"alpha", "beta"};
+
+    const std::vector<PackageInfo> packages = executer.search(request);
+
+    REQUIRE(packages.size() == 1);
+    CHECK(packages[0].name == "alpha beta");
+    CHECK(packages[0].version == "--proxy-routed");
+    CHECK(packages[0].description == scriptPath.string());
 }
 
 TEST_CASE("executor read operations return empty values when plugin is unavailable", "[integration][executor][service]") {

@@ -61,6 +61,7 @@ class Executer {
 	void writeTransactionResults(const std::vector<TransactionRecord>& records) const;
 	void markCommittedTransactions() const;
 	void deleteCommittedTransactions() const;
+	std::optional<Request> resolveRequest(const Request& request, std::string* errorMessage = nullptr) const;
 	bool syncInstalledStateForSystem(const std::string& system, bool allowEmpty) const;
 	std::set<std::string> refreshInstalledState(const std::vector<TransactionRecord>& records) const;
 	void recordHistory(const std::vector<TransactionRecord>& records) const;

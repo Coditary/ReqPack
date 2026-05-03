@@ -1,5 +1,6 @@
 #include "core/executor.h"
 
+#include "core/request_resolution.h"
 #include "output/idisplay.h"
 #include "output/logger.h"
 
@@ -124,79 +125,121 @@ void Executer::setRequestedItemCount(int count, bool inputAlreadyFiltered) const
 }
 
 std::vector<PackageInfo> Executer::list(const Request& request) const {
-	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+	std::string resolutionError;
+	const std::optional<Request> resolvedRequest = this->resolveRequest(request, &resolutionError);
+	if (!resolvedRequest.has_value()) {
+		if (!resolutionError.empty()) {
+			Logger::instance().err(resolutionError);
+		}
 		return {};
 	}
-	IPlugin* plugin = this->registry->getPlugin(request.system);
-	TaskGroup taskGroup{.action = ActionType::LIST, .system = request.system};
-	taskGroup.flags = request.flags;
+	if (this->registry->getPlugin(resolvedRequest->system) == nullptr || !this->registry->loadPlugin(resolvedRequest->system)) {
+		return {};
+	}
+	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
+	TaskGroup taskGroup{.action = ActionType::LIST, .system = resolvedRequest->system};
+	taskGroup.flags = resolvedRequest->flags;
 	return plugin->list(this->buildPluginContext(plugin, taskGroup));
 }
 
 std::vector<PackageInfo> Executer::outdated(const Request& request) const {
-	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+	std::string resolutionError;
+	const std::optional<Request> resolvedRequest = this->resolveRequest(request, &resolutionError);
+	if (!resolvedRequest.has_value()) {
+		if (!resolutionError.empty()) {
+			Logger::instance().err(resolutionError);
+		}
 		return {};
 	}
-	IPlugin* plugin = this->registry->getPlugin(request.system);
-	TaskGroup taskGroup{.action = ActionType::OUTDATED, .system = request.system};
-	taskGroup.flags = request.flags;
+	if (this->registry->getPlugin(resolvedRequest->system) == nullptr || !this->registry->loadPlugin(resolvedRequest->system)) {
+		return {};
+	}
+	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
+	TaskGroup taskGroup{.action = ActionType::OUTDATED, .system = resolvedRequest->system};
+	taskGroup.flags = resolvedRequest->flags;
 	return plugin->outdated(this->buildPluginContext(plugin, taskGroup));
 }
 
 std::vector<PackageInfo> Executer::search(const Request& request) const {
-	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+	std::string resolutionError;
+	const std::optional<Request> resolvedRequest = this->resolveRequest(request, &resolutionError);
+	if (!resolvedRequest.has_value()) {
+		if (!resolutionError.empty()) {
+			Logger::instance().err(resolutionError);
+		}
 		return {};
 	}
-	IPlugin* plugin = this->registry->getPlugin(request.system);
-	TaskGroup taskGroup{.action = ActionType::SEARCH, .system = request.system};
-	taskGroup.flags = request.flags;
+	if (this->registry->getPlugin(resolvedRequest->system) == nullptr || !this->registry->loadPlugin(resolvedRequest->system)) {
+		return {};
+	}
+	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
+	TaskGroup taskGroup{.action = ActionType::SEARCH, .system = resolvedRequest->system};
+	taskGroup.flags = resolvedRequest->flags;
 	std::string prompt;
-	for (std::size_t index = 0; index < request.packages.size(); ++index) {
+	for (std::size_t index = 0; index < resolvedRequest->packages.size(); ++index) {
 		if (index > 0) {
 			prompt += ' ';
 		}
-		prompt += request.packages[index];
+		prompt += resolvedRequest->packages[index];
 	}
 	return plugin->search(this->buildPluginContext(plugin, taskGroup), prompt);
 }
 
 PackageInfo Executer::info(const Request& request) const {
-	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+	std::string resolutionError;
+	const std::optional<Request> resolvedRequest = this->resolveRequest(request, &resolutionError);
+	if (!resolvedRequest.has_value()) {
+		if (!resolutionError.empty()) {
+			Logger::instance().err(resolutionError);
+		}
 		return {};
 	}
-	IPlugin* plugin = this->registry->getPlugin(request.system);
-	TaskGroup taskGroup{.action = ActionType::INFO, .system = request.system};
-	taskGroup.flags = request.flags;
-	const std::string packageName = request.packages.empty() ? std::string{} : request.packages.front();
+	if (this->registry->getPlugin(resolvedRequest->system) == nullptr || !this->registry->loadPlugin(resolvedRequest->system)) {
+		return {};
+	}
+	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
+	TaskGroup taskGroup{.action = ActionType::INFO, .system = resolvedRequest->system};
+	taskGroup.flags = resolvedRequest->flags;
+	const std::string packageName = resolvedRequest->packages.empty() ? std::string{} : resolvedRequest->packages.front();
 	return plugin->info(this->buildPluginContext(plugin, taskGroup), packageName);
 }
 
 std::optional<Package> Executer::resolvePackage(const Request& request, const Package& package) const {
-	if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
+	std::string resolutionError;
+	const std::optional<Request> resolvedRequest = this->resolveRequest(request, &resolutionError);
+	if (!resolvedRequest.has_value()) {
+		if (!resolutionError.empty()) {
+			Logger::instance().err(resolutionError);
+		}
 		return std::nullopt;
 	}
-	IPlugin* plugin = this->registry->getPlugin(request.system);
-	TaskGroup taskGroup{.action = ActionType::SBOM, .system = request.system};
-	taskGroup.flags = request.flags;
+	if (this->registry->getPlugin(resolvedRequest->system) == nullptr || !this->registry->loadPlugin(resolvedRequest->system)) {
+		return std::nullopt;
+	}
+	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
+	TaskGroup taskGroup{.action = ActionType::SBOM, .system = resolvedRequest->system};
+	taskGroup.flags = resolvedRequest->flags;
+	Package resolvedPackage = package;
+	resolvedPackage.system = resolvedRequest->system;
 	if (plugin->supportsResolvePackage()) {
 		taskGroup.flags.push_back(INTERNAL_SILENT_RUNTIME_FLAG);
-		if (const std::optional<Package> resolved = plugin->resolvePackage(this->buildPluginContext(plugin, taskGroup), package); resolved.has_value()) {
+		if (const std::optional<Package> resolved = plugin->resolvePackage(this->buildPluginContext(plugin, taskGroup), resolvedPackage); resolved.has_value()) {
 			return resolved;
 		}
 		return std::nullopt;
 	}
 
-	if (!package.version.empty()) {
-		return package;
+	if (!resolvedPackage.version.empty()) {
+		return resolvedPackage;
 	}
 
-	Request infoRequest = request;
+	Request infoRequest = resolvedRequest.value();
 	infoRequest.action = ActionType::INFO;
-	infoRequest.packages = {package.name};
+	infoRequest.packages = {resolvedPackage.name};
 	infoRequest.flags.push_back(INTERNAL_SILENT_RUNTIME_FLAG);
 	const PackageInfo info = this->info(infoRequest);
 	if (!info.name.empty() && !info.version.empty() && info.version != "unknown" && info.version != "repo" && info.version != "installed") {
-		Package resolved = package;
+		Package resolved = resolvedPackage;
 		resolved.name = info.name;
 		resolved.version = info.version;
 		return resolved;
@@ -205,7 +248,12 @@ std::optional<Package> Executer::resolvePackage(const Request& request, const Pa
 		return std::nullopt;
 	}
 
-	return package;
+	return resolvedPackage;
+}
+
+std::optional<Request> Executer::resolveRequest(const Request& request, std::string* errorMessage) const {
+	RequestResolutionService resolver(this->registry, this->config);
+	return resolver.resolveRequest(request, errorMessage);
 }
 
 void Executer::execute(Graph *graph) {
@@ -585,6 +633,7 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 		.bootstrapPath = plugin->getBootstrapPath(),
 		.flags = taskGroup.flags,
 		.host = plugin->getRuntimeHost(),
+		.proxy = proxy_config_for_system(this->config, plugin->getPluginId()),
 		.currentItemId = itemId,
 		.repositories = repositories_for_ecosystem(this->config, plugin->getPluginId())
 	};

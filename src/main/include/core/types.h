@@ -1,6 +1,7 @@
 #pragma once
 
 #include <boost/graph/adjacency_list.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,13 @@ struct Request {
 	std::string outputPath;
 	std::string localPath;
 	bool usesLocalTarget{false};
+};
+
+struct ProxyResolution {
+	std::string targetSystem;
+	std::optional<std::vector<std::string>> packages;
+	std::optional<std::string> localPath;
+	std::optional<std::vector<std::string>> flags;
 };
 
 struct Package {

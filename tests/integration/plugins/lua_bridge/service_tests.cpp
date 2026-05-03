@@ -137,6 +137,7 @@ PluginCallContext make_context(LuaBridge& bridge, const ReqPackConfig& config, s
         .bootstrapPath = bridge.getBootstrapPath(),
         .flags = std::move(flags),
         .host = bridge.getRuntimeHost(),
+        .proxy = proxy_config_for_system(config, bridge.getPluginId()),
         .repositories = repositories_for_ecosystem(config, bridge.getPluginId()),
     };
 }
@@ -338,6 +339,36 @@ end
 function plugin.shutdown() return true end
 )";
 
+const char* PROXY_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return "java-proxy" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "proxy", "java" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.resolveProxyRequest(context, request)
+  local targets = context.proxy.targets
+  local target = context.proxy.default
+  if target == nil or target == "" then
+    target = targets[1]
+  end
+  return {
+    targetSystem = target,
+    packages = request.packages,
+    flags = { target, targets[1], targets[2] },
+  }
+end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("lua bridge loads bootstrap state and parses query values", "[integration][lua_bridge][service]") {
@@ -516,4 +547,32 @@ TEST_CASE("lua bridge exposes ordered repositories for current plugin", "[integr
     CHECK(info.name == "demo");
     CHECK(info.version == "2|corp|1|token|secret-token|fail|false|com.mycompany.*|true|central|default|com.mycompany.legacy.*|public");
     CHECK(info.description == "only-current-ecosystem");
+}
+
+TEST_CASE("lua bridge exposes proxy config and proxy resolution hook", "[integration][lua_bridge][service]") {
+    TempDir tempDir{"reqpack-lua-bridge-proxy"};
+    ReqPackConfig config;
+    config.planner.proxies["java"].defaultTarget = "gradle";
+    config.planner.proxies["java"].targets = {"maven", "gradle"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins" / "java";
+    const std::filesystem::path scriptPath = pluginDirectory / "java.lua";
+
+    write_file(scriptPath, PROXY_PLUGIN);
+
+    LuaBridge bridge(scriptPath.string(), config);
+    REQUIRE(bridge.init());
+    CHECK(bridge.supportsProxyResolution());
+
+    Request request;
+    request.action = ActionType::INSTALL;
+    request.system = "java";
+    request.packages = {"org.junit:junit:4.13"};
+
+    const std::optional<ProxyResolution> resolution = bridge.resolveProxyRequest(make_context(bridge, config), request);
+    REQUIRE(resolution.has_value());
+    CHECK(resolution->targetSystem == "gradle");
+    REQUIRE(resolution->packages.has_value());
+    CHECK(resolution->packages.value() == std::vector<std::string>{"org.junit:junit:4.13"});
+    REQUIRE(resolution->flags.has_value());
+    CHECK(resolution->flags.value() == std::vector<std::string>{"gradle", "maven", "gradle"});
 }

@@ -107,6 +107,47 @@ std::filesystem::path write_config(const std::filesystem::path& root, const std:
     return configPath;
 }
 
+std::filesystem::path write_config_with_proxy(
+    const std::filesystem::path& root,
+    const std::filesystem::path& pluginDirectory,
+    const std::string& defaultTarget,
+    const std::string& targetsLua
+) {
+    const std::filesystem::path configPath = root / "config.lua";
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (root / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "    proxies = {\n"
+        "      java = {\n"
+        "        default = '" + defaultTarget + "',\n"
+        "        targets = " + targetsLua + ",\n"
+        "      },\n"
+        "    },\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (root / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (root / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+    return configPath;
+}
+
 std::filesystem::path write_config_with_rq_repositories(
     const std::filesystem::path& root,
     const std::filesystem::path& pluginDirectory,
@@ -808,6 +849,42 @@ end
 function plugin.shutdown() return true end
 )";
 
+const char* PROXY_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return "java-proxy" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    osvEcosystem = "Maven",
+    purlType = "generic",
+    versionComparatorProfile = "lexicographic",
+  }
+end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "proxy", "java" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return false end
+function plugin.installLocal(context, path) return false end
+function plugin.remove(context, packages) return false end
+function plugin.update(context, packages) return false end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "proxy" } end
+function plugin.resolveProxyRequest(context, request)
+  local target = context.proxy.default
+  if target == nil or target == "" then
+    target = context.proxy.targets[1]
+  end
+  return {
+    targetSystem = target,
+    packages = request.packages,
+    flags = request.flags,
+  }
+end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("orchestrator list command loads plugin from workspace plugins directory", "[integration][orchestrator][service]") {
@@ -860,6 +937,76 @@ TEST_CASE("orchestrator install command plans validates and executes plugin inst
     const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
     REQUIRE(std::filesystem::exists(installMarker));
     CHECK(read_file(installMarker) == "sample");
+}
+
+TEST_CASE("orchestrator resolves proxy plugin install requests to configured target", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-proxy-install"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config_with_proxy(tempDir.path(), pluginDirectory, "maven", "{ 'maven', 'gradle' }");
+
+    add_plugin_script(pluginDirectory, "java", PROXY_PLUGIN);
+    add_plugin_script(pluginDirectory, "maven", ORCHESTRATOR_PLUGIN);
+    add_plugin_script(pluginDirectory, "gradle", ORCHESTRATOR_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "java", "sample"});
+    INFO(output);
+
+    const std::filesystem::path mavenInstallMarker = pluginDirectory / "maven" / "state" / "install.txt";
+    const std::filesystem::path gradleInstallMarker = pluginDirectory / "gradle" / "state" / "install.txt";
+    REQUIRE(std::filesystem::exists(mavenInstallMarker));
+    CHECK(read_file(mavenInstallMarker) == "sample");
+    CHECK_FALSE(std::filesystem::exists(gradleInstallMarker));
+}
+
+TEST_CASE("orchestrator proxy default target can be overridden from CLI define flag", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-proxy-override"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config_with_proxy(tempDir.path(), pluginDirectory, "maven", "{ 'maven', 'gradle' }");
+
+    add_plugin_script(pluginDirectory, "java", PROXY_PLUGIN);
+    add_plugin_script(pluginDirectory, "maven", ORCHESTRATOR_PLUGIN);
+    add_plugin_script(pluginDirectory, "gradle", ORCHESTRATOR_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "java", "sample", "-Dproxy.java.default=gradle"});
+    INFO(output);
+
+    const std::filesystem::path mavenInstallMarker = pluginDirectory / "maven" / "state" / "install.txt";
+    const std::filesystem::path gradleInstallMarker = pluginDirectory / "gradle" / "state" / "install.txt";
+    REQUIRE(std::filesystem::exists(gradleInstallMarker));
+    CHECK(read_file(gradleInstallMarker) == "sample");
+    CHECK_FALSE(std::filesystem::exists(mavenInstallMarker));
+}
+
+TEST_CASE("orchestrator resolves proxy plugin search requests before logging output", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-proxy-search"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config_with_proxy(tempDir.path(), pluginDirectory, "maven", "{ 'maven' }");
+
+    add_plugin_script(pluginDirectory, "java", PROXY_PLUGIN);
+    add_plugin_script(pluginDirectory, "maven", ORCHESTRATOR_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"search", "java", "alpha", "beta"});
+
+    CHECK(output.find("[maven] (search) alpha beta 2.0.0 - searched by maven") != std::string::npos);
+}
+
+TEST_CASE("orchestrator loads repo java proxy plugin from workspace and routes install to configured target", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-repo-java-proxy"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config_with_proxy(tempDir.path(), pluginDirectory, "maven", "{ 'maven', 'gradle' }");
+
+    copy_repo_plugin(pluginDirectory, "java");
+    add_plugin_script(pluginDirectory, "maven", ORCHESTRATOR_PLUGIN);
+    add_plugin_script(pluginDirectory, "gradle", ORCHESTRATOR_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "java", "sample"});
+    INFO(output);
+
+    const std::filesystem::path mavenInstallMarker = pluginDirectory / "maven" / "state" / "install.txt";
+    const std::filesystem::path gradleInstallMarker = pluginDirectory / "gradle" / "state" / "install.txt";
+    REQUIRE(std::filesystem::exists(mavenInstallMarker));
+    CHECK(read_file(mavenInstallMarker) == "sample");
+    CHECK_FALSE(std::filesystem::exists(gradleInstallMarker));
 }
 
 TEST_CASE("orchestrator install local rqp resolves to built-in rqp by extension", "[integration][orchestrator][service]") {

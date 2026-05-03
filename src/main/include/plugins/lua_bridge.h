@@ -62,6 +62,7 @@ public:
 	std::vector<Package> getRequirements() override;
     std::vector<std::string> getCategories() override;
     std::vector<Package> getMissingPackages(const std::vector<Package>& packages) override;
+	bool supportsProxyResolution() const override;
 	bool supportsResolvePackage() const override;
 	std::vector<PluginEventRecord> takeRecentEvents() override;
 
@@ -75,6 +76,7 @@ public:
     std::vector<PackageInfo> search(const PluginCallContext& context, const std::string& prompt) override;
     PackageInfo info(const PluginCallContext& context, const std::string& packageName) override;
     std::optional<Package> resolvePackage(const PluginCallContext& context, const Package& package) override;
+	std::optional<ProxyResolution> resolveProxyRequest(const PluginCallContext& context, const Request& request) override;
 
 	void logDebug(const std::string& pluginId, const std::string& message) override;
 	void logInfo(const std::string& pluginId, const std::string& message) override;

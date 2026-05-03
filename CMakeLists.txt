@@ -82,6 +82,7 @@ set(SOURCES
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/request_resolution.cpp
     src/main/cpp/core/security_gateway_service.cpp
     src/main/cpp/core/audit_exporter.cpp
     src/main/cpp/core/sbom_exporter.cpp
@@ -127,6 +128,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
+    src/main/cpp/core/request_resolution.cpp
     src/main/cpp/core/security_gateway_service.cpp
     src/main/cpp/core/audit_exporter.cpp
     src/main/cpp/core/sbom_exporter.cpp

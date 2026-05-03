@@ -148,6 +148,64 @@ std::optional<Package> package_from_lua_object(const sol::object& value) {
     return package;
 }
 
+std::optional<std::vector<std::string>> string_array_from_lua_object(const sol::object& value) {
+    if (!value.valid() || value.is<sol::lua_nil_t>()) {
+        return std::nullopt;
+    }
+    if (value.get_type() == sol::type::userdata && value.is<std::vector<std::string>>()) {
+        return value.as<std::vector<std::string>>();
+    }
+    if (value.get_type() != sol::type::table) {
+        return std::nullopt;
+    }
+
+    std::vector<std::string> result;
+    for (const auto& [_, entry] : value.as<sol::table>()) {
+        if (entry.get_type() != sol::type::string) {
+            return std::nullopt;
+        }
+        result.push_back(entry.as<std::string>());
+    }
+    return result;
+}
+
+std::optional<ProxyResolution> proxy_resolution_from_lua_object(const sol::object& value) {
+    if (!value.valid() || value.is<sol::lua_nil_t>() || value.get_type() != sol::type::table) {
+        return std::nullopt;
+    }
+
+    const sol::table table = value.as<sol::table>();
+    const sol::optional<std::string> targetSystem = table["targetSystem"];
+    if (!targetSystem.has_value()) {
+        return std::nullopt;
+    }
+
+    ProxyResolution resolution;
+    resolution.targetSystem = targetSystem.value();
+
+    if (const sol::object packagesObject = table["packages"]; packagesObject.valid() && !packagesObject.is<sol::lua_nil_t>()) {
+        const auto packages = string_array_from_lua_object(packagesObject);
+        if (!packages.has_value()) {
+            return std::nullopt;
+        }
+        resolution.packages = packages.value();
+    }
+
+    if (const sol::optional<std::string> localPath = table["localPath"]; localPath.has_value()) {
+        resolution.localPath = localPath.value();
+    }
+
+    if (const sol::object flagsObject = table["flags"]; flagsObject.valid() && !flagsObject.is<sol::lua_nil_t>()) {
+        const auto flags = string_array_from_lua_object(flagsObject);
+        if (!flags.has_value()) {
+            return std::nullopt;
+        }
+        resolution.flags = flags.value();
+    }
+
+    return resolution;
+}
+
 void register_types(sol::state& lua) {
     lua.new_usertype<Package>(
         "Package",
@@ -166,6 +224,26 @@ void register_types(sol::state& lua) {
         "sourcePath", &Package::sourcePath,
         "localTarget", &Package::localTarget,
         "flags", &Package::flags
+    );
+
+    lua.new_usertype<Request>(
+        "Request",
+        sol::constructors<Request()>(),
+        "action", sol::property(
+            [](const Request& request) {
+                return static_cast<int>(request.action);
+            },
+            [](Request& request, int action) {
+                request.action = static_cast<ActionType>(action);
+            }
+        ),
+        "system", &Request::system,
+        "packages", &Request::packages,
+        "flags", &Request::flags,
+        "outputFormat", &Request::outputFormat,
+        "outputPath", &Request::outputPath,
+        "localPath", &Request::localPath,
+        "usesLocalTarget", &Request::usesLocalTarget
     );
 
     lua.new_usertype<PackageInfo>(
@@ -440,6 +518,25 @@ void LuaBridge::register_context_types() {
             }
             return repositories;
         }),
+        "proxy", sol::readonly_property([this](const PluginCallContext& context) {
+            if (!context.proxy.has_value()) {
+                return sol::make_object(m_lua, sol::lua_nil);
+            }
+
+            sol::table proxy = m_lua.create_table();
+            if (!context.proxy->defaultTarget.empty()) {
+                proxy["default"] = context.proxy->defaultTarget;
+            }
+            proxy["targets"] = make_string_array_table(m_lua, context.proxy->targets);
+
+            sol::table options = m_lua.create_table();
+            for (const auto& [key, value] : context.proxy->options) {
+                options[key] = value;
+            }
+            proxy["options"] = options;
+
+            return sol::make_object(m_lua, proxy);
+        }),
         "log", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table log = m_lua.create_table();
             log.set_function("debug", [context](const std::string& message) { context.logDebug(message); });
@@ -565,6 +662,7 @@ PluginCallContext LuaBridge::makeContext(const std::vector<std::string>& flags) 
         .bootstrapPath = m_bootstrapPath,
         .flags = flags,
 		.host = const_cast<LuaBridge*>(this),
+		.proxy = proxy_config_for_system(m_config, m_pluginId),
 		.repositories = repositories_for_ecosystem(m_config, m_pluginId)
     };
 }
@@ -675,6 +773,11 @@ std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& p
 
 bool LuaBridge::supportsResolvePackage() const {
     sol::protected_function func = m_pluginTable["resolvePackage"];
+    return func.valid();
+}
+
+bool LuaBridge::supportsProxyResolution() const {
+    sol::protected_function func = m_pluginTable["resolveProxyRequest"];
     return func.valid();
 }
 
@@ -906,6 +1009,37 @@ std::optional<Package> LuaBridge::resolvePackage(const PluginCallContext& contex
     }
 
     log_lua_error(m_logger, m_pluginId, "[Lua API Error] resolvePackage(context, package) must return a package or nil.");
+    return std::nullopt;
+}
+
+std::optional<ProxyResolution> LuaBridge::resolveProxyRequest(const PluginCallContext& context, const Request& request) {
+    sol::protected_function func = m_pluginTable["resolveProxyRequest"];
+    if (!func.valid()) {
+        return std::nullopt;
+    }
+
+    const bool silentRuntime = hasSilentRuntimeFlag(context.flags);
+    m_silentRuntimeOutput.store(silentRuntime);
+    auto result = func(context, request);
+    m_silentRuntimeOutput.store(false);
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (resolveProxyRequest): ") + err.what());
+        return std::nullopt;
+    }
+    if (result.return_count() == 0) {
+        return std::nullopt;
+    }
+
+    const sol::object value = result.get<sol::object>();
+    if (!value.valid() || value.is<sol::lua_nil_t>()) {
+        return std::nullopt;
+    }
+    if (const auto resolved = proxy_resolution_from_lua_object(value)) {
+        return resolved.value();
+    }
+
+    log_lua_error(m_logger, m_pluginId, "[Lua API Error] resolveProxyRequest(context, request) must return a proxy resolution table or nil.");
     return std::nullopt;
 }
 

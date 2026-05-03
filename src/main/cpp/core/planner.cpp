@@ -1,5 +1,8 @@
 #include "core/planner.h"
 
+#include "core/request_resolution.h"
+#include "output/logger.h"
+
 #include <boost/graph/topological_sort.hpp>
 
 #include <algorithm>
@@ -45,11 +48,16 @@ Planner::Planner(Registry* registry, RegistryDatabase* database, const ReqPackCo
 Planner::~Planner() {}
 
 Graph* Planner::plan(const std::vector<Request>& requests) {
-	const std::vector<Request> expandedRequests = this->config.planner.enableProxyExpansion ?
-		this->expandProxies(requests) :
-		requests;
-	this->ensurePluginsAvailable(expandedRequests);
-	const std::vector<Request> filteredRequests = this->filterRequestedPackages(expandedRequests);
+	std::string resolutionError;
+	const std::optional<std::vector<Request>> expandedRequests = this->resolveRequests(requests, &resolutionError);
+	if (!expandedRequests.has_value()) {
+		if (!resolutionError.empty()) {
+			Logger::instance().err(resolutionError);
+		}
+		return nullptr;
+	}
+	this->ensurePluginsAvailable(expandedRequests.value());
+	const std::vector<Request> filteredRequests = this->filterRequestedPackages(expandedRequests.value());
 
 	Graph* graph = nullptr;
 	if (planner_contains_only_action(filteredRequests, ActionType::ENSURE)) {
@@ -68,6 +76,11 @@ Graph* Planner::plan(const std::vector<Request>& requests) {
 
 std::vector<Request> Planner::expandProxies(const std::vector<Request>& requests) const {
 	return planner_expand_proxies(requests, this->config.planner.systemAliases);
+}
+
+std::optional<std::vector<Request>> Planner::resolveRequests(const std::vector<Request>& requests, std::string* errorMessage) const {
+	RequestResolutionService resolver(this->registry, this->config);
+	return resolver.resolveRequests(requests, errorMessage);
 }
 
 void Planner::ensurePluginsAvailable(const std::vector<Request>& requests) const {

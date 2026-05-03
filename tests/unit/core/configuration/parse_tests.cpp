@@ -259,6 +259,15 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                 systemAliases = {
                     Brew = "APT",
                 },
+                proxies = {
+                    Java = {
+                        default = "Maven",
+                        targets = { "Maven", "Gradle" },
+                        options = {
+                            strategy = "default-first",
+                        },
+                    },
+                },
             },
             downloader = {
                 pluginSources = {
@@ -328,6 +337,11 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/reqpack.json");
     REQUIRE(config.planner.systemAliases.contains("brew"));
     CHECK(config.planner.systemAliases.at("brew") == "apt");
+    REQUIRE(config.planner.proxies.contains("java"));
+    CHECK(config.planner.proxies.at("java").defaultTarget == "maven");
+    CHECK(config.planner.proxies.at("java").targets == std::vector<std::string>{"maven", "gradle"});
+    REQUIRE(config.planner.proxies.at("java").options.contains("strategy"));
+    CHECK(config.planner.proxies.at("java").options.at("strategy") == "default-first");
     REQUIRE(config.downloader.pluginSources.contains("maven"));
     CHECK(config.downloader.pluginSources.at("maven") == "https://example.test/maven.lua");
     CHECK(std::filesystem::path(config.registry.databasePath) == home / "registry-db");

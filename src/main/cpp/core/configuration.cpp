@@ -249,6 +249,37 @@ std::map<std::string, std::string> load_string_map(const sol::object& object) {
     return values;
 }
 
+std::map<std::string, ProxyConfig> load_proxy_config_map(const sol::object& object) {
+    std::map<std::string, ProxyConfig> values;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return values;
+    }
+
+    for (const auto& [key, value] : object.as<sol::table>()) {
+        if (key.get_type() != sol::type::string || value.get_type() != sol::type::table) {
+            continue;
+        }
+
+        ProxyConfig proxy;
+        const sol::table proxyTable = value.as<sol::table>();
+        if (const sol::optional<std::string> defaultTarget = proxyTable["default"]; defaultTarget.has_value()) {
+            proxy.defaultTarget = to_lower(defaultTarget.value());
+        }
+
+        const std::vector<std::string> targets = load_string_array(proxyTable["targets"]);
+        for (const std::string& target : targets) {
+            if (!target.empty()) {
+                proxy.targets.push_back(to_lower(target));
+            }
+        }
+
+        proxy.options = load_string_map(proxyTable["options"]);
+        values[to_lower(key.as<std::string>())] = std::move(proxy);
+    }
+
+    return values;
+}
+
 bool load_string_array_strict(const sol::object& object, std::vector<std::string>& values) {
     values.clear();
     if (!object.valid()) {
@@ -950,6 +981,11 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
                 config.planner.systemAliases[to_lower(key.as<std::string>())] = to_lower(value.as<std::string>());
             }
         }
+
+        const std::map<std::string, ProxyConfig> proxies = load_proxy_config_map(planner.value()["proxies"]);
+        for (const auto& [name, proxy] : proxies) {
+            config.planner.proxies[name] = proxy;
+        }
     }
 
     const sol::optional<sol::table> downloader = root["downloader"];
@@ -1110,6 +1146,9 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.useTransactionDb.has_value()) config.execution.useTransactionDb = overrides.useTransactionDb.value();
 
     if (overrides.enableProxyExpansion.has_value()) config.planner.enableProxyExpansion = overrides.enableProxyExpansion.value();
+    for (const auto& [name, target] : overrides.proxyDefaultTargets) {
+        config.planner.proxies[name].defaultTarget = to_lower(target);
+    }
 
     if (overrides.registryPath.has_value()) config.registry.databasePath = expand_user_path(overrides.registryPath.value()).string();
     if (overrides.pluginDirectory.has_value()) config.registry.pluginDirectory = expand_user_path(overrides.pluginDirectory.value()).string();
@@ -1146,6 +1185,34 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
         return value;
     };
 
+    auto parse_define = [&](const std::string& raw) -> bool {
+        if (!starts_with("-D") || raw.size() <= 2) {
+            return false;
+        }
+
+        const std::size_t separator = raw.find('=', 2);
+        if (separator == std::string::npos || separator == 2 || separator + 1 >= raw.size()) {
+            return false;
+        }
+
+        const std::string key = to_lower(raw.substr(2, separator - 2));
+        const std::string value = to_lower(raw.substr(separator + 1));
+        const std::string prefix = "proxy.";
+        const std::string suffix = ".default";
+        if (key.rfind(prefix, 0) != 0 || key.size() <= prefix.size() + suffix.size() ||
+            key.substr(key.size() - suffix.size()) != suffix) {
+            return false;
+        }
+
+        const std::string proxyName = key.substr(prefix.size(), key.size() - prefix.size() - suffix.size());
+        if (proxyName.empty() || value.empty()) {
+            return false;
+        }
+
+        overrides.proxyDefaultTargets[proxyName] = value;
+        return true;
+    };
+
     auto require_value = [&](std::string& value) -> bool {
         if (index + 1 >= arguments.size()) {
             return false;
@@ -1155,6 +1222,10 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     };
 
     std::string value;
+    if (starts_with("-D")) {
+        (void)parse_define(argument);
+        return true;
+    }
     if (const std::optional<std::string> customConfig = inline_value("--config=")) {
         overrides.configPath = std::filesystem::path(customConfig.value());
         return true;
@@ -1339,6 +1410,14 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
 
     return false;
+}
+
+std::optional<ProxyConfig> proxy_config_for_system(const ReqPackConfig& config, const std::string& system) {
+    const auto it = config.planner.proxies.find(to_lower(system));
+    if (it == config.planner.proxies.end()) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 ReqPackConfigOverrides extract_cli_config_overrides(int argc, char* argv[]) {

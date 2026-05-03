@@ -198,6 +198,58 @@ function plugin.info(context, package) return { name = package, version = "1.0.0
 function plugin.shutdown() return true end
 )";
 
+const char* JAVA_PROXY_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return "java-proxy" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "proxy", "java" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.resolveProxyRequest(context, request)
+  local target = context.proxy.default
+  if target == nil or target == "" then
+    target = "maven"
+  end
+  return {
+    targetSystem = target,
+    packages = request.packages,
+  }
+end
+function plugin.shutdown() return true end
+)";
+
+const char* TARGET_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "target" } end
+function plugin.getMissingPackages(packages)
+  local missing = {}
+  for _, package in ipairs(packages) do
+    missing[#missing + 1] = package
+  end
+  return missing
+end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("planner ensure builds dependency DAG from plugin requirements", "[integration][planner][service]") {
@@ -261,4 +313,30 @@ TEST_CASE("planner install marks requirements ready when plugin dependencies are
     CHECK(packages[0].system == "app");
     CHECK(packages[0].name == "sample");
     CHECK(std::filesystem::exists(tempDir.path() / "plugins" / "app" / ".requirements_ready"));
+}
+
+TEST_CASE("planner resolves proxy plugins to configured concrete target systems", "[integration][planner][service]") {
+    TempDir tempDir{"reqpack-planner-proxy-resolution"};
+    ReqPackConfig config = make_planner_test_config(tempDir.path());
+    config.planner.proxies["java"].defaultTarget = "maven";
+    config.planner.proxies["java"].targets = {"maven", "gradle"};
+
+    add_plugin_script(tempDir.path() / "plugins", "java", JAVA_PROXY_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "maven", TARGET_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Planner planner(&registry, registry.getDatabase(), config);
+
+    std::unique_ptr<Graph> graph(planner.plan({Request{
+        .action = ActionType::INSTALL,
+        .system = "java",
+        .packages = {"org.junit:junit:4.13"},
+    }}));
+    REQUIRE(graph != nullptr);
+
+    const std::vector<Package> packages = collect_packages(*graph);
+    REQUIRE(packages.size() == 1);
+    CHECK(packages[0].system == "maven");
+    CHECK(packages[0].name == "org.junit:junit:4.13");
 }

@@ -63,6 +63,7 @@ struct PluginCallContext {
 	std::string bootstrapPath;
 	std::vector<std::string> flags;
 	IPluginRuntimeHost* host{nullptr};
+	std::optional<ProxyConfig> proxy;
 	/// Item id used by the display layer (e.g. "dnf:python").
 	/// When non-empty, passed as the first arg to IPluginRuntimeHost callbacks
 	/// so the display can correlate events to the right item row.
@@ -179,6 +180,9 @@ public:
 	virtual std::vector<std::string> getCategories() = 0;
 	virtual std::vector<std::string> getFileExtensions() const { return {}; }
 	virtual std::vector<Package> getMissingPackages(const std::vector<Package>& packages) = 0;
+	virtual bool supportsProxyResolution() const {
+		return false;
+	}
 	virtual bool supportsResolvePackage() const {
 		return false;
 	}
@@ -204,4 +208,10 @@ public:
         (void)package;
         return std::nullopt;
     }
+
+	virtual std::optional<ProxyResolution> resolveProxyRequest(const PluginCallContext& context, const Request& request) {
+		(void)context;
+		(void)request;
+		return std::nullopt;
+	}
 };

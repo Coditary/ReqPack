@@ -3,6 +3,7 @@
 #include "core/archive_resolver.h"
 #include "core/downloader.h"
 #include "core/planner_core.h"
+#include "core/request_resolution.h"
 #include "output/logger.h"
 
 #include <algorithm>
@@ -282,6 +283,17 @@ int Orchestrator::run() {
 			return 1;
 		}
 	}
+	RequestResolutionService requestResolver(this->registry, this->config);
+	std::string resolutionError;
+	const std::optional<std::vector<Request>> resolvedRequests = requestResolver.resolveRequests(this->requests, &resolutionError);
+	if (!resolvedRequests.has_value()) {
+		if (!resolutionError.empty()) {
+			Logger::instance().err(resolutionError);
+		}
+		cleanupTempFiles(tempFiles);
+		return 1;
+	}
+	this->requests = resolvedRequests.value();
 	// ─────────────────────────────────────────────────────────────────────────
 
 	if (this->requests.front().action == ActionType::LIST) {

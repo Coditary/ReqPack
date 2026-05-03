@@ -43,6 +43,7 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.reportOutputPath = "~/reports/bom.json";
     overrides.dryRun = true;
     overrides.enableProxyExpansion = false;
+    overrides.proxyDefaultTargets["java"] = "gradle";
     overrides.registryPath = "~/registry";
     overrides.pluginDirectory = "~/plugins";
     overrides.autoLoadPlugins = false;
@@ -78,6 +79,8 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/bom.json");
     CHECK(config.execution.dryRun);
     CHECK_FALSE(config.planner.enableProxyExpansion);
+    REQUIRE(config.planner.proxies.contains("java"));
+    CHECK(config.planner.proxies.at("java").defaultTarget == "gradle");
     CHECK(std::filesystem::path(config.registry.databasePath) == home / "registry");
     CHECK(std::filesystem::path(config.registry.pluginDirectory) == home / "plugins");
     CHECK_FALSE(config.registry.autoLoadPlugins);
@@ -152,6 +155,17 @@ TEST_CASE("configuration consumes CLI flags with positional and inline values", 
         CHECK_FALSE(consume_cli_config_flag(unknown, index, overrides));
     }
 
+    SECTION("define flag maps proxy default target override") {
+        const std::vector<std::string> arguments{"-Dproxy.java.default=gradle"};
+        std::size_t index = 0;
+        ReqPackConfigOverrides overrides;
+
+        REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+        REQUIRE(overrides.proxyDefaultTargets.contains("java"));
+        CHECK(overrides.proxyDefaultTargets.at("java") == "gradle");
+        CHECK(index == 0);
+    }
+
     SECTION("osv and sbom flags map to expected overrides") {
         {
             const std::vector<std::string> arguments{"--osv-refresh", "always"};
@@ -204,6 +218,7 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
         "/tmp/osv-db",
         "--ignore-vuln",
         "CVE-2024-1",
+        "-Dproxy.java.default=gradle",
         "--sbom-format",
         "cyclonedx-json",
         "--sbom-skip-missing-packages",
@@ -230,6 +245,8 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
     REQUIRE(overrides.osvDatabasePath.has_value());
     CHECK(overrides.osvDatabasePath.value() == "/tmp/osv-db");
     CHECK(overrides.ignoreVulnerabilityIds == std::vector<std::string>{"CVE-2024-1"});
+    REQUIRE(overrides.proxyDefaultTargets.contains("java"));
+    CHECK(overrides.proxyDefaultTargets.at("java") == "gradle");
     REQUIRE(overrides.sbomDefaultFormat.has_value());
     CHECK(overrides.sbomDefaultFormat.value() == SbomOutputFormat::CYCLONEDX_JSON);
     REQUIRE(overrides.sbomSkipMissingPackages.has_value());
@@ -249,6 +266,14 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().action == ActionType::INSTALL);
         CHECK(requests.front().system == "dnf");
         CHECK(requests.front().packages == std::vector<std::string>{"curl", "git"});
+    }
+
+    SECTION("token vector strips proxy define flags from request payload") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "java", "artifact", "-Dproxy.java.default=gradle"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().system == "java");
+        CHECK(requests.front().packages == std::vector<std::string>{"artifact"});
+        CHECK(requests.front().flags.empty());
     }
 
     SECTION("local regular file before system resolution becomes local target") {

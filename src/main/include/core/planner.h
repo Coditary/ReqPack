@@ -14,6 +14,7 @@ class Planner {
 	SecurityGatewayService securityGateway;
 
 	std::vector<Request> expandProxies(const std::vector<Request>& requests) const;
+	std::optional<std::vector<Request>> resolveRequests(const std::vector<Request>& requests, std::string* errorMessage = nullptr) const;
 	void ensurePluginsAvailable(const std::vector<Request>& requests) const;
 	bool pluginExists(const std::string& system) const;
 	bool gatewayExists(const std::string& system) const;

@@ -142,6 +142,12 @@ struct ExecutionConfig {
     std::string transactionDatabasePath{"~/.reqpack/transactions"};
 };
 
+struct ProxyConfig {
+    std::string defaultTarget{};
+    std::vector<std::string> targets{};
+    std::map<std::string, std::string> options{};
+};
+
 struct PlannerConfig {
     bool enableProxyExpansion{true};
     bool autoDownloadMissingPlugins{true};
@@ -149,6 +155,7 @@ struct PlannerConfig {
     bool buildDependencyDag{true};
     bool topologicallySortGraph{true};
     std::map<std::string, std::string> systemAliases{};
+    std::map<std::string, ProxyConfig> proxies{};
 };
 
 struct DownloaderConfig {
@@ -334,6 +341,7 @@ struct ReqPackConfigOverrides {
     std::optional<bool> useTransactionDb;
 
     std::optional<bool> enableProxyExpansion;
+    std::map<std::string, std::string> proxyDefaultTargets{};
 
     std::optional<std::string> registryPath;
     std::optional<std::string> pluginDirectory;
@@ -368,6 +376,7 @@ std::filesystem::path registry_source_file_path(const std::filesystem::path& reg
 RegistrySourceMap load_registry_sources_from_lua(const std::filesystem::path& sourcePath);
 RegistrySourceMap collect_registry_sources(const ReqPackConfig& config);
 std::vector<RepositoryEntry> repositories_for_ecosystem(const ReqPackConfig& config, const std::string& ecosystem);
+std::optional<ProxyConfig> proxy_config_for_system(const ReqPackConfig& config, const std::string& system);
 
 ReqPackConfig load_config_from_lua(
     const std::filesystem::path& configPath,
