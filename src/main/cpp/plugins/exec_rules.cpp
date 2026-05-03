@@ -249,7 +249,6 @@ bool read_fd_to_result(Logger& logger, const std::string& pluginId, int fd, Exec
         if (count > 0) {
             const std::string chunk(buffer.data(), static_cast<std::size_t>(count));
             result.stdoutText += chunk;
-            logger.stdout(chunk, pluginId, "exec");
             onChunk(chunk);
             continue;
         }
@@ -264,7 +263,7 @@ bool read_fd_to_result(Logger& logger, const std::string& pluginId, int fd, Exec
     }
 }
 
-ExecResult run_shell_command(Logger& logger, const std::string& pluginId, const std::string& command, const std::function<void(const std::string&)>& onChunk) {
+ExecResult run_shell_command(Logger& logger, const std::string& pluginId, const std::string& command, const std::function<void(const std::string&)>& onChunk, const bool silent) {
     ExecResult result;
 
     int pipeFds[2] = {-1, -1};
@@ -291,7 +290,13 @@ ExecResult run_shell_command(Logger& logger, const std::string& pluginId, const 
     }
 
     ::close(pipeFds[1]);
-    (void)read_fd_to_result(logger, pluginId, pipeFds[0], result, onChunk);
+    const auto consumeChunk = [&](const std::string& chunk) {
+        if (!silent) {
+            logger.stdout(chunk, pluginId, "exec");
+        }
+        onChunk(chunk);
+    };
+    (void)read_fd_to_result(logger, pluginId, pipeFds[0], result, consumeChunk);
     ::close(pipeFds[0]);
 
     int status = 0;
@@ -312,11 +317,11 @@ ExecResult run_shell_command(Logger& logger, const std::string& pluginId, const 
     return result;
 }
 
-ExecResult run_plain_command(Logger& logger, const std::string& pluginId, const std::string& command) {
-    return run_shell_command(logger, pluginId, command, [](const std::string&) {});
+ExecResult run_plain_command(Logger& logger, const std::string& pluginId, const std::string& command, const bool silent) {
+    return run_shell_command(logger, pluginId, command, [](const std::string&) {}, silent);
 }
 
-ExecResult run_line_command(Logger& logger, const std::string& pluginId, const std::string& command, const ExecRuleset& ruleset) {
+ExecResult run_line_command(Logger& logger, const std::string& pluginId, const std::string& command, const ExecRuleset& ruleset, const bool silent) {
     ExecRuleRuntimeState runtime = make_exec_rule_runtime_state(ruleset);
     LineAccumulator lines;
 
@@ -325,7 +330,7 @@ ExecResult run_line_command(Logger& logger, const std::string& pluginId, const s
             const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_line_input(ruleset, runtime, line);
             dispatch_evaluation_result(logger, pluginId, evaluation, std::nullopt);
         });
-    });
+    }, silent);
     lines.flush([&](const std::string& line) {
         const ExecRuleEvaluationResult evaluation = evaluate_exec_rule_line_input(ruleset, runtime, line);
         dispatch_evaluation_result(logger, pluginId, evaluation, std::nullopt);
@@ -333,7 +338,7 @@ ExecResult run_line_command(Logger& logger, const std::string& pluginId, const s
     return result;
 }
 
-ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const std::string& command, const ExecRuleset& ruleset) {
+ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const std::string& command, const ExecRuleset& ruleset, const bool silent) {
     ExecResult result;
 
     int masterFd = -1;
@@ -358,6 +363,9 @@ ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const st
         if (count > 0) {
             const std::string chunk(buffer.data(), static_cast<std::size_t>(count));
             result.stdoutText += chunk;
+            if (!silent) {
+                logger.stdout(chunk, pluginId, "exec");
+            }
             const std::string normalized = normalize_exec_rule_pty_chunk(chunk);
             if (!normalized.empty()) {
                 normalizedTranscript += normalized;
@@ -413,11 +421,11 @@ ExecResult run_pty_command(Logger& logger, const std::string& pluginId, const st
 
 }  // namespace
 
-ExecResult run_plugin_command(Logger& logger, const std::string& pluginId, const std::string& command) {
-    return run_plain_command(logger, pluginId, command);
+ExecResult run_plugin_command(Logger& logger, const std::string& pluginId, const std::string& command, const bool silent) {
+    return run_plain_command(logger, pluginId, command, silent);
 }
 
-ExecResult run_plugin_command(Logger& logger, const std::string& pluginId, const std::string& command, const sol::object& rules) {
+ExecResult run_plugin_command(Logger& logger, const std::string& pluginId, const std::string& command, const sol::object& rules, const bool silent) {
     ExecRuleset ruleset;
     try {
         ruleset = parse_exec_rules(rules);
@@ -428,11 +436,11 @@ ExecResult run_plugin_command(Logger& logger, const std::string& pluginId, const
 
     switch (determine_exec_rule_runner_mode(ruleset)) {
         case ExecRuleRunnerMode::Plain:
-            return run_plain_command(logger, pluginId, command);
+            return run_plain_command(logger, pluginId, command, silent);
         case ExecRuleRunnerMode::Line:
-            return run_line_command(logger, pluginId, command, ruleset);
+            return run_line_command(logger, pluginId, command, ruleset, silent);
         case ExecRuleRunnerMode::Pty:
-            return run_pty_command(logger, pluginId, command, ruleset);
+            return run_pty_command(logger, pluginId, command, ruleset, silent);
     }
 
     return ExecResult{.success = false, .exitCode = 1, .stdoutText = {}, .stderrText = "unknown runner mode"};

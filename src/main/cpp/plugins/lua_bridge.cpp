@@ -22,6 +22,8 @@ std::string to_lower_copy(const std::string& value) {
     return normalized;
 }
 
+constexpr const char* SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
+
 ActionType action_from_lua_object(const sol::object& object) {
     if (!object.valid()) {
         return ActionType::UNKNOWN;
@@ -377,7 +379,7 @@ void LuaBridge::register_context_types() {
                     return context.execute(command);
                 },
                 [this, context](const std::string& command, const sol::object& rules) {
-                    return run_plugin_command(m_logger, context.pluginId, command, rules);
+                    return run_plugin_command(m_logger, context.pluginId, command, rules, hasSilentRuntimeFlag(context.flags));
                 }
             ));
             return exec;
@@ -403,9 +405,13 @@ void LuaBridge::register_reqpack_namespace() {
     sol::table reqpack = m_lua.create_named_table("reqpack");
     sol::table exec = m_lua.create_table();
     exec.set_function("run", [this](const std::string& command) {
-        return runCommand(command);
+        return runCommand(command, m_silentRuntimeOutput.load());
     });
     reqpack["exec"] = exec;
+}
+
+bool LuaBridge::hasSilentRuntimeFlag(const std::vector<std::string>& flags) const {
+    return std::find(flags.begin(), flags.end(), SILENT_RUNTIME_FLAG) != flags.end();
 }
 
 bool LuaBridge::validatePluginContract() const {
@@ -734,7 +740,10 @@ PackageInfo LuaBridge::info(const PluginCallContext& context, const std::string&
         return {};
     }
 
+    const bool silentRuntime = hasSilentRuntimeFlag(context.flags);
+    m_silentRuntimeOutput.store(silentRuntime);
     auto result = func(context, packageName);
+    m_silentRuntimeOutput.store(false);
     if (!result.valid()) {
         sol::error err = result;
         log_lua_error(m_logger, m_pluginId, std::string("Lua Error (info): ") + err.what());
@@ -772,7 +781,11 @@ std::string LuaBridge::serializeLuaPayload(const sol::object& value) const {
 }
 
 ExecResult LuaBridge::runCommand(const std::string& command) const {
-    return run_plugin_command(m_logger, m_pluginId, command);
+    return runCommand(command, m_silentRuntimeOutput.load());
+}
+
+ExecResult LuaBridge::runCommand(const std::string& command, const bool silent) const {
+    return run_plugin_command(m_logger, m_pluginId, command, silent);
 }
 
 bool LuaBridge::downloadToPath(const std::string& url, const std::string& destinationPath) const {
@@ -797,42 +810,66 @@ void LuaBridge::logError(const std::string& pluginId, const std::string& message
 }
 
 void LuaBridge::emitStatus(const std::string& pluginId, int statusCode) {
+    if (m_silentRuntimeOutput.load()) {
+        return;
+    }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_logger.emit(OutputAction::PLUGIN_STATUS, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .statusCode = statusCode});
 }
 
 void LuaBridge::emitProgress(const std::string& pluginId, int percent) {
+    if (m_silentRuntimeOutput.load()) {
+        return;
+    }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_logger.emit(OutputAction::PLUGIN_PROGRESS, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .progressPercent = std::clamp(percent, 0, 100)});
 }
 
 void LuaBridge::emitBeginStep(const std::string& pluginId, const std::string& label) {
+    if (m_silentRuntimeOutput.load()) {
+        return;
+    }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = "begin_step", .payload = label});
 }
 
 void LuaBridge::emitCommit(const std::string& pluginId) {
+    if (m_silentRuntimeOutput.load()) {
+        return;
+    }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = "commit", .payload = "committed"});
 }
 
 void LuaBridge::emitSuccess(const std::string& pluginId) {
+    if (m_silentRuntimeOutput.load()) {
+        return;
+    }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = "success", .payload = "ok"});
 }
 
 void LuaBridge::emitFailure(const std::string& pluginId, const std::string& message) {
+    if (m_silentRuntimeOutput.load()) {
+        return;
+    }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = "failed", .payload = message});
 }
 
 void LuaBridge::emitEvent(const std::string& pluginId, const std::string& eventName, const std::string& payload) {
+    if (m_silentRuntimeOutput.load()) {
+        return;
+    }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_recentEvents.push_back(PluginEventRecord{.name = eventName, .payload = payload});
     m_logger.emit(OutputAction::PLUGIN_EVENT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .eventName = eventName, .payload = payload});
 }
 
 void LuaBridge::registerArtifact(const std::string& pluginId, const std::string& payload) {
+    if (m_silentRuntimeOutput.load()) {
+        return;
+    }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
     m_logger.emit(OutputAction::PLUGIN_ARTIFACT, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .payload = payload});
 }

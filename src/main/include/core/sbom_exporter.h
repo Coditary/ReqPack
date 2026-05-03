@@ -12,7 +12,7 @@ class SbomExporter {
 
     SbomOutputFormat resolveFormat(const Request& request) const;
     std::string resolveOutputPath(const Request& request) const;
-    std::string renderTable(const Graph& graph) const;
+    std::string renderTable(const Graph& graph, bool colorizeTable, bool disableWrap, bool wideTable) const;
     std::string renderJson(const Graph& graph, bool cyclonedx) const;
 
 public:

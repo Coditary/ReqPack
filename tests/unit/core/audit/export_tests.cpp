@@ -3,6 +3,7 @@
 #include <boost/graph/adjacency_list.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -55,6 +56,63 @@ public:
     }
 };
 
+class ScopedColumnsEnv {
+public:
+    explicit ScopedColumnsEnv(const char* value) {
+        if (const char* existing = std::getenv("COLUMNS")) {
+            hadValue_ = true;
+            previousValue_ = existing;
+        }
+
+        if (value != nullptr) {
+            ::setenv("COLUMNS", value, 1);
+        } else {
+            ::unsetenv("COLUMNS");
+        }
+    }
+
+    ~ScopedColumnsEnv() {
+        if (hadValue_) {
+            ::setenv("COLUMNS", previousValue_.c_str(), 1);
+        } else {
+            ::unsetenv("COLUMNS");
+        }
+    }
+
+private:
+    bool hadValue_ = false;
+    std::string previousValue_;
+};
+
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(const char* key, const char* value) : key_(key) {
+        if (const char* existing = std::getenv(key_)) {
+            hadValue_ = true;
+            previousValue_ = existing;
+        }
+
+        if (value != nullptr) {
+            ::setenv(key_, value, 1);
+        } else {
+            ::unsetenv(key_);
+        }
+    }
+
+    ~ScopedEnvVar() {
+        if (hadValue_) {
+            ::setenv(key_, previousValue_.c_str(), 1);
+        } else {
+            ::unsetenv(key_);
+        }
+    }
+
+private:
+    const char* key_;
+    bool hadValue_ = false;
+    std::string previousValue_;
+};
+
 std::string read_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     REQUIRE(input.is_open());
@@ -88,13 +146,86 @@ std::vector<ValidationFinding> make_findings() {
 }  // namespace
 
 TEST_CASE("audit exporter renders default table output", "[unit][audit][export]") {
+    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar noColor{"NO_COLOR", "1"};
+    ScopedEnvVar forceColor{"FORCE_COLOR", nullptr};
+    AuditExporter exporter;
+    Request request;
+    request.action = ActionType::AUDIT;
+
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::AUDIT, .system = "maven", .name = "org.apache.logging.log4j:log4j-core", .version = "2.13.1"}, graph);
+    const std::vector<ValidationFinding> findings{
+        ValidationFinding{
+            .id = "GHSA-3pxv-7cmr-fjr4",
+            .kind = "vulnerability",
+            .package = Package{.action = ActionType::AUDIT, .system = "maven", .name = "org.apache.logging.log4j:log4j-core", .version = "2.13.1"},
+            .source = "osv",
+            .severity = "medium",
+            .score = 4.0,
+            .message = "alpha beta gamma delta epsilon",
+        }
+    };
+
+    const std::string rendered = exporter.renderGraph(graph, findings, request);
+    CHECK(rendered.find('\t') == std::string::npos);
+    CHECK(rendered.find("SYSTEM NAME         VERSION FINDING      SEVERITY SCORE MESSAGE") != std::string::npos);
+    CHECK(rendered.find("maven  org.apach... 2.13.1  GHSA-3pxv... medium   4     alpha beta gamma") != std::string::npos);
+    CHECK(rendered.find(std::string{"\n"} + std::string(56, ' ') + "delta epsilon\n") != std::string::npos);
+}
+
+TEST_CASE("audit exporter colorizes severity in terminal table output", "[unit][audit][export]") {
+    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar noColor{"NO_COLOR", nullptr};
+    ScopedEnvVar forceColor{"FORCE_COLOR", "1"};
     AuditExporter exporter;
     Request request;
     request.action = ActionType::AUDIT;
 
     const std::string rendered = exporter.renderGraph(make_graph(), make_findings(), request);
-    CHECK(rendered.find("SYSTEM\tNAME\tVERSION\tFINDING\tSEVERITY\tSCORE\tMESSAGE") != std::string::npos);
-    CHECK(rendered.find("npm\treact\t18.3.1\tCVE-2026-1234\thigh") != std::string::npos);
+    CHECK(rendered.find("\033[1;31mhigh    \033[0m") != std::string::npos);
+}
+
+TEST_CASE("audit exporter supports no-wrap and wide table flags", "[unit][audit][export]") {
+    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar noColor{"NO_COLOR", "1"};
+    ScopedEnvVar forceColor{"FORCE_COLOR", nullptr};
+    AuditExporter exporter;
+    Request request;
+    request.action = ActionType::AUDIT;
+    request.flags = {"wide", "no-wrap"};
+
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::AUDIT, .system = "maven", .name = "org.apache.logging.log4j:log4j-core", .version = "2.13.1"}, graph);
+    const std::vector<ValidationFinding> findings{
+        ValidationFinding{
+            .id = "GHSA-3pxv-7cmr-fjr4",
+            .kind = "vulnerability",
+            .package = Package{.action = ActionType::AUDIT, .system = "maven", .name = "org.apache.logging.log4j:log4j-core", .version = "2.13.1"},
+            .source = "osv",
+            .severity = "medium",
+            .score = 4.0,
+            .message = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        }
+    };
+
+    const std::string rendered = exporter.renderGraph(graph, findings, request);
+    CHECK(rendered.find("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu") != std::string::npos);
+    CHECK(rendered.find(std::string{"\n"} + std::string(56, ' ') + "delta epsilon") == std::string::npos);
+}
+
+TEST_CASE("audit exporter keeps file exports plain even when color forced", "[unit][audit][export]") {
+    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar noColor{"NO_COLOR", nullptr};
+    ScopedEnvVar forceColor{"FORCE_COLOR", "1"};
+    AuditExporter exporter;
+    Request request;
+    request.action = ActionType::AUDIT;
+    request.outputPath = "audit.txt";
+    request.outputFormat = "table";
+
+    const std::string rendered = exporter.renderGraph(make_graph(), make_findings(), request);
+    CHECK(rendered.find("\033[") == std::string::npos);
 }
 
 TEST_CASE("audit exporter renders clean table summary", "[unit][audit][export]") {
@@ -131,6 +262,28 @@ TEST_CASE("audit exporter defaults json file output to cyclonedx vex json", "[un
     CHECK(rendered.find("\"vulnerabilities\"") != std::string::npos);
     CHECK(rendered.find("\"analysis\": {\"state\": \"in_triage\", \"detail\": \"Matched by ReqPack audit from local vulnerability data. Reachability and exploitability were not analyzed.\"}") != std::string::npos);
     CHECK(rendered.find("\"ratings\": [{\"source\": {\"name\": \"osv\"}, \"severity\": \"high\", \"score\": 8.8}]") != std::string::npos);
+}
+
+TEST_CASE("audit exporter keeps unresolved findings in triage state", "[unit][audit][export]") {
+    AuditExporter exporter;
+    Request request;
+    request.action = ActionType::AUDIT;
+    request.outputFormat = "cyclonedx-vex-json";
+
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::AUDIT, .system = "npm", .name = "left-pad"}, graph);
+    const std::vector<ValidationFinding> findings{
+        ValidationFinding{
+            .kind = "unresolved_version",
+            .package = Package{.action = ActionType::AUDIT, .system = "npm", .name = "left-pad"},
+            .source = "osv",
+            .severity = "low",
+            .message = "package version unavailable for vulnerability matching",
+        }
+    };
+
+    const std::string rendered = exporter.renderGraph(graph, findings, request);
+    CHECK(rendered.find("\"analysis\": {\"state\": \"in_triage\", \"detail\": \"ReqPack could not resolve package version. Vulnerability matching may be incomplete.\"}") != std::string::npos);
 }
 
 TEST_CASE("audit exporter infers sarif from file extension", "[unit][audit][export]") {

@@ -642,6 +642,65 @@ end
 function plugin.shutdown() return true end
 )";
 
+const char* SBOM_INFO_ONLY_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    osvEcosystem = "demo-osv",
+    purlType = "generic",
+    versionComparatorProfile = "lexicographic",
+  }
+end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages)
+  local missing = {}
+  for _, package in ipairs(packages) do
+    missing[#missing + 1] = package
+  end
+  return missing
+end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context)
+  context.events.listed({ { name = "unexpected-list-call", version = "0.0.0", description = "resolver should not call list" } })
+  return {
+    {
+      name = "unexpected-list-call",
+      version = "0.0.0",
+      description = "resolver should not call list",
+    }
+  }
+end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package)
+  reqpack.exec.run("printf 'resolver-exec'")
+  if package == "resolved" then
+    local item = {
+      name = package,
+      version = "4.5.6",
+      description = "resolved via info",
+    }
+    context.events.informed(item)
+    return item
+  end
+
+  local item = {
+    name = package,
+    version = "unknown",
+    description = "not installed",
+  }
+  context.events.informed(item)
+  return item
+end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("orchestrator list command loads plugin from workspace plugins directory", "[integration][orchestrator][service]") {
@@ -927,6 +986,93 @@ TEST_CASE("orchestrator sbom command exports planned graph without executing plu
     CHECK_FALSE(std::filesystem::exists(installMarker));
 }
 
+TEST_CASE("orchestrator sbom resolves installed version for unversioned package request", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-sbom-installed-version"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path localPackage = build_rqp_package(
+        tempDir.path(),
+        "listed-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-list"))
+    );
+    const std::filesystem::path outputPath = tempDir.path() / "graph.json";
+
+    (void)run_reqpack(tempDir.path(), configPath, {"install", localPackage.string()});
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {
+        "sbom",
+        "rqp",
+        "listed-artifact",
+        "--format",
+        "json",
+        "--output",
+        outputPath.string(),
+    });
+
+    CHECK(output.find(outputPath.string()) != std::string::npos);
+    REQUIRE(std::filesystem::exists(outputPath));
+    const std::string sbom = read_file(outputPath);
+    CHECK(sbom.find("\"system\": \"rqp\"") != std::string::npos);
+    CHECK(sbom.find("\"name\": \"listed-artifact\"") != std::string::npos);
+    CHECK(sbom.find("\"version\": \"1.0.0-1+r0\"") != std::string::npos);
+}
+
+TEST_CASE("orchestrator sbom resolves unversioned package via info without list noise", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-sbom-info-only-version"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path outputPath = tempDir.path() / "graph.json";
+
+    add_plugin_script(pluginDirectory, "apply", SBOM_INFO_ONLY_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {
+        "sbom",
+        "apply",
+        "resolved",
+        "--format",
+        "json",
+        "--output",
+        outputPath.string(),
+    });
+
+    CHECK(output.find("listed:") == std::string::npos);
+    CHECK(output.find("informed:") == std::string::npos);
+    CHECK(output.find("resolver-exec") == std::string::npos);
+    CHECK(output.find("unexpected-list-call") == std::string::npos);
+    REQUIRE(std::filesystem::exists(outputPath));
+    const std::string sbom = read_file(outputPath);
+    CHECK(sbom.find("\"name\": \"resolved\"") != std::string::npos);
+    CHECK(sbom.find("\"version\": \"4.5.6\"") != std::string::npos);
+}
+
+TEST_CASE("orchestrator sbom keeps package unversioned when info cannot resolve version", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-sbom-unresolved-version"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path outputPath = tempDir.path() / "graph.json";
+
+    add_plugin_script(pluginDirectory, "apply", SBOM_INFO_ONLY_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {
+        "sbom",
+        "apply",
+        "missing",
+        "--format",
+        "json",
+        "--output",
+        outputPath.string(),
+    });
+
+    CHECK(output.find("listed:") == std::string::npos);
+    CHECK(output.find("informed:") == std::string::npos);
+    CHECK(output.find("resolver-exec") == std::string::npos);
+    REQUIRE(std::filesystem::exists(outputPath));
+    const std::string sbom = read_file(outputPath);
+    CHECK(sbom.find("\"name\": \"missing\"") != std::string::npos);
+    CHECK(sbom.find("\"version\": \"\"") != std::string::npos);
+}
+
 TEST_CASE("orchestrator audit command exports sarif without executing plugin install", "[integration][orchestrator][service]") {
     TempDir tempDir{"reqpack-orchestrator-audit-export"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
@@ -1108,14 +1254,20 @@ TEST_CASE("orchestrator audit system-only request audits installed packages", "[
     add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
 
     int status = 0;
-    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+    const std::string output = run_reqpack_with_home_env_and_status(tempDir.path(), configPath, tempDir.path(), {
+        {"COLUMNS", "80"},
+    }, {
         "audit",
         "apply",
     }, status);
 
     CHECK(status != 0);
-    CHECK(output.find("CVE-2026-system-only") != std::string::npos);
-    CHECK(output.find("apply\tapply\t1.0.0") != std::string::npos);
+    CHECK(output.find('\t') == std::string::npos);
+    CHECK(output.find("SYSTEM NAME") != std::string::npos);
+    CHECK(output.find("apply") != std::string::npos);
+    CHECK(output.find("CVE-2026") != std::string::npos);
+    CHECK(output.find("installed") != std::string::npos);
+    CHECK(output.find("package issue") != std::string::npos);
 
     const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
     CHECK_FALSE(std::filesystem::exists(installMarker));

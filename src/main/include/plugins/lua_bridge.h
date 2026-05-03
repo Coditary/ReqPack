@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <atomic>
 
 #include "core/configuration.h"
 #include "core/types.h"
@@ -27,6 +28,7 @@ private:
 	ReqPackConfig m_config;
 	std::vector<std::string> m_tempDirectories;
 	std::vector<PluginEventRecord> m_recentEvents;
+	mutable std::atomic<bool> m_silentRuntimeOutput{false};
 
 	PluginCallContext makeContext(const std::vector<std::string>& flags) const;
 	void register_context_types();
@@ -35,7 +37,9 @@ private:
 	std::vector<PackageInfo> packageInfoListFromObject(const sol::object& value) const;
 	PackageInfo packageInfoFromObject(const sol::object& value) const;
 	std::string serializeLuaPayload(const sol::object& value) const;
+	bool hasSilentRuntimeFlag(const std::vector<std::string>& flags) const;
 	ExecResult runCommand(const std::string& command) const;
+	ExecResult runCommand(const std::string& command, bool silent) const;
 	bool downloadToPath(const std::string& url, const std::string& destinationPath) const;
 
 public:

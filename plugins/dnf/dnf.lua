@@ -35,6 +35,23 @@ local function package_installed(name)
     return command_succeeds("rpm -q --quiet " .. shell_quote(name) .. " >/dev/null 2>&1")
 end
 
+local function installed_package_version(name)
+    local version = command_stdout("rpm -q --qf '%{VERSION}-%{RELEASE}\n' " .. shell_quote(name) .. " 2>/dev/null")
+    if version ~= "" and not version:match("not installed") then
+        return trim(version:match("([^\r\n]+)"))
+    end
+
+    local providers = command_stdout("rpm -q --whatprovides --qf '%{NAME}\t%{VERSION}-%{RELEASE}\n' " .. shell_quote(name) .. " 2>/dev/null")
+    for line in providers:gmatch("[^\r\n]+") do
+        local provider_name, provider_version = line:match("^(.-)\t(.+)$")
+        if provider_name ~= nil and provider_name ~= "" and provider_version ~= nil and provider_version ~= "" then
+            return trim(provider_version)
+        end
+    end
+
+    return ""
+end
+
 local function shell_join(values)
     local quoted = {}
     for _, value in ipairs(values or {}) do
@@ -283,7 +300,12 @@ end
 function plugin.info(context, name)
     local result = context.exec.run("dnf info " .. shell_quote(name) .. " --quiet")
     local description = trim(result.stdout or "")
-    local item = { name = name, version = "unknown", description = description ~= "" and description or "DNF Package" }
+    local installed_version = installed_package_version(name)
+    local item = {
+        name = name,
+        version = installed_version ~= "" and installed_version or "unknown",
+        description = description ~= "" and description or "DNF Package"
+    }
     context.events.informed(item)
     return item
 end

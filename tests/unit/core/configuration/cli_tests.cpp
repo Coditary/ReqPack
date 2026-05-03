@@ -319,6 +319,18 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().outputFormat == "sarif");
     }
 
+    SECTION("audit preserves table layout flags") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"audit", "dnf", "curl", "--wide", "--no-wrap"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().flags == std::vector<std::string>{"wide", "no-wrap"});
+    }
+
+    SECTION("sbom preserves table layout flags") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"sbom", "dnf", "curl", "--wide", "--no-wrap"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().flags == std::vector<std::string>{"wide", "no-wrap"});
+    }
+
     SECTION("audit rejects invalid format") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"audit", "dnf", "curl", "--format", "xml"}, config);
         CHECK(requests.empty());

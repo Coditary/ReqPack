@@ -205,6 +205,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/vulnerability_matcher.cpp
     src/main/cpp/core/vulnerability_sync_service.cpp
     src/main/cpp/core/remote_profiles.cpp
+    src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
 )

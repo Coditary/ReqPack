@@ -428,7 +428,7 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
 
     Orchestrator orchestrator(std::move(requests), effectiveConfig);
     const int result = orchestrator.run();
-    logger.flush();
+    logger.flushSync();
     return result;
 }
 
@@ -465,7 +465,7 @@ int run_stdin_serve_loop(Cli& cli, const ReqPackConfig& config, const std::vecto
         if (orchestrator.run() != 0) {
             exitCode = 1;
         }
-        logger.flush();
+        logger.flushSync();
     }
 
     return exitCode;
@@ -575,19 +575,19 @@ int main(int argc, char* argv[]) {
 
     if (requests.empty()) {
         if (cli.parseFailed()) {
-            logger.flush();
+            logger.flushSync();
             curl_global_cleanup();
             return 1;
         }
         cli.print_help();
-        logger.flush();
+        logger.flushSync();
         curl_global_cleanup();
         return 0;
     }
 
     Orchestrator orchestrator(requests, config);
     const int result = orchestrator.run();
-    logger.flush();
+    logger.flushSync();
 
     curl_global_cleanup();
     return result;

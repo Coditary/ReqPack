@@ -64,7 +64,7 @@ reqpack sbom maven org.junit:junit pip flask numpy
 |------|-------|-------------|
 | `--format` | `cyclonedx-json` | CycloneDX 1.5 JSON *(default when `--output` is set)* |
 | `--format` | `json` | ReqPack-native JSON |
-| `--format` | `table` | Tab-separated text table |
+| `--format` | `table` | Fixed-width text table |
 
 ### Writing to a File
 
@@ -74,6 +74,16 @@ reqpack sbom maven org.junit:junit --output bom.json
 
 # Explicit format + output path
 reqpack sbom pip flask --format cyclonedx-json --output reports/sbom.json
+```
+
+### Table Layout
+
+```bash
+# Wider table layout for terminal output
+reqpack sbom --wide
+
+# Keep each row on one line and let terminal handle overflow
+reqpack sbom --no-wrap
 ```
 
 ### CycloneDX Output Example
@@ -145,6 +155,16 @@ reqpack audit maven org.junit:junit:4.13 --output reports/audit.sarif
 
 # Explicit format
 reqpack audit ./reqpack.lua --format cyclonedx-vex-json --output reports/audit.json
+```
+
+### Table Layout
+
+```bash
+# Wider table layout for terminal output
+reqpack audit --wide
+
+# Keep each row on one line and let terminal handle overflow
+reqpack audit --no-wrap
 ```
 
 ### Exit Codes

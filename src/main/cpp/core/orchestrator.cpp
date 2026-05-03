@@ -9,6 +9,8 @@
 
 namespace {
 
+constexpr const char* SBOM_INTERNAL_SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
+
 bool is_url(const std::string& value) {
     return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0;
 }
@@ -65,6 +67,15 @@ std::string package_specifier_from_info(const PackageInfo& item) {
     return item.name + '@' + item.version;
 }
 
+bool has_explicit_version(const std::string& packageSpecifier) {
+    const std::size_t versionSeparator = packageSpecifier.rfind('@');
+    return versionSeparator != std::string::npos && versionSeparator != 0 && versionSeparator + 1 < packageSpecifier.size();
+}
+
+bool package_info_has_concrete_version(const PackageInfo& item) {
+    return !item.name.empty() && !item.version.empty() && item.version != "unknown" && item.version != "repo" && item.version != "installed";
+}
+
 std::vector<Request> expand_system_only_audit_requests(Executer* executor, const std::vector<Request>& requests) {
     std::vector<Request> expanded = requests;
     if (executor == nullptr) {
@@ -85,6 +96,43 @@ std::vector<Request> expand_system_only_audit_requests(Executer* executor, const
             }
             request.packages.push_back(package_specifier_from_info(item));
         }
+    }
+
+    return expanded;
+}
+
+std::vector<Request> expand_unversioned_sbom_requests(Executer* executor, const std::vector<Request>& requests) {
+    std::vector<Request> expanded = requests;
+    if (executor == nullptr) {
+        return expanded;
+    }
+
+    for (Request& request : expanded) {
+        if (request.action != ActionType::SBOM || request.system.empty() || request.usesLocalTarget || request.packages.empty()) {
+            continue;
+        }
+
+        std::vector<std::string> resolvedPackages;
+        resolvedPackages.reserve(request.packages.size());
+        for (const std::string& packageSpecifier : request.packages) {
+            if (has_explicit_version(packageSpecifier)) {
+                resolvedPackages.push_back(packageSpecifier);
+                continue;
+            }
+
+            Request infoRequest = request;
+            infoRequest.action = ActionType::INFO;
+            infoRequest.packages = {packageSpecifier};
+            infoRequest.flags.push_back(SBOM_INTERNAL_SILENT_RUNTIME_FLAG);
+            const PackageInfo installed = executor->info(infoRequest);
+            if (!package_info_has_concrete_version(installed)) {
+                resolvedPackages.push_back(packageSpecifier);
+                continue;
+            }
+
+            resolvedPackages.push_back(package_specifier_from_info(installed));
+        }
+        request.packages = std::move(resolvedPackages);
     }
 
     return expanded;
@@ -241,9 +289,12 @@ int Orchestrator::run() {
 		return 0;
 	}
 
-	const std::vector<Request> plannedRequests = this->requests.front().action == ActionType::AUDIT ?
-		expand_system_only_audit_requests(this->executor, this->requests) :
-		this->requests;
+	std::vector<Request> plannedRequests = this->requests;
+	if (this->requests.front().action == ActionType::AUDIT) {
+		plannedRequests = expand_system_only_audit_requests(this->executor, this->requests);
+	} else if (this->requests.front().action == ActionType::SBOM) {
+		plannedRequests = expand_unversioned_sbom_requests(this->executor, this->requests);
+	}
 	Graph* graph = this->planner->plan(plannedRequests);
 	if (this->requests.front().action == ActionType::SBOM) {
 		if (graph != nullptr) {

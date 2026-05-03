@@ -3,6 +3,7 @@
 #include <boost/graph/adjacency_list.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -55,6 +56,63 @@ public:
     }
 };
 
+class ScopedColumnsEnv {
+public:
+    explicit ScopedColumnsEnv(const char* value) {
+        if (const char* existing = std::getenv("COLUMNS")) {
+            hadValue_ = true;
+            previousValue_ = existing;
+        }
+
+        if (value != nullptr) {
+            ::setenv("COLUMNS", value, 1);
+        } else {
+            ::unsetenv("COLUMNS");
+        }
+    }
+
+    ~ScopedColumnsEnv() {
+        if (hadValue_) {
+            ::setenv("COLUMNS", previousValue_.c_str(), 1);
+        } else {
+            ::unsetenv("COLUMNS");
+        }
+    }
+
+private:
+    bool hadValue_ = false;
+    std::string previousValue_;
+};
+
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(const char* key, const char* value) : key_(key) {
+        if (const char* existing = std::getenv(key_)) {
+            hadValue_ = true;
+            previousValue_ = existing;
+        }
+
+        if (value != nullptr) {
+            ::setenv(key_, value, 1);
+        } else {
+            ::unsetenv(key_);
+        }
+    }
+
+    ~ScopedEnvVar() {
+        if (hadValue_) {
+            ::setenv(key_, previousValue_.c_str(), 1);
+        } else {
+            ::unsetenv(key_);
+        }
+    }
+
+private:
+    const char* key_;
+    bool hadValue_ = false;
+    std::string previousValue_;
+};
+
 std::string read_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     REQUIRE(input.is_open());
@@ -74,14 +132,51 @@ Graph make_graph() {
 }  // namespace
 
 TEST_CASE("sbom exporter renders default table output", "[unit][sbom][export]") {
+    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar noColor{"NO_COLOR", "1"};
+    ScopedEnvVar forceColor{"FORCE_COLOR", nullptr};
+    SbomExporter exporter;
+    Request request;
+    request.action = ActionType::SBOM;
+
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::SBOM, .system = "maven", .name = "org.apache.logging.log4j:log4j-core", .version = "2.13.1", .sourcePath = "/tmp/source/with many path parts/example artifact.jar"}, graph);
+
+    const std::string rendered = exporter.renderGraph(graph, request);
+    CHECK(rendered.find('\t') == std::string::npos);
+    CHECK(rendered.find("SYSTEM NAME                         VERSION SOURCE") != std::string::npos);
+    CHECK(rendered.find("maven  org.apache.logging.log4j:... 2.13.1  /tmp/source/with many path") != std::string::npos);
+    CHECK(rendered.find(std::string{"\n"} + std::string(44, ' ') + "parts/example artifact.jar\n") != std::string::npos);
+}
+
+TEST_CASE("sbom exporter colorizes terminal table output", "[unit][sbom][export]") {
+    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar noColor{"NO_COLOR", nullptr};
+    ScopedEnvVar forceColor{"FORCE_COLOR", "1"};
     SbomExporter exporter;
     Request request;
     request.action = ActionType::SBOM;
 
     const std::string rendered = exporter.renderGraph(make_graph(), request);
-    CHECK(rendered.find("SYSTEM\tNAME\tVERSION\tSOURCE") != std::string::npos);
-    CHECK(rendered.find("npm\treact\t18.3.1") != std::string::npos);
-    CHECK(rendered.find("npm\tscheduler\t0.24.0") != std::string::npos);
+    CHECK(rendered.find("\033[1;31mnpm") != std::string::npos);
+    CHECK(rendered.find("\033[90m-\033[0m") != std::string::npos);
+}
+
+TEST_CASE("sbom exporter supports no-wrap and wide table flags", "[unit][sbom][export]") {
+    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar noColor{"NO_COLOR", "1"};
+    ScopedEnvVar forceColor{"FORCE_COLOR", nullptr};
+    SbomExporter exporter;
+    Request request;
+    request.action = ActionType::SBOM;
+    request.flags = {"wide", "no-wrap"};
+
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::SBOM, .system = "maven", .name = "org.apache.logging.log4j:log4j-core", .version = "2.13.1", .sourcePath = "/tmp/source/with many path parts/example artifact.jar and more sections"}, graph);
+
+    const std::string rendered = exporter.renderGraph(graph, request);
+    CHECK(rendered.find("/tmp/source/with many path parts/example artifact.jar and more sections") != std::string::npos);
+    CHECK(rendered.find(std::string{"\n"} + std::string(44, ' ') + "parts/example") == std::string::npos);
 }
 
 TEST_CASE("sbom exporter renders raw json output", "[unit][sbom][export]") {

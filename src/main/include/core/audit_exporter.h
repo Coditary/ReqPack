@@ -14,7 +14,13 @@ class AuditExporter {
 
     AuditOutputFormat resolveFormat(const Request& request) const;
     std::string resolveOutputPath(const Request& request) const;
-    std::string renderTable(const Graph& graph, const std::vector<ValidationFinding>& findings) const;
+    std::string renderTable(
+        const Graph& graph,
+        const std::vector<ValidationFinding>& findings,
+        bool colorizeSeverity,
+        bool disableWrap,
+        bool wideTable
+    ) const;
     std::string renderJson(const Graph& graph, const std::vector<ValidationFinding>& findings) const;
     std::string renderCycloneDxVex(const Graph& graph, const std::vector<ValidationFinding>& findings) const;
     std::string renderSarif(const Graph& graph, const std::vector<ValidationFinding>& findings) const;
