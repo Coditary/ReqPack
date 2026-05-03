@@ -501,7 +501,7 @@ std::optional<ConnectionProtocol> detect_connection_protocol(
 
 bool is_readonly_safe_action(ActionType action) {
     return action == ActionType::LIST || action == ActionType::SEARCH || action == ActionType::INFO ||
-        action == ActionType::OUTDATED || action == ActionType::SBOM;
+        action == ActionType::OUTDATED || action == ActionType::SBOM || action == ActionType::AUDIT;
 }
 
 bool requests_allowed_in_readonly_mode(const std::vector<Request>& requests) {

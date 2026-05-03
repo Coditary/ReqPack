@@ -35,5 +35,6 @@ public:
 	virtual ~Validator();
 
 	Graph* validate(Graph *graph);
+	std::vector<ValidationFinding> audit(Graph* graph);
 	const std::vector<ValidationFinding>& getLastFindings() const;
 };

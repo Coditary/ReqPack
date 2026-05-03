@@ -72,6 +72,12 @@ TEST_CASE("configuration parses known enum strings and rejects invalid values", 
     REQUIRE(sbom_output_format_from_string("cyclonedx-json").has_value());
     CHECK(sbom_output_format_from_string("cyclonedx-json").value() == SbomOutputFormat::CYCLONEDX_JSON);
     CHECK_FALSE(sbom_output_format_from_string("xml").has_value());
+
+    REQUIRE(audit_output_format_from_string("cyclonedx-vex-json").has_value());
+    CHECK(audit_output_format_from_string("cyclonedx-vex-json").value() == AuditOutputFormat::CYCLONEDX_VEX_JSON);
+    REQUIRE(audit_output_format_from_string("sarif").has_value());
+    CHECK(audit_output_format_from_string("sarif").value() == AuditOutputFormat::SARIF);
+    CHECK_FALSE(audit_output_format_from_string("xml").has_value());
 }
 
 TEST_CASE("configuration resolves registry paths for directories and files", "[unit][configuration][path]") {

@@ -28,6 +28,7 @@ public:
     std::vector<Request> parse(int argc, char* argv[], const ReqPackConfig& config);
     std::vector<Request> parse(const std::vector<std::string>& arguments, const ReqPackConfig& config);
     ReqPackConfigOverrides parseConfigOverrides(int argc, char* argv[]) const;
+    bool parseFailed() const;
 
     void print_help();
     void print_command_help(ActionType action);
@@ -35,6 +36,7 @@ public:
 private:
     std::unique_ptr<CLI::App> app;
     ActionType pendingHelpAction_ = ActionType::UNKNOWN;
+    bool lastParseFailed_ = false;
 
     static ActionType parse_action(const std::string& command);
     static bool is_flag(const std::string& argument);

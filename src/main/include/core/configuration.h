@@ -47,6 +47,13 @@ enum class SbomOutputFormat {
     CYCLONEDX_JSON
 };
 
+enum class AuditOutputFormat {
+    TABLE,
+    JSON,
+    CYCLONEDX_VEX_JSON,
+    SARIF
+};
+
 enum class DisplayRenderer {
     PLAIN,
     COLOR
@@ -299,6 +306,7 @@ std::optional<ReportFormat> report_format_from_string(const std::string& format)
 std::optional<UnsafeAction> unsafe_action_from_string(const std::string& action);
 std::optional<OsvRefreshMode> osv_refresh_mode_from_string(const std::string& mode);
 std::optional<SbomOutputFormat> sbom_output_format_from_string(const std::string& format);
+std::optional<AuditOutputFormat> audit_output_format_from_string(const std::string& format);
 std::optional<DisplayRenderer> display_renderer_from_string(const std::string& renderer);
 
 std::filesystem::path reqpack_home_directory();
@@ -404,6 +412,20 @@ inline std::string to_string(SbomOutputFormat format) {
         case SbomOutputFormat::CYCLONEDX_JSON:
             return "cyclonedx-json";
         case SbomOutputFormat::TABLE:
+        default:
+            return "table";
+    }
+}
+
+inline std::string to_string(AuditOutputFormat format) {
+    switch (format) {
+        case AuditOutputFormat::JSON:
+            return "json";
+        case AuditOutputFormat::CYCLONEDX_VEX_JSON:
+            return "cyclonedx-vex-json";
+        case AuditOutputFormat::SARIF:
+            return "sarif";
+        case AuditOutputFormat::TABLE:
         default:
             return "table";
     }

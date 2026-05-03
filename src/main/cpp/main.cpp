@@ -574,6 +574,11 @@ int main(int argc, char* argv[]) {
     const std::vector<Request> requests = cli.parse(argc, argv, config);
 
     if (requests.empty()) {
+        if (cli.parseFailed()) {
+            logger.flush();
+            curl_global_cleanup();
+            return 1;
+        }
         cli.print_help();
         logger.flush();
         curl_global_cleanup();

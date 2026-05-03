@@ -165,6 +165,22 @@ TEST_CASE("validator stores last findings for aborted validation", "[unit][valid
     CHECK(validator.getLastFindings().empty());
 }
 
+TEST_CASE("validator audit returns findings without applying abort disposition", "[unit][validator][audit]") {
+    ReqPackConfig config;
+    config.security.severityThreshold = SeverityLevel::CRITICAL;
+    config.security.onUnsafe = UnsafeAction::ABORT;
+
+    TestValidator validator(nullptr, config);
+    validator.findings = {make_finding("critical")};
+
+    Graph graph = make_graph();
+    const std::vector<ValidationFinding> findings = validator.audit(&graph);
+    REQUIRE(findings.size() == 1);
+    CHECK(findings.front().severity == "critical");
+    REQUIRE(validator.getLastFindings().size() == 1);
+    CHECK(validator.getLastFindings().front().severity == "critical");
+}
+
 TEST_CASE("validator prompts once when unsafe findings require user approval", "[unit][validator][validate]") {
     ReqPackConfig config;
     config.security.severityThreshold = SeverityLevel::HIGH;

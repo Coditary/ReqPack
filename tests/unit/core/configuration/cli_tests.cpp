@@ -300,6 +300,49 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
             CHECK_FALSE(request.system.empty());
         }
     }
+
+    SECTION("audit without system targets all known systems") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"audit"}, config);
+        REQUIRE_FALSE(requests.empty());
+        for (const Request& request : requests) {
+            CHECK(request.action == ActionType::AUDIT);
+            CHECK_FALSE(request.system.empty());
+            CHECK(request.outputFormat == "table");
+        }
+    }
+
+    SECTION("audit infers sarif format from output path") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"audit", "dnf", "curl", "--output", "report.sarif"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::AUDIT);
+        CHECK(requests.front().outputPath == "report.sarif");
+        CHECK(requests.front().outputFormat == "sarif");
+    }
+
+    SECTION("audit rejects invalid format") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"audit", "dnf", "curl", "--format", "xml"}, config);
+        CHECK(requests.empty());
+        CHECK(cli.parseFailed());
+    }
+
+    SECTION("audit supports direct reqpack manifest file input") {
+        const std::filesystem::path manifestDir = std::filesystem::temp_directory_path() / "reqpack-cli-audit-manifest";
+        std::filesystem::create_directories(manifestDir);
+        const std::filesystem::path manifestPath = manifestDir / "reqpack.lua";
+        {
+            std::ofstream output(manifestPath);
+            REQUIRE(output.is_open());
+            output << "return { packages = { { system = 'dnf', name = 'curl' }, { system = 'npm', name = 'react', version = '18.3.1' } } }\n";
+        }
+
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"audit", manifestPath.string()}, config);
+        REQUIRE(requests.size() == 2);
+        CHECK(requests[0].action == ActionType::AUDIT);
+        CHECK(requests[1].action == ActionType::AUDIT);
+
+        std::error_code error;
+        std::filesystem::remove_all(manifestDir, error);
+    }
 }
 
 TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli][remote]") {

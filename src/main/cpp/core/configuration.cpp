@@ -383,6 +383,24 @@ std::optional<SbomOutputFormat> sbom_output_format_from_string(const std::string
     return std::nullopt;
 }
 
+std::optional<AuditOutputFormat> audit_output_format_from_string(const std::string& format) {
+    const std::string normalized = to_lower(format);
+    if (normalized == "table") {
+        return AuditOutputFormat::TABLE;
+    }
+    if (normalized == "json") {
+        return AuditOutputFormat::JSON;
+    }
+    if (normalized == "cyclonedx-vex-json" || normalized == "cyclonedx-vex" || normalized == "cyclonedx") {
+        return AuditOutputFormat::CYCLONEDX_VEX_JSON;
+    }
+    if (normalized == "sarif") {
+        return AuditOutputFormat::SARIF;
+    }
+
+    return std::nullopt;
+}
+
 std::optional<DisplayRenderer> display_renderer_from_string(const std::string& renderer) {
     const std::string normalized = to_lower(renderer);
     if (normalized == "plain") {

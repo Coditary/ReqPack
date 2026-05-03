@@ -14,6 +14,7 @@ enum class ActionType {
 	INFO,
 	ENSURE,
 	SBOM,
+	AUDIT,
 	OUTDATED,
 	SNAPSHOT,
 	SERVE,

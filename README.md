@@ -24,6 +24,9 @@
 * 📋 **SBOM Generation**
   Generate a Software Bill of Materials (SBOM) in CycloneDX format for any set of packages to support supply-chain transparency and compliance workflows.
 
+* 🔎 **Dependency Audit Reports**
+  Audit planned packages against vulnerability data and export findings as terminal tables, CycloneDX VEX JSON, or SARIF.
+
 ---
 
 ## 🍞 Example Usage
@@ -96,6 +99,58 @@ reqpack sbom pip flask --format cyclonedx-json --output reports/sbom.json
 ```
 
 If `includeDependencyEdges` is enabled in the ReqPack config, a `dependencies` array is appended listing `dependsOn` relationships between components.
+
+---
+
+## 🔎 Audit
+
+ReqPack can audit planned packages with the `audit` command. It uses the same package input styles as `install`, generates component data internally, matches vulnerabilities, and exports findings as either a terminal table, CycloneDX VEX JSON, or SARIF.
+
+If you pass only a system name such as `reqpack audit npm`, ReqPack audits the packages currently reported as installed by that system.
+
+### Basic Usage
+
+```bash
+# Audit explicit packages and print findings as a table
+reqpack audit maven org.junit:junit:4.13 pip flask
+
+# Audit currently installed packages for one system
+reqpack audit npm
+
+# Scoped syntax
+reqpack audit maven:org.junit:junit:4.13 pip:flask
+
+# Audit a project manifest
+reqpack audit .
+reqpack audit ./reqpack.lua
+```
+
+### Output Formats
+
+| Flag | Value | Description |
+|------|-------|-------------|
+| `--format` | `table` | Terminal-friendly findings table *(default without `--output`)* |
+| `--format` | `json` | ReqPack-native JSON |
+| `--format` | `cyclonedx-vex-json` | CycloneDX JSON with vulnerability entries *(default for most file exports)* |
+| `--format` | `sarif` | SARIF 2.1.0 export |
+
+### Writing to a File
+
+```bash
+# Default file export: CycloneDX VEX JSON
+reqpack audit pip flask --output reports/audit.json
+
+# SARIF export for CI tools
+reqpack audit maven org.junit:junit:4.13 --output reports/audit.sarif
+
+# Explicit format
+reqpack audit ./reqpack.lua --format cyclonedx-vex-json --output reports/audit.json
+```
+
+### Exit Codes
+
+- Without `--output`: exit `0` when no findings exist, `1` when findings are present.
+- With `--output`: exit `0` when export succeeds, even if findings are present.
 
 ---
 

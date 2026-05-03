@@ -58,12 +58,45 @@ void log_validation_blocked(const std::vector<ValidationFinding>& findings) {
     }
 }
 
+std::string package_specifier_from_info(const PackageInfo& item) {
+    if (item.version.empty()) {
+        return item.name;
+    }
+    return item.name + '@' + item.version;
+}
+
+std::vector<Request> expand_system_only_audit_requests(Executer* executor, const std::vector<Request>& requests) {
+    std::vector<Request> expanded = requests;
+    if (executor == nullptr) {
+        return expanded;
+    }
+
+    for (Request& request : expanded) {
+        if (request.action != ActionType::AUDIT || request.system.empty() || request.usesLocalTarget || !request.packages.empty()) {
+            continue;
+        }
+
+        const std::vector<PackageInfo> installedPackages = executor->list(request);
+        request.packages.clear();
+        request.packages.reserve(installedPackages.size());
+        for (const PackageInfo& item : installedPackages) {
+            if (item.name.empty()) {
+                continue;
+            }
+            request.packages.push_back(package_specifier_from_info(item));
+        }
+    }
+
+    return expanded;
+}
+
 } // namespace
 
 Orchestrator::Orchestrator(std::vector<Request> requests, const ReqPackConfig& config)
 	: config(config), requests(std::move(requests)) {
 	this->registry  = new Registry(this->config);
 	this->planner   = new Planner(this->registry, this->registry->getDatabase(), this->config);
+	this->auditExporter = new AuditExporter(this->registry, this->config);
 	this->sbomExporter = new SbomExporter(this->registry, this->config);
 	this->snapshotExporter = new SnapshotExporter(this->config);
 	this->validator = new Validator(this->registry, this->config);
@@ -73,6 +106,7 @@ Orchestrator::Orchestrator(std::vector<Request> requests, const ReqPackConfig& c
 Orchestrator::~Orchestrator() {
 	delete this->registry;
 	delete this->planner;
+	delete this->auditExporter;
 	delete this->sbomExporter;
 	delete this->snapshotExporter;
 	delete this->validator;
@@ -207,7 +241,10 @@ int Orchestrator::run() {
 		return 0;
 	}
 
-	Graph* graph = this->planner->plan(this->requests);
+	const std::vector<Request> plannedRequests = this->requests.front().action == ActionType::AUDIT ?
+		expand_system_only_audit_requests(this->executor, this->requests) :
+		this->requests;
+	Graph* graph = this->planner->plan(plannedRequests);
 	if (this->requests.front().action == ActionType::SBOM) {
 		if (graph != nullptr) {
 			(void)this->sbomExporter->exportGraph(*graph, this->requests.front());
@@ -215,6 +252,19 @@ int Orchestrator::run() {
 		delete graph;
 		cleanupTempFiles(tempFiles);
 		return 0;
+	}
+	if (this->requests.front().action == ActionType::AUDIT) {
+		const std::vector<ValidationFinding> findings = this->validator->audit(graph);
+		const bool exported = graph != nullptr && this->auditExporter->exportGraph(*graph, findings, this->requests.front());
+		delete graph;
+		cleanupTempFiles(tempFiles);
+		if (!exported) {
+			return 1;
+		}
+		if (!this->requests.front().outputPath.empty()) {
+			return 0;
+		}
+		return findings.empty() ? 0 : 1;
 	}
 	Graph* validatedGraph = this->validator->validate(graph);
 	if (validatedGraph == nullptr) {

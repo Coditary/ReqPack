@@ -37,6 +37,50 @@ bool is_url(const std::string& value) {
     return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0;
 }
 
+bool supports_manifest_path(ActionType action) {
+    return action == ActionType::INSTALL || action == ActionType::AUDIT;
+}
+
+std::optional<std::filesystem::path> resolve_manifest_path_argument(const std::string& argument) {
+    if (argument.empty()) {
+        return std::nullopt;
+    }
+
+    const bool explicitPath = argument[0] == '.' || argument[0] == '/';
+    const bool bareManifestFilename = std::filesystem::path(argument).filename() == MANIFEST_FILENAME;
+    if (!explicitPath && !bareManifestFilename) {
+        return std::nullopt;
+    }
+
+    std::error_code fsError;
+    const std::filesystem::path candidatePath = std::filesystem::absolute(std::filesystem::path(argument), fsError);
+    if (fsError) {
+        return std::nullopt;
+    }
+
+    if (std::filesystem::is_directory(candidatePath, fsError) && !fsError) {
+        return candidatePath / MANIFEST_FILENAME;
+    }
+
+    fsError.clear();
+    if (std::filesystem::is_regular_file(candidatePath, fsError) && !fsError && candidatePath.filename() == MANIFEST_FILENAME) {
+        return candidatePath;
+    }
+
+    return std::nullopt;
+}
+
+std::optional<AuditOutputFormat> infer_audit_output_format_from_path(const std::string& path) {
+    const std::string extension = to_lower(std::filesystem::path(path).extension().string());
+    if (extension == ".sarif") {
+        return AuditOutputFormat::SARIF;
+    }
+    if (!extension.empty()) {
+        return AuditOutputFormat::CYCLONEDX_VEX_JSON;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package Manager Interface")) {
@@ -49,6 +93,7 @@ Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package M
 
 bool Cli::handleHelp(int argc, char* argv[]) {
     pendingHelpAction_ = ActionType::UNKNOWN;
+    lastParseFailed_ = false;
     bool hasHelp = false;
     ActionType helpAction = ActionType::UNKNOWN;
 
@@ -79,6 +124,7 @@ std::vector<Request> Cli::parse(int argc, char* argv[]) {
 
 std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& config) {
     pendingHelpAction_ = ActionType::UNKNOWN;
+    lastParseFailed_ = false;
     if (argc < 2) {
         return {};
     }
@@ -105,6 +151,7 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
     try {
         app->parse(argc, argv);
     } catch (const CLI::ParseError&) {
+        lastParseFailed_ = true;
         return {};
     }
 
@@ -114,11 +161,14 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
 
 std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const ReqPackConfig& config) {
     pendingHelpAction_ = ActionType::UNKNOWN;
+    lastParseFailed_ = false;
     std::vector<Request> requests;
     std::vector<std::string> global_flags;
     std::unordered_map<std::string, std::size_t> request_index_by_system;
     std::string sbomOutputFormat;
     std::string sbomOutputPath;
+    std::string auditOutputFormat;
+    std::string auditOutputPath;
     std::string snapshotOutputPath;
 
     if (arguments.empty()) {
@@ -182,60 +232,54 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
     }
 
     if (action == ActionType::UNKNOWN) {
+        lastParseFailed_ = true;
         return requests;
     }
 
     if (action == ActionType::REMOTE) {
+        lastParseFailed_ = false;
         return requests;
     }
 
     // Manifest mode: reqpack install <dir-path>
     // If the first non-flag argument after the action looks like a filesystem path
     // and resolves to a directory, load reqpack.lua from it.
-    if (action == ActionType::INSTALL) {
+    if (supports_manifest_path(action)) {
         for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
             const std::string& arg = requestArguments[i];
             if (is_flag(arg)) {
                 continue;
             }
 
-            // Only treat as a path if it starts with '.' or '/'.
-            // This avoids shadowing system names like "dnf" or "npm".
-            const bool looksLikePath = !arg.empty() && (arg[0] == '.' || arg[0] == '/');
-            if (!looksLikePath) {
+            const std::optional<std::filesystem::path> manifestPath = resolve_manifest_path_argument(arg);
+            if (!manifestPath.has_value()) {
                 break;  // first non-flag arg is not a path → normal mode
             }
 
-            std::error_code fsError;
-            const std::filesystem::path candidatePath =
-                std::filesystem::absolute(std::filesystem::path(arg), fsError);
-
-            if (fsError || !std::filesystem::is_directory(candidatePath, fsError) || fsError) {
-                break;  // path doesn't resolve to a directory → normal mode
-            }
-
-            const std::filesystem::path manifestPath = candidatePath / MANIFEST_FILENAME;
-            if (!std::filesystem::exists(manifestPath)) {
+            if (!std::filesystem::exists(manifestPath.value())) {
                 Logger::instance().err(
-                    "no " + MANIFEST_FILENAME + " found in '" + candidatePath.string() + "'"
+                    "no " + MANIFEST_FILENAME + " found in '" + manifestPath->parent_path().string() + "'"
                 );
+                lastParseFailed_ = true;
                 return {};
             }
 
             std::vector<ManifestEntry> entries;
             try {
-                entries = ManifestLoader::load(manifestPath);
+                entries = ManifestLoader::load(manifestPath.value());
             } catch (const std::exception& e) {
                 Logger::instance().err(
-                    "failed to load manifest '" + manifestPath.string() + "': " + e.what()
+                    "failed to load manifest '" + manifestPath->string() + "': " + e.what()
                 );
+                lastParseFailed_ = true;
                 return {};
             }
 
             if (entries.empty()) {
                 Logger::instance().err(
-                    "manifest '" + manifestPath.string() + "' contains no packages"
+                    "manifest '" + manifestPath->string() + "' contains no packages"
                 );
+                lastParseFailed_ = true;
                 return {};
             }
 
@@ -303,20 +347,47 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         if (is_flag(argument)) {
             if (action == ActionType::SBOM && argument == "--format") {
                 if (i + 1 >= requestArguments.size()) {
+                    lastParseFailed_ = true;
                     return {};
                 }
                 sbomOutputFormat = requestArguments[++i];
+                if (!sbom_output_format_from_string(sbomOutputFormat).has_value()) {
+                    lastParseFailed_ = true;
+                    return {};
+                }
                 continue;
             }
             if (action == ActionType::SBOM && argument == "--output") {
                 if (i + 1 >= requestArguments.size()) {
+                    lastParseFailed_ = true;
                     return {};
                 }
                 sbomOutputPath = requestArguments[++i];
                 continue;
             }
+            if (action == ActionType::AUDIT && argument == "--format") {
+                if (i + 1 >= requestArguments.size()) {
+                    lastParseFailed_ = true;
+                    return {};
+                }
+                auditOutputFormat = requestArguments[++i];
+                if (!audit_output_format_from_string(auditOutputFormat).has_value()) {
+                    lastParseFailed_ = true;
+                    return {};
+                }
+                continue;
+            }
+            if (action == ActionType::AUDIT && argument == "--output") {
+                if (i + 1 >= requestArguments.size()) {
+                    lastParseFailed_ = true;
+                    return {};
+                }
+                auditOutputPath = requestArguments[++i];
+                continue;
+            }
             if (action == ActionType::SNAPSHOT && argument == "--output") {
                 if (i + 1 >= requestArguments.size()) {
+                    lastParseFailed_ = true;
                     return {};
                 }
                 snapshotOutputPath = requestArguments[++i];
@@ -331,6 +402,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
             if (!current_system.empty()) {
                 Request& request = ensure_request(current_system);
                 if (!assign_local_target(request, current_system, argument)) {
+					lastParseFailed_ = true;
                     return {};
                 }
             } else {
@@ -348,6 +420,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
             if (!current_system.empty()) {
                 Request& request = ensure_request(current_system);
                 if (!assign_local_target(request, current_system, argument)) {
+					lastParseFailed_ = true;
                     return {};
                 }
             } else {
@@ -364,6 +437,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         if (scoped_package.has_value()) {            Request& request = ensure_request(scoped_package->first);
 			if (request.usesLocalTarget) {
 				Logger::instance().err("install cannot mix local path and package names for system '" + request.system + "'");
+				lastParseFailed_ = true;
 				return {};
 			}
             request.packages.push_back(scoped_package->second);
@@ -388,12 +462,14 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         Request& request = ensure_request(current_system);
 		if (action == ActionType::INSTALL && is_existing_path(argument)) {
 			if (!assign_local_target(request, current_system, argument)) {
+				lastParseFailed_ = true;
 				return {};
 			}
 			continue;
 		}
 		if (request.usesLocalTarget) {
 			Logger::instance().err("install cannot mix local path and package names for system '" + current_system + "'");
+			lastParseFailed_ = true;
 			return {};
 		}
         request.packages.push_back(argument);
@@ -423,6 +499,17 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
                 request.outputFormat = to_string(config.sbom.defaultFormat);
             }
         }
+        if (action == ActionType::AUDIT) {
+            request.outputPath = auditOutputPath;
+            if (!auditOutputFormat.empty()) {
+                request.outputFormat = auditOutputFormat;
+            } else if (!auditOutputPath.empty()) {
+                const auto inferred = infer_audit_output_format_from_path(auditOutputPath);
+                request.outputFormat = to_string(inferred.value_or(AuditOutputFormat::CYCLONEDX_VEX_JSON));
+            } else {
+                request.outputFormat = to_string(AuditOutputFormat::TABLE);
+            }
+        }
         if (action == ActionType::SNAPSHOT) {
             request.outputPath = snapshotOutputPath;
         }
@@ -442,6 +529,25 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         requests.push_back(std::move(request));
     }
 
+    if (action == ActionType::AUDIT && requests.empty()) {
+        for (const std::string& system : discover_primary_systems(config)) {
+            Request request;
+            request.action = action;
+            request.system = system;
+            request.outputPath = auditOutputPath;
+            if (!auditOutputFormat.empty()) {
+                request.outputFormat = auditOutputFormat;
+            } else if (!auditOutputPath.empty()) {
+                const auto inferred = infer_audit_output_format_from_path(auditOutputPath);
+                request.outputFormat = to_string(inferred.value_or(AuditOutputFormat::CYCLONEDX_VEX_JSON));
+            } else {
+                request.outputFormat = to_string(AuditOutputFormat::TABLE);
+            }
+            request.flags = global_flags;
+            requests.push_back(std::move(request));
+        }
+    }
+
     if (action == ActionType::SNAPSHOT && requests.empty()) {
         Request request;
         request.action = action;
@@ -454,6 +560,10 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 
 ReqPackConfigOverrides Cli::parseConfigOverrides(int argc, char* argv[]) const {
     return extract_cli_config_overrides(argc, argv);
+}
+
+bool Cli::parseFailed() const {
+    return lastParseFailed_;
 }
 
 void Cli::print_help() {
@@ -477,6 +587,7 @@ void Cli::print_help() {
         "  info                    Shows package info for a system\n"
         "  ensure [systems...]     Ensures plugin requirements are installed\n"
         "  sbom                    Exports planned graph as table or JSON\n"
+        "  audit                   Audits planned graph for vulnerabilities\n"
         "  snapshot                Snapshots installed packages to reqpack.lua\n"
         "  serve                   Reads commands from stdin and keeps process running\n"
         "  remote                  Connects to remote profile from ~/.reqpack/remote.lua\n"
@@ -488,6 +599,9 @@ void Cli::print_help() {
         "\nSBOM:\n"
         "  --format <name>         Uses table, json, or cyclonedx-json\n"
         "  --output <path>         Writes SBOM output to file\n"
+        "\nAudit:\n"
+        "  --format <name>         Uses table, json, cyclonedx-vex-json, or sarif\n"
+        "  --output <path>         Writes audit output to file\n"
         "  --force                 Overwrites existing output file without prompting\n"
         "\nRun 'ReqPack <command> -h' for command-specific help.\n";
     std::cout.flush();
@@ -705,6 +819,36 @@ void Cli::print_command_help(ActionType action) {
                 "  ReqPack sbom --format json\n"
                 "  ReqPack sbom --format cyclonedx-json --output sbom.json\n";
             break;
+        case ActionType::AUDIT:
+            help =
+                "Usage: ReqPack audit [<system>...] [options]\n"
+                "       ReqPack audit <system1>:<package> <system2>:<package> [options]\n"
+                "       ReqPack audit <dir-path> [options]\n"
+                "       ReqPack audit <manifest-path>/reqpack.lua [options]\n"
+                "\n"
+                "Audit planned packages for vulnerabilities and export findings.\n"
+                "If no system is specified, all known primary systems are included.\n"
+                "If a system is given without explicit packages, ReqPack audits installed packages reported by that system.\n"
+                "Directory and direct reqpack.lua manifest input are supported.\n"
+                "Without --output, audit prints a table and returns exit code 1 when findings exist.\n"
+                "With --output, findings are exported but do not change the exit code.\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --format <name>         Output format: table, json, cyclonedx-vex-json, sarif\n"
+                "  --output <path>         Write audit output to file instead of stdout\n"
+                "  --force                 Overwrite existing output file without prompting\n"
+                "  --non-interactive       Disable all prompts (use defaults)\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack audit\n"
+                "  ReqPack audit npm react\n"
+                "  ReqPack audit npm:react maven:org.junit:junit\n"
+                "  ReqPack audit .\n"
+                "  ReqPack audit ./reqpack.lua\n"
+                "  ReqPack audit --format cyclonedx-vex-json --output audit.json\n"
+                "  ReqPack audit --format sarif --output audit.sarif\n";
+            break;
         case ActionType::OUTDATED:
             help =
                 "Usage: ReqPack outdated [<system>] [options]\n"
@@ -834,6 +978,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "sbom") {
         return ActionType::SBOM;
+    }
+    if (normalized_command == "audit") {
+        return ActionType::AUDIT;
     }
     if (normalized_command == "outdated") {
         return ActionType::OUTDATED;

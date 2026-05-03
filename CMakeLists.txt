@@ -82,6 +82,7 @@ set(SOURCES
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
     src/main/cpp/core/security_gateway_service.cpp
+    src/main/cpp/core/audit_exporter.cpp
     src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/core/validator.cpp
@@ -126,6 +127,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
     src/main/cpp/core/security_gateway_service.cpp
+    src/main/cpp/core/audit_exporter.cpp
     src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/output/logger.cpp
@@ -171,6 +173,7 @@ add_executable(core_unit_tests
     tests/unit/core/rq_repository/core_tests.cpp
     tests/unit/core/rqp_state_store/core_tests.cpp
     tests/unit/core/osv/core_tests.cpp
+    tests/unit/core/audit/export_tests.cpp
     tests/unit/core/sbom/export_tests.cpp
     tests/unit/core/transaction_database/serialization_tests.cpp
     tests/unit/core/validator/policy_tests.cpp
@@ -190,6 +193,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
     src/main/cpp/core/security_gateway_service.cpp
+    src/main/cpp/core/audit_exporter.cpp
     src/main/cpp/core/sbom_exporter.cpp
     src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/core/history_manager.cpp

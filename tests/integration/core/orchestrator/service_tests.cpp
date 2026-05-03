@@ -927,6 +927,200 @@ TEST_CASE("orchestrator sbom command exports planned graph without executing plu
     CHECK_FALSE(std::filesystem::exists(installMarker));
 }
 
+TEST_CASE("orchestrator audit command exports sarif without executing plugin install", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-audit-export"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    const std::filesystem::path outputPath = tempDir.path() / "audit.sarif";
+
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-demo",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "critical demo package issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "demo-osv", "name": "sample"},
+                "versions": ["1.0.0"]
+            }]
+        }
+    ])");
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    osvFeedUrl = '" + feedPath.string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'always',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "audit",
+        "apply",
+        "sample@1.0.0",
+        "--output",
+        outputPath.string(),
+    }, status);
+
+    CHECK(status == 0);
+    CHECK(output.find(outputPath.string()) != std::string::npos);
+    REQUIRE(std::filesystem::exists(outputPath));
+    const std::string report = read_file(outputPath);
+    CHECK(report.find("\"runs\"") != std::string::npos);
+    CHECK(report.find("\"ruleId\": \"CVE-2026-demo\"") != std::string::npos);
+
+    const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
+    CHECK_FALSE(std::filesystem::exists(installMarker));
+}
+
+TEST_CASE("orchestrator audit command returns non-zero on stdout findings", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-audit-stdout"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-demo",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "critical demo package issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "demo-osv", "name": "sample"},
+                "versions": ["1.0.0"]
+            }]
+        }
+    ])");
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    osvFeedUrl = '" + feedPath.string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'always',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "audit",
+        "apply",
+        "sample@1.0.0",
+    }, status);
+
+    CHECK(status != 0);
+    CHECK(output.find("CVE-2026-demo") != std::string::npos);
+    CHECK(output.find("react") == std::string::npos);
+
+    const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
+    CHECK_FALSE(std::filesystem::exists(installMarker));
+}
+
+TEST_CASE("orchestrator audit system-only request audits installed packages", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-audit-system-only"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-system-only",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "installed package issue",
+            "severity": [{"type": "CVSS_V3", "score": "7.5"}],
+            "affected": [{
+                "package": {"ecosystem": "demo-osv", "name": "apply"},
+                "versions": ["1.0.0"]
+            }]
+        }
+    ])");
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    osvFeedUrl = '" + feedPath.string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'always',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "audit",
+        "apply",
+    }, status);
+
+    CHECK(status != 0);
+    CHECK(output.find("CVE-2026-system-only") != std::string::npos);
+    CHECK(output.find("apply\tapply\t1.0.0") != std::string::npos);
+
+    const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
+    CHECK_FALSE(std::filesystem::exists(installMarker));
+}
+
 TEST_CASE("reqpack install stdin batches install commands until eof", "[integration][orchestrator][stdin]") {
     TempDir tempDir{"reqpack-orchestrator-install-stdin"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";

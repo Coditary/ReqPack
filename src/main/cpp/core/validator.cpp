@@ -85,6 +85,30 @@ Graph* Validator::validate(Graph *graph) {
 	return graph;
 }
 
+std::vector<ValidationFinding> Validator::audit(Graph* graph) {
+	this->lastFindings.clear();
+	if (graph == nullptr) {
+		return {};
+	}
+
+	std::vector<ValidationFinding> findings;
+	if (this->config.security.autoFetch && !this->config.security.gateways.empty() &&
+	    !(this->config.security.osvRefreshMode == OsvRefreshMode::MANUAL && this->database.hasAdvisories())) {
+		findings = this->securityGateway.ensureEcosystemsReady(this->securityGateway.resolvePackageEcosystems(this->collectPackages(*graph)));
+	} else {
+		findings = this->syncService.ensureReady();
+	}
+	const std::vector<ValidationFinding> graphFindings = this->scanGraph(*graph);
+	findings.insert(findings.end(), graphFindings.begin(), graphFindings.end());
+	findings = validator_apply_rules(
+		findings,
+		this->config.security.allowVulnerabilityIds,
+		this->config.security.ignoreVulnerabilityIds
+	);
+	this->lastFindings = findings;
+	return findings;
+}
+
 const std::vector<ValidationFinding>& Validator::getLastFindings() const {
 	return this->lastFindings;
 }
