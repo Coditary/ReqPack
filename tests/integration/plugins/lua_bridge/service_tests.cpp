@@ -212,6 +212,8 @@ function plugin.search(context, prompt)
     {
       name = prompt,
       version = BOOTSTRAP_READY,
+      type = "cli",
+      architecture = "noarch",
       description = context.plugin.script,
     }
   }
@@ -435,6 +437,8 @@ TEST_CASE("lua bridge loads bootstrap state and parses query values", "[integrat
     REQUIRE(searched.size() == 1);
     CHECK(searched[0].name == "alpha beta");
     CHECK(searched[0].version == "yes");
+    CHECK(searched[0].packageType == "cli");
+    CHECK(searched[0].architecture == "noarch");
     CHECK(searched[0].description == scriptPath.string());
 
     const PackageInfo info = bridge.info(context, "artifact");

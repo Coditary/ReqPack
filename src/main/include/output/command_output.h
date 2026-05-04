@@ -69,6 +69,8 @@ CommandOutputBlock make_command_raw_text_block(const std::string& rawText);
 std::vector<CommandOutputField> package_info_to_fields(const PackageInfo& info);
 std::vector<std::vector<std::string>> package_infos_to_rows(const std::vector<PackageInfo>& items,
 	                                                      bool includeSystem);
+std::vector<std::vector<std::string>> package_search_infos_to_rows(const std::vector<PackageInfo>& items,
+	                                                             bool includeSystem);
 
 void render_command_output(const CommandOutput& output);
 std::string render_command_output_text(const CommandOutput& output);

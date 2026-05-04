@@ -110,6 +110,7 @@ std::vector<CommandOutputField> package_info_to_fields(const PackageInfo& info) 
 	append_field(fields, "Repository", info.repository);
 	append_field(fields, "Channel", info.channel);
 	append_field(fields, "Section", info.section);
+	append_field(fields, "Type", info.packageType);
 	append_field(fields, "Architecture", info.architecture);
 	append_field(fields, "License", info.license);
 	append_field(fields, "Author", info.author);
@@ -143,6 +144,25 @@ std::vector<std::vector<std::string>> package_infos_to_rows(const std::vector<Pa
 		}
 		row.push_back(item.name);
 		row.push_back(item.version);
+		row.push_back(item.summary.empty() ? item.description : item.summary);
+		rows.push_back(std::move(row));
+	}
+	return rows;
+}
+
+std::vector<std::vector<std::string>> package_search_infos_to_rows(const std::vector<PackageInfo>& items,
+	                                                             bool includeSystem) {
+	std::vector<std::vector<std::string>> rows;
+	rows.reserve(items.size());
+	for (const auto& item : items) {
+		std::vector<std::string> row;
+		if (includeSystem) {
+			row.push_back(item.system);
+		}
+		row.push_back(item.name);
+		row.push_back(item.version);
+		row.push_back(item.packageType);
+		row.push_back(item.architecture);
 		row.push_back(item.summary.empty() ? item.description : item.summary);
 		rows.push_back(std::move(row));
 	}

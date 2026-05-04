@@ -79,7 +79,31 @@ std::optional<AuditOutputFormat> infer_audit_output_format_from_path(const std::
     if (!extension.empty()) {
         return AuditOutputFormat::CYCLONEDX_VEX_JSON;
     }
-    return std::nullopt;
+	return std::nullopt;
+}
+
+bool consume_search_filter_flag(ActionType action,
+	                             const std::vector<std::string>& arguments,
+	                             std::size_t& index,
+	                             std::vector<std::string>& flags) {
+	if (action != ActionType::SEARCH) {
+		return false;
+	}
+	const std::string& argument = arguments[index];
+	const char* key = nullptr;
+	if (argument == "--arch") {
+		key = "arch";
+	} else if (argument == "--type") {
+		key = "type";
+	} else {
+		return false;
+	}
+	if (index + 1 >= arguments.size() || arguments[index + 1].empty()
+	    || (arguments[index + 1].rfind("--", 0) == 0 && arguments[index + 1].size() > 2)) {
+		return true;
+	}
+	flags.push_back(std::string(key) + "=" + to_lower(arguments[++index]));
+	return true;
 }
 
 }  // namespace
@@ -346,8 +370,16 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
     for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
         const std::string& argument = requestArguments[i];
 
-        if (is_flag(argument)) {
-            if (action == ActionType::SBOM && argument == "--format") {
+		if (is_flag(argument)) {
+			const std::size_t previousFlagCount = global_flags.size();
+			if (consume_search_filter_flag(action, requestArguments, i, global_flags)) {
+				if (global_flags.size() == previousFlagCount) {
+					lastParseFailed_ = true;
+					return {};
+				}
+				continue;
+			}
+			if (action == ActionType::SBOM && argument == "--format") {
                 if (i + 1 >= requestArguments.size()) {
                     lastParseFailed_ = true;
                     return {};
@@ -732,12 +764,16 @@ void Cli::print_command_help(ActionType action) {
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
+                "  --arch <value>          Filter search results by architecture (repeatable)\n"
+                "  --type <value>          Filter search results by package type/class (repeatable)\n"
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
                 "  ReqPack search apt curl\n"
                 "  ReqPack search npm react\n"
-                "  ReqPack search brew \"json tool\"\n";
+                "  ReqPack search brew \"json tool\"\n"
+                "  ReqPack search dnf python3 --arch noarch --arch x86_64\n"
+                "  ReqPack search dnf python3 --type doc --type devel\n";
             break;
         case ActionType::LIST:
             help =

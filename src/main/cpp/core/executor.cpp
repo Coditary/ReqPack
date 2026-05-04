@@ -7,6 +7,7 @@
 #include <boost/graph/topological_sort.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <iterator>
 #include <queue>
 #include <set>
@@ -14,6 +15,45 @@
 namespace {
 
 constexpr const char* INTERNAL_SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
+
+std::string normalize_search_filter_value(std::string value) {
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+		return static_cast<char>(std::tolower(c));
+	});
+	return value;
+}
+
+struct SearchFilters {
+	std::set<std::string> architectures;
+	std::set<std::string> packageTypes;
+};
+
+SearchFilters parse_search_filters(const std::vector<std::string>& flags) {
+	SearchFilters filters;
+	for (const auto& flag : flags) {
+		if (flag.rfind("arch=", 0) == 0 && flag.size() > 5) {
+			filters.architectures.insert(normalize_search_filter_value(flag.substr(5)));
+		}
+		if (flag.rfind("type=", 0) == 0 && flag.size() > 5) {
+			filters.packageTypes.insert(normalize_search_filter_value(flag.substr(5)));
+		}
+	}
+	return filters;
+}
+
+bool matches_search_filters(const PackageInfo& info, const SearchFilters& filters) {
+	if (!filters.architectures.empty()) {
+		if (info.architecture.empty() || !filters.architectures.contains(normalize_search_filter_value(info.architecture))) {
+			return false;
+		}
+	}
+	if (!filters.packageTypes.empty()) {
+		if (info.packageType.empty() || !filters.packageTypes.contains(normalize_search_filter_value(info.packageType))) {
+			return false;
+		}
+	}
+	return true;
+}
 
 bool samePackage(const Package& left, const Package& right) {
 	return left.action == right.action &&
@@ -185,7 +225,15 @@ std::vector<PackageInfo> Executer::search(const Request& request) const {
 		}
 		prompt += resolvedRequest->packages[index];
 	}
-	return plugin->search(this->buildPluginContext(plugin, taskGroup), prompt);
+	std::vector<PackageInfo> results = plugin->search(this->buildPluginContext(plugin, taskGroup), prompt);
+	const SearchFilters filters = parse_search_filters(resolvedRequest->flags);
+	if (filters.architectures.empty() && filters.packageTypes.empty()) {
+		return results;
+	}
+	results.erase(std::remove_if(results.begin(), results.end(), [&](const PackageInfo& info) {
+		return !matches_search_filters(info, filters);
+	}), results.end());
+	return results;
 }
 
 PackageInfo Executer::info(const Request& request) const {

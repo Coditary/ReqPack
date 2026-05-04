@@ -136,6 +136,8 @@ function plugin.search(context, prompt)
     {
       name = prompt,
       version = join(context.flags),
+      type = "doc",
+      architecture = "noarch",
       description = context.plugin.script,
       author = context.plugin.id,
     }
@@ -536,8 +538,37 @@ TEST_CASE("executor search joins package prompt and resolves aliases", "[integra
     CHECK(registry.isLoaded("query"));
     CHECK(packages[0].name == "alpha beta gamma");
     CHECK(packages[0].version == "--exact");
+    CHECK(packages[0].packageType == "doc");
+    CHECK(packages[0].architecture == "noarch");
     CHECK(packages[0].description == scriptPath.string());
     CHECK(packages[0].author == "query");
+}
+
+TEST_CASE("executor search applies arch and type post filters", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-search-filters"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+
+    add_plugin_script(tempDir.path() / "plugins", "query", QUERY_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Request request;
+    request.action = ActionType::SEARCH;
+    request.system = "query";
+    request.packages = {"alpha"};
+    request.flags = {"arch=noarch", "type=doc"};
+
+    const std::vector<PackageInfo> packages = executer.search(request);
+    REQUIRE(packages.size() == 1);
+    CHECK(packages[0].name == "alpha");
+
+    request.flags = {"arch=x86_64"};
+    CHECK(executer.search(request).empty());
+
+    request.flags = {"type=cli"};
+    CHECK(executer.search(request).empty());
 }
 
 TEST_CASE("executor info forwards first package and flags", "[integration][executor][service]") {

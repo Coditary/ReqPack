@@ -265,6 +265,8 @@ void register_types(sol::state& lua) {
         "repository", &PackageInfo::repository,
         "channel", &PackageInfo::channel,
         "section", &PackageInfo::section,
+        "packageType", &PackageInfo::packageType,
+        "type", &PackageInfo::packageType,
         "architecture", &PackageInfo::architecture,
         "license", &PackageInfo::license,
         "author", &PackageInfo::author,
@@ -403,6 +405,7 @@ PackageInfo package_info_from_lua_table(const sol::table& info) {
 	packageInfo.repository = info.get_or("repository", std::string{});
 	packageInfo.channel = info.get_or("channel", std::string{});
 	packageInfo.section = info.get_or("section", std::string{});
+	packageInfo.packageType = info.get_or("packageType", info.get_or("type", std::string{}));
 	packageInfo.architecture = info.get_or("architecture", std::string{});
 	packageInfo.license = info.get_or("license", std::string{});
 	packageInfo.author = info.get_or("author", std::string{});

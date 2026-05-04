@@ -135,5 +135,7 @@ private:
 	                           const std::string& step) const;
 
 	std::vector<std::string> wrapText(const std::string& text, size_t width) const;
+	bool isPackageSummaryTable() const;
 	void renderFieldValueTable() const;
+	void renderWrappedPackageTable() const;
 };

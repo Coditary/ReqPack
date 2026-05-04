@@ -60,6 +60,95 @@ local function shell_join(values)
     return table.concat(quoted, " ")
 end
 
+local function normalize_flag_value(value)
+    return trim(string.lower(tostring(value or "")))
+end
+
+local function search_filters(flags)
+    local filters = {
+        arch = {},
+        type = {},
+    }
+    for _, flag in ipairs(flags or {}) do
+        local arch = tostring(flag):match("^arch=(.+)$")
+        if arch ~= nil and arch ~= "" then
+            filters.arch[normalize_flag_value(arch)] = true
+        end
+        local package_type = tostring(flag):match("^type=(.+)$")
+        if package_type ~= nil and package_type ~= "" then
+            filters.type[normalize_flag_value(package_type)] = true
+        end
+    end
+    return filters
+end
+
+local function table_has_entries(values)
+    return next(values) ~= nil
+end
+
+local function dnf_package_type(name)
+    local normalized = normalize_flag_value(name)
+    if normalized:match("%-devel$") then return "devel" end
+    if normalized:match("%-doc$") then return "doc" end
+    if normalized:match("%-libs?$") then return "libs" end
+    if normalized:match("%-common$") then return "common" end
+    if normalized:match("%-tools?$") then return "tools" end
+    if normalized:match("%-plugin[s]?$") then return "plugin" end
+    if normalized:match("%-cli$") then return "cli" end
+    return "package"
+end
+
+local function split_package_arch(name)
+    local package_name, arch = tostring(name or ""):match("^(.-)%.([^.]+)$")
+    if package_name ~= nil and arch ~= nil and arch ~= "" then
+        return package_name, arch
+    end
+    return tostring(name or ""), ""
+end
+
+local function collect_search_versions(entries)
+    local versions = {}
+    local batch = {}
+
+    local function load_batch()
+        if #batch == 0 then
+            return
+        end
+        local result = reqpack.exec.run(
+            "dnf repoquery --latest-limit=1 --qf '%{name}.%{arch}\t%{version}-%{release}\n' " .. shell_join(batch) .. " 2>/dev/null"
+        )
+        for line in (result.stdout or ""):gmatch("[^\r\n]+") do
+            local trimmed = trim(line)
+            if trimmed ~= "" and trimmed ~= "Updating and loading repositories:" and trimmed ~= "Repositories loaded." then
+                local name_with_arch, version = trimmed:match("^(.-)\t(.+)$")
+                if name_with_arch ~= nil and version ~= nil then
+                    versions[name_with_arch] = trim(version)
+                end
+            end
+        end
+        batch = {}
+    end
+
+    for _, entry in ipairs(entries or {}) do
+        batch[#batch + 1] = entry.name_with_arch
+        if #batch >= 250 then
+            load_batch()
+        end
+    end
+    load_batch()
+    return versions
+end
+
+local function matches_search_filters(item, filters)
+    if table_has_entries(filters.arch) and not filters.arch[normalize_flag_value(item.architecture)] then
+        return false
+    end
+    if table_has_entries(filters.type) and not filters.type[normalize_flag_value(item.type)] then
+        return false
+    end
+    return true
+end
+
 local function dnf_progress_rules()
     return {
         initial = "running",
@@ -405,18 +494,34 @@ function plugin.outdated(context)
 end
 
 function plugin.search(context, prompt)
+    local filters = search_filters(context.flags)
     local result = context.exec.run("dnf search " .. shell_quote(prompt) .. " --quiet")
     local items = {}
     for line in (result.stdout or ""):gmatch("[^\r\n]+") do
-        local name = line:match("^(%S+)")
-        if name ~= nil and name ~= "Last" and name ~= "Matched" then
-            table.insert(items, {
-                name = name,
+        local entry = trim(line)
+        local name_with_arch, summary = entry:match("^(%S+)%s+(.+)$")
+        if name_with_arch ~= nil and not entry:match("^Last metadata expiration check:") and not entry:match("^Matched fields:") then
+            local package_name, architecture = split_package_arch(name_with_arch)
+            local item = {
+                name_with_arch = name_with_arch,
+                name = package_name,
                 version = "repo",
-                description = trim(line)
-            })
+                type = dnf_package_type(package_name),
+                architecture = architecture,
+                description = trim(summary),
+            }
+            if matches_search_filters(item, filters) then
+                table.insert(items, item)
+            end
         end
     end
+
+    local versions = collect_search_versions(items)
+    for _, item in ipairs(items) do
+        item.version = versions[item.name_with_arch] or item.version
+        item.name_with_arch = nil
+    end
+
     context.events.searched(items)
     return items
 end

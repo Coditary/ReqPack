@@ -273,3 +273,25 @@ TEST_CASE("command output keeps table layout for non-info field value blocks", "
     CHECK(rendered.find("Package Count") != std::string::npos);
     CHECK(rendered.find(": reqpack.lua") == std::string::npos);
 }
+
+TEST_CASE("command output wraps oversized package tables to terminal width", "[unit][logger][format]") {
+    const ScopedEnvVar columns("COLUMNS", "72");
+
+    CommandOutput output;
+    output.mode = DisplayMode::SEARCH;
+    output.sessionItems = {"dnf"};
+    output.blocks.push_back(make_command_table_block(
+        {"System", "Name", "Version", "Type", "Architecture", "Description"},
+        {{"dnf", "python3-snakemake-storage-plugin-webdav.noarch", "1.2.3", "plugin", "noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
+    ));
+    output.success = true;
+    output.succeeded = 1;
+
+    const std::string rendered = render_command_output_text(output);
+    CHECK(rendered.find("python3-snakemake") != std::string::npos);
+    CHECK(rendered.find("webdav.noarch") != std::string::npos);
+    CHECK(rendered.find("plugin") != std::string::npos);
+    CHECK(rendered.find("noarch") != std::string::npos);
+    CHECK(rendered.find("Snakemake storage") != std::string::npos);
+    CHECK(rendered.find("webdav") != std::string::npos);
+}

@@ -29,7 +29,7 @@ bool package_info_has_details(const PackageInfo& item) {
 	return !item.packageId.empty() || !item.version.empty() || !item.latestVersion.empty() ||
 		!item.status.empty() || !item.installed.empty() || !item.summary.empty() || !item.description.empty() ||
 		!item.homepage.empty() || !item.documentation.empty() || !item.sourceUrl.empty() || !item.repository.empty() ||
-		!item.channel.empty() || !item.section.empty() || !item.architecture.empty() || !item.license.empty() ||
+		!item.channel.empty() || !item.section.empty() || !item.packageType.empty() || !item.architecture.empty() || !item.license.empty() ||
 		!item.author.empty() || !item.maintainer.empty() || !item.email.empty() || !item.publishedAt.empty() ||
 		!item.updatedAt.empty() || !item.size.empty() || !item.installedSize.empty() ||
 		!item.dependencies.empty() || !item.optionalDependencies.empty() || !item.provides.empty() ||
@@ -50,13 +50,21 @@ CommandOutput package_table_output(ActionType action,
 	}
 	const bool includeSystem = requests.size() > 1;
 	std::vector<std::string> headers;
+	const bool searchTable = action == ActionType::SEARCH;
 	if (includeSystem) {
 		headers.push_back("System");
 	}
 	headers.push_back("Name");
 	headers.push_back("Version");
-	headers.push_back("Summary");
-	output.blocks.push_back(make_command_table_block(headers, package_infos_to_rows(items, includeSystem)));
+	if (searchTable) {
+		headers.push_back("Type");
+		headers.push_back("Architecture");
+		headers.push_back("Description");
+		output.blocks.push_back(make_command_table_block(headers, package_search_infos_to_rows(items, includeSystem)));
+	} else {
+		headers.push_back("Summary");
+		output.blocks.push_back(make_command_table_block(headers, package_infos_to_rows(items, includeSystem)));
+	}
 	if (items.empty()) {
 		output.blocks.push_back(make_command_message_block("No results"));
 	}

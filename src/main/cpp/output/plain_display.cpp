@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <numeric>
 #include <sstream>
 #include <string>
 
@@ -221,6 +222,31 @@ std::vector<std::string> PlainDisplay::wrapText(const std::string& text, size_t 
 	return lines;
 }
 
+bool PlainDisplay::isPackageSummaryTable() const {
+	return (tableHeaders.size() == 3
+	        && tableHeaders[0] == "Name"
+	        && tableHeaders[1] == "Version"
+	        && tableHeaders[2] == "Summary")
+	    || (tableHeaders.size() == 5
+	        && tableHeaders[0] == "Name"
+	        && tableHeaders[1] == "Version"
+	        && tableHeaders[2] == "Type"
+	        && tableHeaders[3] == "Architecture"
+	        && tableHeaders[4] == "Description")
+	    || (tableHeaders.size() == 4
+	        && tableHeaders[0] == "System"
+	        && tableHeaders[1] == "Name"
+	        && tableHeaders[2] == "Version"
+	        && tableHeaders[3] == "Summary")
+	    || (tableHeaders.size() == 6
+	        && tableHeaders[0] == "System"
+	        && tableHeaders[1] == "Name"
+	        && tableHeaders[2] == "Version"
+	        && tableHeaders[3] == "Type"
+	        && tableHeaders[4] == "Architecture"
+	        && tableHeaders[5] == "Description");
+}
+
 void PlainDisplay::renderFieldValueTable() const {
 	const size_t terminalWidth = terminal_width();
 	const size_t keyWidth = std::min<size_t>(std::max<size_t>(colWidths.empty() ? 12 : colWidths[0], 12), 22);
@@ -239,6 +265,115 @@ void PlainDisplay::renderFieldValueTable() const {
 				out() << std::string(valueIndent, ' ');
 			}
 			out() << wrapped[lineIndex] << '\n';
+		}
+	}
+	out() << '\n';
+	out().flush();
+}
+
+void PlainDisplay::renderWrappedPackageTable() const {
+	const size_t terminalWidth = terminal_width();
+	const bool hasSystem = tableHeaders.size() == 4 || tableHeaders.size() == 6;
+	const bool extended = tableHeaders.size() == 5 || tableHeaders.size() == 6;
+	const size_t systemIndex = hasSystem ? 0 : static_cast<size_t>(-1);
+	const size_t nameIndex = hasSystem ? 1 : 0;
+	const size_t versionIndex = hasSystem ? 2 : 1;
+	const size_t typeIndex = extended ? (hasSystem ? 3 : 2) : static_cast<size_t>(-1);
+	const size_t archIndex = extended ? (hasSystem ? 4 : 3) : static_cast<size_t>(-1);
+	const size_t summaryIndex = extended ? (hasSystem ? 5 : 4) : (hasSystem ? 3 : 2);
+
+	std::vector<size_t> widths(tableHeaders.size(), 0);
+	for (size_t i = 0; i < tableHeaders.size(); ++i) {
+		widths[i] = tableHeaders[i].size();
+	}
+	for (const auto& row : tableRows) {
+		for (size_t i = 0; i < row.size() && i < widths.size(); ++i) {
+			widths[i] = std::max(widths[i], row[i].size());
+		}
+	}
+
+	if (hasSystem) {
+		widths[systemIndex] = std::clamp(widths[systemIndex], static_cast<size_t>(6), static_cast<size_t>(12));
+	}
+	widths[nameIndex] = std::clamp(widths[nameIndex], static_cast<size_t>(18), static_cast<size_t>(36));
+	widths[versionIndex] = std::clamp(widths[versionIndex], static_cast<size_t>(8), static_cast<size_t>(18));
+	if (extended) {
+		widths[typeIndex] = std::clamp(widths[typeIndex], static_cast<size_t>(6), static_cast<size_t>(12));
+		widths[archIndex] = std::clamp(widths[archIndex], static_cast<size_t>(8), static_cast<size_t>(12));
+	}
+
+	const size_t separatorWidth = tableHeaders.size() > 1 ? (tableHeaders.size() - 1) * 2 : 0;
+	size_t nonSummaryWidth = separatorWidth;
+	for (size_t i = 0; i < tableHeaders.size(); ++i) {
+		if (i != summaryIndex) {
+			nonSummaryWidth += widths[i];
+		}
+	}
+
+	size_t summaryWidth = terminalWidth > nonSummaryWidth ? terminalWidth - nonSummaryWidth : static_cast<size_t>(16);
+	const size_t minSummaryWidth = 20;
+	const size_t minNameWidth = 16;
+	const size_t minVersionWidth = 8;
+	const size_t minSystemWidth = 6;
+	const size_t minTypeWidth = 6;
+	const size_t minArchWidth = 8;
+	if (summaryWidth < minSummaryWidth) {
+		auto reclaim = [&](size_t index, size_t minWidth) {
+			if (summaryWidth >= minSummaryWidth) {
+				return;
+			}
+			const size_t reducible = widths[index] > minWidth ? widths[index] - minWidth : 0;
+			const size_t needed = minSummaryWidth - summaryWidth;
+			const size_t taken = std::min(reducible, needed);
+			widths[index] -= taken;
+			summaryWidth += taken;
+		};
+		reclaim(nameIndex, minNameWidth);
+		reclaim(versionIndex, minVersionWidth);
+		if (extended) {
+			reclaim(typeIndex, minTypeWidth);
+			reclaim(archIndex, minArchWidth);
+		}
+		if (hasSystem) {
+			reclaim(systemIndex, minSystemWidth);
+		}
+	}
+	widths[summaryIndex] = std::max(summaryWidth, tableHeaders[summaryIndex].size());
+
+	out() << '\n';
+	for (size_t i = 0; i < tableHeaders.size(); ++i) {
+		out() << std::left << std::setw(static_cast<int>(widths[i])) << decorateHeader(tableHeaders[i]);
+		if (i + 1 < tableHeaders.size()) {
+			out() << "  ";
+		}
+	}
+	out() << '\n';
+	for (size_t i = 0; i < tableHeaders.size(); ++i) {
+		out() << decorateRule(repeatChar('-', static_cast<int>(widths[i])));
+		if (i + 1 < tableHeaders.size()) {
+			out() << "  ";
+		}
+	}
+	out() << '\n';
+	for (const auto& row : tableRows) {
+		std::vector<std::vector<std::string>> wrappedCells;
+		wrappedCells.reserve(tableHeaders.size());
+		size_t rowHeight = 1;
+		for (size_t i = 0; i < tableHeaders.size(); ++i) {
+			const std::string cell = i < row.size() ? row[i] : std::string{};
+			wrappedCells.push_back(wrapText(cell, widths[i]));
+			rowHeight = std::max(rowHeight, wrappedCells.back().size());
+		}
+
+		for (size_t lineIndex = 0; lineIndex < rowHeight; ++lineIndex) {
+			for (size_t i = 0; i < tableHeaders.size(); ++i) {
+				const std::string segment = lineIndex < wrappedCells[i].size() ? wrappedCells[i][lineIndex] : std::string{};
+				out() << std::left << std::setw(static_cast<int>(widths[i])) << segment;
+				if (i + 1 < tableHeaders.size()) {
+					out() << "  ";
+				}
+			}
+			out() << '\n';
 		}
 	}
 	out() << '\n';
@@ -453,6 +588,16 @@ void PlainDisplay::onTableEnd() {
 	std::lock_guard<std::mutex> lock(mtx);
 	if (fieldValueTable) {
 		renderFieldValueTable();
+		tableHeaders.clear();
+		tableRows.clear();
+		colWidths.clear();
+		fieldValueTable = false;
+		return;
+	}
+	const size_t tableWidth = std::accumulate(colWidths.begin(), colWidths.end(), static_cast<size_t>(0))
+	    + (tableHeaders.size() > 1 ? (tableHeaders.size() - 1) * 2 : 0);
+	if (currentMode == DisplayMode::SEARCH && isPackageSummaryTable() && tableWidth > terminal_width()) {
+		renderWrappedPackageTable();
 		tableHeaders.clear();
 		tableRows.clear();
 		colWidths.clear();

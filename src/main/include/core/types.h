@@ -67,6 +67,7 @@ struct PackageInfo {
 	std::string repository;
 	std::string channel;
 	std::string section;
+	std::string packageType;
 	std::string architecture;
 	std::string license;
 	std::string author;

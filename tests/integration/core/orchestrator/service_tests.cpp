@@ -724,6 +724,8 @@ function plugin.search(context, prompt)
     {
       name = prompt,
       version = "2.0.0",
+      type = "doc",
+      architecture = "noarch",
       description = "searched by " .. context.plugin.id,
     }
   }
@@ -914,6 +916,8 @@ TEST_CASE("orchestrator search command prints executor search results", "[integr
     CHECK(output.find("SEARCH: query") != std::string::npos);
     CHECK(output.find("alpha beta") != std::string::npos);
     CHECK(output.find("2.0.0") != std::string::npos);
+    CHECK(output.find("doc") != std::string::npos);
+    CHECK(output.find("noarch") != std::string::npos);
     CHECK(output.find("searched by query") != std::string::npos);
 }
 
@@ -932,6 +936,97 @@ TEST_CASE("orchestrator info command prints executor info result", "[integration
     CHECK(output.find("Version") != std::string::npos);
     CHECK(output.find("3.0.0") != std::string::npos);
     CHECK(output.find("info from query") != std::string::npos);
+}
+
+TEST_CASE("orchestrator dnf search parses indented native dnf results", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-dnf-search"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "dnf");
+
+    write_file(fakeBin / "dnf",
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"search\" ]; then\n"
+        "  printf 'Matched fields: name (exact)\\n texlive-xurl.noarch\\tAllow url break at any alphanumerical character\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"$1\" = \"repoquery\" ]; then\n"
+        "  printf 'texlive-xurl.noarch\\tsvn61553-80.fc43\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "dnf").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+        },
+        {"search", "dnf", "texlive-xurl"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("SEARCH: dnf") != std::string::npos);
+    CHECK(output.find("texlive-xurl") != std::string::npos);
+    CHECK(output.find("package") != std::string::npos);
+    CHECK(output.find("noarch") != std::string::npos);
+    CHECK(output.find("svn61553-80.fc43") != std::string::npos);
+    CHECK(output.find("Allow url break") != std::string::npos);
+    CHECK(output.find("alphanumerical") != std::string::npos);
+    CHECK(output.find("No results") == std::string::npos);
+}
+
+TEST_CASE("orchestrator dnf search honors arch filter", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-dnf-search-arch-filter"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "dnf");
+
+    write_file(fakeBin / "dnf",
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"search\" ]; then\n"
+        "  printf 'Matched fields: name (exact)\\n texlive-xurl.noarch\\tAllow url break at any alphanumerical character\\n texlive-xurl.x86_64\\tAllow url break at any alphanumerical character\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"$1\" = \"repoquery\" ]; then\n"
+        "  printf 'texlive-xurl.noarch\\tsvn61553-80.fc43\\ntexlive-xurl.x86_64\\tsvn61553-80.fc43\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "dnf").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+        },
+        {"search", "dnf", "texlive-xurl", "--arch", "x86_64"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("texlive-xurl") != std::string::npos);
+    CHECK(output.find("x86_64") != std::string::npos);
+    CHECK(output.find("noarch") == std::string::npos);
 }
 
 TEST_CASE("orchestrator install command plans validates and executes plugin install", "[integration][orchestrator][service]") {

@@ -401,6 +401,25 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         std::error_code error;
         std::filesystem::remove_all(manifestDir, error);
     }
+
+    SECTION("search parses repeated arch and type filters") {
+        const std::vector<Request> requests = cli.parse(
+            std::vector<std::string>{"search", "dnf", "python3", "--arch", "noarch", "--arch", "x86_64", "--type", "doc", "--type", "devel"},
+            config
+        );
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::SEARCH);
+        CHECK(requests.front().system == "dnf");
+        CHECK(requests.front().packages == std::vector<std::string>{"python3"});
+        CHECK(requests.front().flags == std::vector<std::string>{"arch=noarch", "arch=x86_64", "type=doc", "type=devel"});
+    }
+
+    SECTION("search rejects missing filter values") {
+        CHECK(cli.parse(std::vector<std::string>{"search", "dnf", "python3", "--arch"}, config).empty());
+        CHECK(cli.parseFailed());
+        CHECK(cli.parse(std::vector<std::string>{"search", "dnf", "python3", "--type"}, config).empty());
+        CHECK(cli.parseFailed());
+    }
 }
 
 TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli][remote]") {
