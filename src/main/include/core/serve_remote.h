@@ -3,6 +3,7 @@
 #include "cli/cli.h"
 #include "core/configuration.h"
 #include "output/idisplay.h"
+#include "output/command_output.h"
 #include "output/logger.h"
 
 #include <filesystem>

@@ -1,10 +1,14 @@
 #include "output/plain_display.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
+
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -25,7 +29,45 @@ std::string repeatChar(char c, int n) {
 	return (n > 0) ? std::string(static_cast<size_t>(n), c) : std::string{};
 }
 
+void merge_progress_metrics(DisplayProgressMetrics& target, const DisplayProgressMetrics& update) {
+	if (update.percent.has_value()) {
+		target.percent = update.percent;
+	}
+	if (update.currentBytes.has_value()) {
+		target.currentBytes = update.currentBytes;
+	}
+	if (update.totalBytes.has_value()) {
+		target.totalBytes = update.totalBytes;
+	}
+	if (update.bytesPerSecond.has_value()) {
+		target.bytesPerSecond = update.bytesPerSecond;
+	}
+}
+
+size_t terminal_width() {
+	if (const char* columns = std::getenv("COLUMNS")) {
+		try {
+			const size_t parsed = static_cast<size_t>(std::stoul(columns));
+			if (parsed > 0) {
+				return parsed;
+			}
+		} catch (...) {
+		}
+	}
+
+	winsize size{};
+	if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0) {
+		return size.ws_col;
+	}
+
+	return 100;
+}
+
 } // namespace
+
+std::ostream& PlainDisplay::out() const {
+	return std::cout;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Default decoration hooks — plain text, no ANSI
@@ -84,7 +126,11 @@ std::string PlainDisplay::renderBar(int percent) const {
 		case DisplayMode::UPDATE:  return "UPDATE";
 		case DisplayMode::SEARCH:  return "SEARCH";
 		case DisplayMode::LIST:    return "LIST";
+		case DisplayMode::OUTDATED:return "OUTDATED";
 		case DisplayMode::INFO:    return "INFO";
+		case DisplayMode::SNAPSHOT:return "SNAPSHOT";
+		case DisplayMode::SERVE:   return "SERVE";
+		case DisplayMode::REMOTE:  return "REMOTE";
 		case DisplayMode::ENSURE:  return "ENSURE";
 		case DisplayMode::SBOM:    return "SBOM";
 		default:                   return "REQPACK";
@@ -92,21 +138,111 @@ std::string PlainDisplay::renderBar(int percent) const {
 }
 
 void PlainDisplay::printRule() const {
-	std::cout << decorateRule(repeatChar('-', RULE_WIDTH)) << '\n';
+	out() << decorateRule(repeatChar('-', RULE_WIDTH)) << '\n';
 }
 
 std::string PlainDisplay::formatItemLine(const std::string& itemId,
-                                          int                percent,
-                                          const std::string& step) const {
+	                                          const DisplayProgressMetrics& metrics,
+	                                          const std::string& step) const {
+	const DisplayProgressMetrics resolvedMetrics = canonicalize_progress_metrics(metrics);
+	const int percent = resolvedMetrics.percent.value_or(0);
 	std::ostringstream ss;
 	ss << "  "
 	   << std::left << std::setw(LABEL_WIDTH) << itemId
-	   << "  " << renderBar(percent)
-	   << "  " << std::setw(3) << percent << '%';
+	   << "  " << renderBar(percent);
+	const std::string summary = format_progress_summary(resolvedMetrics);
+	if (!summary.empty()) {
+		ss << "  " << decorateMessage(summary);
+	}
 	if (!step.empty()) {
 		ss << "  " << decorateStep(step);
 	}
 	return ss.str();
+}
+
+std::vector<std::string> PlainDisplay::wrapText(const std::string& text, size_t width) const {
+	if (text.empty()) {
+		return {std::string{}};
+	}
+	if (width == 0) {
+		return {text};
+	}
+
+	std::vector<std::string> lines;
+	std::istringstream input(text);
+	std::string paragraph;
+	while (std::getline(input, paragraph)) {
+		std::istringstream words(paragraph);
+		std::string word;
+		std::string current;
+		while (words >> word) {
+			if (current.empty()) {
+				if (word.size() <= width) {
+					current = word;
+				} else {
+					for (size_t offset = 0; offset < word.size(); offset += width) {
+						lines.push_back(word.substr(offset, width));
+					}
+				}
+				continue;
+			}
+
+			if (current.size() + 1 + word.size() <= width) {
+				current += " " + word;
+				continue;
+			}
+
+			lines.push_back(current);
+			if (word.size() <= width) {
+				current = word;
+			} else {
+				current.clear();
+				for (size_t offset = 0; offset < word.size(); offset += width) {
+					const std::string segment = word.substr(offset, width);
+					if (offset + width < word.size()) {
+						lines.push_back(segment);
+					} else {
+						current = segment;
+					}
+				}
+			}
+		}
+
+		if (!current.empty()) {
+			lines.push_back(current);
+		} else if (paragraph.empty()) {
+			lines.push_back(std::string{});
+		}
+	}
+
+	if (lines.empty()) {
+		lines.push_back(std::string{});
+	}
+	return lines;
+}
+
+void PlainDisplay::renderFieldValueTable() const {
+	const size_t terminalWidth = terminal_width();
+	const size_t keyWidth = std::min<size_t>(std::max<size_t>(colWidths.empty() ? 12 : colWidths[0], 12), 22);
+	const size_t valueIndent = keyWidth + 2;
+	const size_t valueWidth = terminalWidth > valueIndent ? terminalWidth - valueIndent : 40;
+
+	out() << '\n';
+	for (const auto& row : tableRows) {
+		const std::string key = row.empty() ? std::string{} : row[0];
+		const std::string value = row.size() > 1 ? row[1] : std::string{};
+		const std::vector<std::string> wrapped = wrapText(value, valueWidth);
+		for (size_t lineIndex = 0; lineIndex < wrapped.size(); ++lineIndex) {
+			if (lineIndex == 0) {
+				out() << std::left << std::setw(static_cast<int>(keyWidth)) << key << ": ";
+			} else {
+				out() << std::string(valueIndent, ' ');
+			}
+			out() << wrapped[lineIndex] << '\n';
+		}
+	}
+	out() << '\n';
+	out().flush();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,9 +264,9 @@ void PlainDisplay::onSessionBegin(DisplayMode                    mode,
 	}
 
 	printRule();
-	std::cout << "  " << decorateHeader(header) << '\n';
+	out() << "  " << decorateHeader(header) << '\n';
 	printRule();
-	std::cout.flush();
+	out().flush();
 }
 
 void PlainDisplay::onSessionEnd(bool success, int succeeded, int skipped, int failed) {
@@ -144,20 +280,20 @@ void PlainDisplay::onSessionEnd(bool success, int succeeded, int skipped, int fa
 		                            std::to_string(skipped) + " skipped,  " +
 		                            std::to_string(failed) + " failed";
 		if (failed > 0) {
-			std::cout << "  " << decorateSummaryFail(summary) << '\n';
+			out() << "  " << decorateSummaryFail(summary) << '\n';
 		} else {
-			std::cout << "  " << decorateSummaryOk(summary) << '\n';
+			out() << "  " << decorateSummaryOk(summary) << '\n';
 		}
 	} else {
 		const std::string summary = label + (success ? " done" : " failed");
 		if (success) {
-			std::cout << "  " << decorateSummaryOk(summary) << '\n';
+			out() << "  " << decorateSummaryOk(summary) << '\n';
 		} else {
-			std::cout << "  " << decorateSummaryFail(summary) << '\n';
+			out() << "  " << decorateSummaryFail(summary) << '\n';
 		}
 	}
 	printRule();
-	std::cout.flush();
+	out().flush();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -171,77 +307,102 @@ void PlainDisplay::onItemBegin(const std::string& itemId,
 		itemMap[itemId] = DisplayItemStatus{
 			.id       = itemId,
 			.label    = label,
-			.progress = 0,
+			.metrics  = DisplayProgressMetrics{.percent = 0},
 			.step     = "starting",
 			.state    = DisplayItemState::RUNNING
 		};
 	}
-	std::cout << formatItemLine(itemId, 0, "starting") << '\n';
-	std::cout.flush();
+	out() << formatItemLine(itemId, DisplayProgressMetrics{.percent = 0}, "starting") << '\n';
+	out().flush();
 }
 
-void PlainDisplay::onItemProgress(const std::string& itemId, int percent) {
+
+void PlainDisplay::onItemProgress(const std::string& itemId, const DisplayProgressMetrics& metrics) {
+	DisplayProgressMetrics displayMetrics;
 	std::string step;
 	{
 		std::lock_guard<std::mutex> lock(mtx);
-		auto it = itemMap.find(itemId);
-		if (it != itemMap.end()) {
-			it->second.progress = percent;
-			step = it->second.step;
+		DisplayItemStatus& status = itemMap[itemId];
+		if (status.id.empty()) {
+			status.id = itemId;
+			status.label = itemId;
 		}
+		merge_progress_metrics(status.metrics, metrics);
+		status.metrics = canonicalize_progress_metrics(status.metrics, resolve_progress_percent(status.metrics));
+		status.state = DisplayItemState::RUNNING;
+		step = status.step;
+		displayMetrics = status.metrics;
 	}
-	std::cout << formatItemLine(itemId, percent, step) << '\n';
-	std::cout.flush();
+	out() << formatItemLine(itemId, displayMetrics, step) << '\n';
+	out().flush();
 }
 
 void PlainDisplay::onItemStep(const std::string& itemId,
-                               const std::string& step) {
-	int progress = 0;
+	                               const std::string& step) {
+	DisplayProgressMetrics metrics;
 	{
 		std::lock_guard<std::mutex> lock(mtx);
-		auto it = itemMap.find(itemId);
-		if (it != itemMap.end()) {
-			it->second.step  = step;
-			it->second.state = DisplayItemState::RUNNING;
-			progress         = it->second.progress;
+		DisplayItemStatus& status = itemMap[itemId];
+		if (status.id.empty()) {
+			status.id = itemId;
+			status.label = itemId;
 		}
+		status.step  = step;
+		status.state = DisplayItemState::RUNNING;
+		metrics = status.metrics;
 	}
-	std::cout << formatItemLine(itemId, progress, step) << '\n';
-	std::cout.flush();
+	out() << formatItemLine(itemId, metrics, step) << '\n';
+	out().flush();
 }
 
 void PlainDisplay::onItemSuccess(const std::string& itemId) {
+	bool alreadySucceeded = false;
+	DisplayProgressMetrics metrics{.percent = 100};
 	{
 		std::lock_guard<std::mutex> lock(mtx);
 		auto it = itemMap.find(itemId);
 		if (it != itemMap.end()) {
-			it->second.progress = 100;
-			it->second.step     = "done";
-			it->second.state    = DisplayItemState::SUCCESS;
+			alreadySucceeded = it->second.state == DisplayItemState::SUCCESS;
+			it->second.metrics.percent = 100;
+			if (it->second.metrics.totalBytes.has_value()) {
+				it->second.metrics.currentBytes = it->second.metrics.totalBytes;
+			}
+			it->second.metrics = canonicalize_progress_metrics(it->second.metrics, 100);
+			it->second.step    = "done";
+			it->second.state   = DisplayItemState::SUCCESS;
+			metrics = it->second.metrics;
 		}
 	}
-	std::cout << formatItemLine(itemId, 100, "done") << '\n';
-	std::cout << "  " << std::left << std::setw(LABEL_WIDTH) << itemId
-	          << "  " << decorateSuccessMarker("OK") << '\n';
-	std::cout.flush();
+	if (alreadySucceeded) {
+		return;
+	}
+	out() << formatItemLine(itemId, metrics, "done") << '\n';
+	out() << "  " << std::left << std::setw(LABEL_WIDTH) << itemId
+	      << "  " << decorateSuccessMarker("OK") << '\n';
+	out().flush();
 }
 
 void PlainDisplay::onItemFailure(const std::string& itemId,
-                                  const std::string& reason) {
+                                   const std::string& reason) {
+	bool alreadyFailed = false;
 	{
 		std::lock_guard<std::mutex> lock(mtx);
 		auto it = itemMap.find(itemId);
 		if (it != itemMap.end()) {
+			alreadyFailed = it->second.state == DisplayItemState::FAILED;
 			it->second.state = DisplayItemState::FAILED;
 		}
 	}
-	std::cout << "  " << std::left << std::setw(LABEL_WIDTH) << itemId
-	          << "  " << decorateFailureMarker("[FAILED]");
-	if (!reason.empty()) {
-		std::cout << "  " << reason;
+	if (alreadyFailed) {
+		return;
 	}
-	std::cout << '\n';
-	std::cout.flush();
+	out() << "  " << std::left << std::setw(LABEL_WIDTH) << itemId
+	      << "  " << decorateFailureMarker("[FAILED]");
+	if (!reason.empty()) {
+		out() << "  " << reason;
+	}
+	out() << '\n';
+	out().flush();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -251,11 +412,11 @@ void PlainDisplay::onItemFailure(const std::string& itemId,
 void PlainDisplay::onMessage(const std::string& text,
                               const std::string& source) {
 	if (!source.empty()) {
-		std::cout << "  [" << source << "]  " << decorateMessage(text) << '\n';
+		out() << "  [" << source << "]  " << decorateMessage(text) << '\n';
 	} else {
-		std::cout << "  " << decorateMessage(text) << '\n';
+		out() << "  " << decorateMessage(text) << '\n';
 	}
-	std::cout.flush();
+	out().flush();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -265,49 +426,65 @@ void PlainDisplay::onMessage(const std::string& text,
 void PlainDisplay::onTableBegin(const std::vector<std::string>& headers) {
 	std::lock_guard<std::mutex> lock(mtx);
 	tableHeaders = headers;
+	tableRows.clear();
 	colWidths.clear();
+	fieldValueTable = currentMode == DisplayMode::INFO
+	    && headers.size() == 2
+	    && headers[0] == "Field"
+	    && headers[1] == "Value";
 	colWidths.reserve(headers.size());
 	for (const auto& h : headers) {
 		colWidths.push_back(std::max(h.size(), static_cast<size_t>(12)));
 	}
-
-	std::cout << '\n';
-	for (size_t i = 0; i < headers.size(); ++i) {
-		std::cout << std::left << std::setw(static_cast<int>(colWidths[i]))
-		          << decorateHeader(headers[i]);
-		if (i + 1 < headers.size()) std::cout << "  ";
-	}
-	std::cout << '\n';
-
-	// Underline.
-	for (size_t i = 0; i < headers.size(); ++i) {
-		std::cout << decorateRule(repeatChar('-', static_cast<int>(colWidths[i])));
-		if (i + 1 < headers.size()) std::cout << "  ";
-	}
-	std::cout << '\n';
-	std::cout.flush();
 }
 
 void PlainDisplay::onTableRow(const std::vector<std::string>& cells) {
 	std::lock_guard<std::mutex> lock(mtx);
+	tableRows.push_back(cells);
 	for (size_t i = 0; i < cells.size(); ++i) {
-		const size_t w    = (i < colWidths.size()) ? colWidths[i] : 12;
-		const std::string& cell = cells[i];
-		if (cell.size() > w) {
-			std::cout << std::left << std::setw(static_cast<int>(w))
-			          << (cell.substr(0, w - 1) + "~");
-		} else {
-			std::cout << std::left << std::setw(static_cast<int>(w)) << cell;
+		if (i >= colWidths.size()) {
+			colWidths.resize(i + 1, 12);
 		}
-		if (i + 1 < cells.size()) std::cout << "  ";
+		colWidths[i] = std::max(colWidths[i], cells[i].size());
 	}
-	std::cout << '\n';
-	std::cout.flush();
 }
 
 void PlainDisplay::onTableEnd() {
-	std::cout << '\n';
-	std::cout.flush();
+	std::lock_guard<std::mutex> lock(mtx);
+	if (fieldValueTable) {
+		renderFieldValueTable();
+		tableHeaders.clear();
+		tableRows.clear();
+		colWidths.clear();
+		fieldValueTable = false;
+		return;
+	}
+	out() << '\n';
+	for (size_t i = 0; i < tableHeaders.size(); ++i) {
+		out() << std::left << std::setw(static_cast<int>(colWidths[i]))
+		      << decorateHeader(tableHeaders[i]);
+		if (i + 1 < tableHeaders.size()) out() << "  ";
+	}
+	out() << '\n';
+	for (size_t i = 0; i < tableHeaders.size(); ++i) {
+		out() << decorateRule(repeatChar('-', static_cast<int>(colWidths[i])));
+		if (i + 1 < tableHeaders.size()) out() << "  ";
+	}
+	out() << '\n';
+	for (const auto& row : tableRows) {
+		for (size_t i = 0; i < row.size(); ++i) {
+			const size_t w = (i < colWidths.size()) ? colWidths[i] : 12;
+			out() << std::left << std::setw(static_cast<int>(w)) << row[i];
+			if (i + 1 < row.size()) out() << "  ";
+		}
+		out() << '\n';
+	}
+	out() << '\n';
+	out().flush();
+	tableHeaders.clear();
+	tableRows.clear();
+	colWidths.clear();
+	fieldValueTable = false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,5 +492,5 @@ void PlainDisplay::onTableEnd() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void PlainDisplay::flush() {
-	std::cout.flush();
+	out().flush();
 }

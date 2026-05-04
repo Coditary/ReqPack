@@ -75,7 +75,7 @@ enum class RepositoryChecksumPolicy {
 
 struct LoggingConfig {
     LogLevel level{LogLevel::INFO};
-    bool consoleOutput{true};
+    bool consoleOutput{false};
     bool fileOutput{false};
     std::string filePath{"reqpack.log"};
     bool enableBacktrace{false};
@@ -308,6 +308,7 @@ struct ReqPackConfig {
 struct ReqPackConfigOverrides {
     std::optional<std::filesystem::path> configPath;
 
+    std::optional<bool> consoleOutput;
     std::optional<LogLevel> logLevel;
     std::optional<std::string> logPattern;
     std::optional<bool> fileOutput;

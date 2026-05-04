@@ -493,7 +493,9 @@ int main(int argc, char* argv[]) {
     const ReqPackConfig fileConfig = load_config_from_lua(configPath, DEFAULT_REQPACK_CONFIG);
     ReqPackConfig config = apply_config_overrides(fileConfig, configOverrides);
     const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";
-    if (!configOverrides.pluginDirectory.has_value() && std::filesystem::exists(workspacePluginDirectory)) {
+    if (!configOverrides.pluginDirectory.has_value() &&
+        config.registry.pluginDirectory == DEFAULT_REQPACK_CONFIG.registry.pluginDirectory &&
+        std::filesystem::exists(workspacePluginDirectory)) {
         config.registry.pluginDirectory = workspacePluginDirectory.string();
     }
     Logger& logger = Logger::instance();
@@ -501,6 +503,7 @@ int main(int argc, char* argv[]) {
     logger.setLevel(to_string(config.logging.level));
     logger.setPattern(config.logging.pattern);
     logger.setBacktrace(config.logging.enableBacktrace, config.logging.backtraceSize);
+    logger.setConsoleOutput(config.logging.consoleOutput);
     if (config.logging.fileOutput) {
         logger.setFileSink(config.logging.filePath);
     }
@@ -553,7 +556,7 @@ int main(int argc, char* argv[]) {
 
         int result = 1;
         try {
-            result = run_remote_client(config, default_remote_profiles_path(), remoteInvocation.profileName, remoteInvocation.forwardedArguments);
+			result = run_remote_client(config, default_remote_profiles_path(), remoteInvocation.profileName, remoteInvocation.forwardedArguments, display.get());
         } catch (const std::exception& e) {
             logger.err(e.what());
             logger.flushSync();

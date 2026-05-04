@@ -39,8 +39,27 @@ std::string joinPipe(const std::vector<std::string>& v) {
 	return out;
 }
 
-bool should_render_plugin_callback_as_raw_stdout(const OutputContext& context) {
-	return context.source == "plugin" || context.source.find(':') == std::string::npos;
+bool is_item_scoped_plugin_source(const std::string& source) {
+	return source != "plugin" && source.find(':') != std::string::npos;
+}
+
+std::string plugin_display_source(const OutputContext& context) {
+	if (is_item_scoped_plugin_source(context.source)) {
+		return context.source;
+	}
+	if (!context.scope.empty()) {
+		return context.scope;
+	}
+	return context.source;
+}
+
+DisplayProgressMetrics progress_metrics_from_context(const OutputContext& context) {
+	return canonicalize_progress_metrics(DisplayProgressMetrics{
+		.percent = context.progressPercent,
+		.currentBytes = context.currentBytes,
+		.totalBytes = context.totalBytes,
+		.bytesPerSecond = context.bytesPerSecond,
+	});
 }
 
 } // namespace
@@ -58,6 +77,7 @@ Logger::Logger() {
 
 	logger->set_level(spdlog::level::info);
 	logger->set_pattern(pattern);
+    updateConsoleSinkLevel();
 
 	spdlog::register_logger(logger);
 	this->startWorker();
@@ -129,24 +149,61 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 	if (d == nullptr) return;
 
 	const OutputContext& ctx = event.context;
+	const bool itemScoped = is_item_scoped_plugin_source(ctx.source);
+	const std::string displaySource = plugin_display_source(ctx);
 
 	switch (event.action) {
 		// ── Plugin callbacks → display ────────────────────────────────────────
-		case OutputAction::PLUGIN_PROGRESS:
-			d->onItemProgress(ctx.source, ctx.progressPercent);
+		case OutputAction::PLUGIN_PROGRESS: {
+			const DisplayProgressMetrics metrics = progress_metrics_from_context(ctx);
+			if (itemScoped) {
+				d->onItemProgress(ctx.source, metrics);
+			} else {
+				const std::string summary = format_progress_summary(metrics);
+				d->onMessage(summary.empty() ? "progress" : "progress " + summary, displaySource);
+			}
 			break;
+		}
 
 		case OutputAction::PLUGIN_STATUS:
-			// Status code from plugin; emit as a message if no better handler.
-			d->onMessage("status=" + std::to_string(ctx.statusCode), ctx.source);
+			d->onMessage("status " + std::to_string(ctx.statusCode), displaySource);
 			break;
 
 		case OutputAction::PLUGIN_EVENT:
-			d->onMessage(ctx.eventName + ": " + ctx.payload, ctx.source);
+			if (ctx.eventName == "begin_step") {
+				if (itemScoped) {
+					d->onItemStep(ctx.source, ctx.payload);
+				} else {
+					d->onMessage(ctx.payload, displaySource);
+				}
+				break;
+			}
+			if (ctx.eventName == "success") {
+				if (itemScoped) {
+					d->onItemSuccess(ctx.source);
+				} else {
+					d->onMessage("done", displaySource);
+				}
+				break;
+			}
+			if (ctx.eventName == "failed") {
+				if (itemScoped) {
+					d->onItemFailure(ctx.source, ctx.payload);
+				} else {
+					d->onMessage(ctx.payload.empty() ? "failed" : "failed: " + ctx.payload, displaySource);
+				}
+				break;
+			}
+			if (ctx.eventName == "installed" || ctx.eventName == "deleted" || ctx.eventName == "updated" ||
+			    ctx.eventName == "listed" || ctx.eventName == "searched" || ctx.eventName == "informed" ||
+			    ctx.eventName == "outdated") {
+				break;
+			}
+			d->onMessage(ctx.eventName + ": " + ctx.payload, displaySource);
 			break;
 
 		case OutputAction::PLUGIN_ARTIFACT:
-			d->onMessage("artifact: " + ctx.payload, ctx.source);
+			d->onMessage("artifact: " + ctx.payload, displaySource);
 			break;
 
 		// ── Session lifecycle ─────────────────────────────────────────────────
@@ -191,6 +248,10 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 			d->onItemFailure(ctx.source, ctx.message);
 			break;
 
+		case OutputAction::DISPLAY_MESSAGE:
+			d->onMessage(ctx.message, ctx.source);
+			break;
+
 		// ── Table output ──────────────────────────────────────────────────────
 		case OutputAction::DISPLAY_TABLE_HEADER:
 			d->onTableBegin(splitPipe(ctx.payload));
@@ -217,16 +278,15 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 void Logger::processEvent(const OutputEvent& event) {
 	IDisplay* d = display.load(std::memory_order_acquire);
 
-	switch (event.action) {
-		// ── Spdlog ───────────────────────────────────────────────────────────
-		case OutputAction::LOG:
-			logger->log(event.context.level, logger_render_output_event(event));
-			if (d != nullptr &&
-			    event.context.level < spdlog::level::warn &&
-			    (!event.context.source.empty() || !event.context.scope.empty())) {
-				d->onMessage(logger_format_message(event.context));
-			}
-			if (event.context.level == spdlog::level::critical) {
+		switch (event.action) {
+			// ── Spdlog ───────────────────────────────────────────────────────────
+			case OutputAction::LOG:
+				logger->log(event.context.level, logger_render_output_event(event));
+				if (d != nullptr &&
+				    (event.context.level >= spdlog::level::warn || consoleOutputEnabled.load(std::memory_order_acquire))) {
+					d->onMessage(logger_format_message(event.context));
+				}
+				if (event.context.level == spdlog::level::critical) {
 				logger->dump_backtrace();
 			}
 			break;
@@ -249,7 +309,7 @@ void Logger::processEvent(const OutputEvent& event) {
 		case OutputAction::PLUGIN_PROGRESS:
 		case OutputAction::PLUGIN_EVENT:
 		case OutputAction::PLUGIN_ARTIFACT:
-			if (d != nullptr && !should_render_plugin_callback_as_raw_stdout(event.context)) {
+			if (d != nullptr) {
 				routeToDisplay(event);
 			} else {
 				std::cout << logger_render_output_event(event) << '\n';
@@ -264,6 +324,7 @@ void Logger::processEvent(const OutputEvent& event) {
 		case OutputAction::DISPLAY_ITEM_STEP:
 		case OutputAction::DISPLAY_ITEM_SUCCESS:
 		case OutputAction::DISPLAY_ITEM_FAILURE:
+		case OutputAction::DISPLAY_MESSAGE:
 		case OutputAction::DISPLAY_TABLE_HEADER:
 		case OutputAction::DISPLAY_TABLE_ROW:
 		case OutputAction::DISPLAY_TABLE_END:
@@ -292,13 +353,33 @@ std::string Logger::formatMessage(const OutputContext& context) {
 	return logger_format_message(context);
 }
 
+void Logger::updateConsoleSinkLevel() {
+	if (!consoleSink) {
+		return;
+	}
+	if (!consoleOutputEnabled.load(std::memory_order_acquire)) {
+		consoleSink->set_level(spdlog::level::off);
+		return;
+	}
+	if (display.load(std::memory_order_acquire) != nullptr) {
+		consoleSink->set_level(spdlog::level::off);
+		return;
+	}
+	consoleSink->set_level(spdlog::level::trace);
+}
+
 void Logger::setDisplay(IDisplay* d) {
 	display.store(d, std::memory_order_release);
-	// Suppress info/debug console output when a renderer handles all display;
-	// warn/error still surface on the console for visibility.
-	if (consoleSink) {
-		consoleSink->set_level(d != nullptr ? spdlog::level::warn : spdlog::level::trace);
-	}
+	updateConsoleSinkLevel();
+}
+
+void Logger::setConsoleOutput(bool enable) {
+	consoleOutputEnabled.store(enable, std::memory_order_release);
+	updateConsoleSinkLevel();
+}
+
+bool Logger::isConsoleOutputEnabled() const {
+	return consoleOutputEnabled.load(std::memory_order_acquire);
 }
 
 void Logger::setLevel(const std::string& level) {

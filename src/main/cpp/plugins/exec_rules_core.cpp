@@ -141,8 +141,9 @@ void validate_action_fields(const ExecRuleAction& action) {
             }
             break;
         case ExecRuleActionType::Progress:
-            if (!has_required_field(action, "percent")) {
-                throw std::runtime_error("progress action requires field 'percent'.");
+            if (!has_required_field(action, "percent") && !has_required_field(action, "current") &&
+                !has_required_field(action, "total") && !has_required_field(action, "speed")) {
+                throw std::runtime_error("progress action requires field 'percent', 'current', 'total', or 'speed'.");
             }
             break;
         case ExecRuleActionType::BeginStep:

@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "output/progress_metrics.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DisplayMode — mirrors ActionType but lives in output layer, no boost dep.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -13,7 +15,11 @@ enum class DisplayMode {
 	UPDATE,
 	SEARCH,
 	LIST,
+	OUTDATED,
 	INFO,
+	SNAPSHOT,
+	SERVE,
+	REMOTE,
 	ENSURE,
 	SBOM
 };
@@ -34,7 +40,7 @@ enum class DisplayItemState {
 struct DisplayItemStatus {
 	std::string      id;
 	std::string      label;
-	int              progress{0};
+	DisplayProgressMetrics metrics{};
 	std::string      step;
 	DisplayItemState state{DisplayItemState::PENDING};
 };
@@ -80,8 +86,9 @@ public:
 	virtual void onItemBegin(const std::string& itemId,
 	                         const std::string& label) = 0;
 
-	/// Progress update [0, 100].
-	virtual void onItemProgress(const std::string& itemId, int percent) = 0;
+	/// Progress snapshot.
+	virtual void onItemProgress(const std::string& itemId,
+	                            const DisplayProgressMetrics& metrics) = 0;
 
 	/// Plugin entered a new named step (e.g. "Downloading", "Extracting").
 	virtual void onItemStep(const std::string& itemId,

@@ -3,6 +3,7 @@
 #include "core/configuration.h"
 #include "core/history_manager.h"
 #include "core/types.h"
+#include "output/command_output.h"
 
 #include <string>
 #include <vector>
@@ -21,4 +22,5 @@ public:
     // Read history, render reqpack.lua, write to file or stdout.
     // Returns true on success.
     bool exportSnapshot(const Request& request) const;
+	CommandOutput buildSnapshotOutput(const Request& request) const;
 };

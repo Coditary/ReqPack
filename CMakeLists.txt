@@ -58,6 +58,7 @@ set(SOURCES
     src/main/cpp/cli/cli.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
+    src/main/cpp/output/command_output.cpp
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/plain_display.cpp
     src/main/cpp/output/color_display.cpp
@@ -135,6 +136,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/snapshot_exporter.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
+    src/main/cpp/output/command_output.cpp
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/plain_display.cpp
     src/main/cpp/output/color_display.cpp
@@ -213,6 +215,8 @@ add_executable(core_unit_tests
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
+    src/main/cpp/output/plain_display.cpp
+    src/main/cpp/output/command_output.cpp
 )
 
 target_include_directories(ReqPack PRIVATE 

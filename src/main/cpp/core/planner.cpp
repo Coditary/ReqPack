@@ -38,6 +38,17 @@ Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& pac
 	return boost::add_vertex(package, graph);
 }
 
+IPlugin* load_plugin_for_use(Registry* registry, const std::string& system) {
+	if (registry == nullptr) {
+		return nullptr;
+	}
+	IPlugin* plugin = registry->getPlugin(system);
+	if (plugin == nullptr || !registry->loadPlugin(system)) {
+		return nullptr;
+	}
+	return registry->getPlugin(system);
+}
+
 }  // namespace
 
 Planner::Planner(Registry* registry, RegistryDatabase* database, const ReqPackConfig& config)
@@ -131,8 +142,8 @@ bool Planner::shouldInstallPluginDependencies(const std::string& system) const {
 }
 
 bool Planner::pluginRequirementsSatisfied(const std::string& system) const {
-	IPlugin* plugin = this->registry->getPlugin(system);
-	if (plugin == nullptr || !this->registry->loadPlugin(system)) {
+	IPlugin* plugin = load_plugin_for_use(this->registry, system);
+	if (plugin == nullptr) {
 		return false;
 	}
 
@@ -178,12 +189,12 @@ std::vector<Request> Planner::filterRequestedPackages(const std::vector<Request>
 			continue;
 		}
 
-		IPlugin* plugin = this->registry->getPlugin(request.system);
 		if (this->gatewayExists(request.system)) {
 			filteredRequests.push_back(request);
 			continue;
 		}
-		if (plugin == nullptr || !this->registry->loadPlugin(request.system)) {
+		IPlugin* plugin = load_plugin_for_use(this->registry, request.system);
+		if (plugin == nullptr) {
 			filteredRequests.push_back(request);
 			continue;
 		}
@@ -213,7 +224,7 @@ std::vector<Package> Planner::collectPluginDependencies(const std::vector<Reques
 		if (this->gatewayExists(request.system)) {
 			continue;
 		}
-		IPlugin* plugin = this->registry->getPlugin(request.system);
+		IPlugin* plugin = load_plugin_for_use(this->registry, request.system);
 		if (plugin == nullptr) {
 			continue;
 		}
@@ -246,8 +257,8 @@ std::vector<Package> Planner::filterMissingDependencies(const std::vector<Packag
 			this->queueDependencyDownload(dependency);
 		}
 
-		IPlugin* plugin = this->registry->getPlugin(dependency.system);
-		if (plugin == nullptr || !this->registry->loadPlugin(dependency.system)) {
+		IPlugin* plugin = load_plugin_for_use(this->registry, dependency.system);
+		if (plugin == nullptr) {
 			missingDependencies.push_back(dependency);
 			continue;
 		}
@@ -372,10 +383,10 @@ void Planner::addPackageToGraph(Graph& graph, const Package& package) const {
 			return packageVertex;
 		}
 
-		IPlugin* plugin = this->registry->getPlugin(currentPackage.system);
+		IPlugin* plugin = load_plugin_for_use(this->registry, currentPackage.system);
 		if (plugin == nullptr && this->config.planner.autoDownloadMissingDependencies) {
 			this->queueDependencyDownload(Package{.action = ActionType::INSTALL, .system = currentPackage.system});
-			plugin = this->registry->getPlugin(currentPackage.system);
+			plugin = load_plugin_for_use(this->registry, currentPackage.system);
 		}
 
 		if (plugin != nullptr) {

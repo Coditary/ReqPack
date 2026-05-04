@@ -1,5 +1,8 @@
 #include "core/snapshot_exporter.h"
 
+#include "output/command_output.h"
+#include "output/logger.h"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -48,14 +51,55 @@ std::string SnapshotExporter::render(const std::vector<InstalledEntry>& entries)
     return out.str();
 }
 
+CommandOutput SnapshotExporter::buildSnapshotOutput(const Request& request) const {
+	HistoryManager history(this->config);
+	std::vector<InstalledEntry> sorted = history.loadInstalledState();
+	std::sort(sorted.begin(), sorted.end(), [](const InstalledEntry& a, const InstalledEntry& b) {
+		if (a.system != b.system) { return a.system < b.system; }
+		return a.name < b.name;
+	});
+
+	const std::string rendered = render(sorted);
+	const std::string outputPath = resolveOutputPath(request);
+
+	CommandOutput output;
+	output.mode = DisplayMode::SNAPSHOT;
+	output.sessionItems = {"snapshot"};
+	output.success = true;
+	output.succeeded = 1;
+
+	if (sorted.empty()) {
+		output.blocks.push_back(make_command_message_block(
+		    "snapshot: no installed packages tracked in history. Ensure history.trackInstalled is enabled in your config."));
+	}
+
+	std::vector<CommandOutputField> fields;
+	fields.push_back(CommandOutputField{.key = "Format", .value = "reqpack.lua"});
+	fields.push_back(CommandOutputField{.key = "Package Count", .value = std::to_string(sorted.size())});
+	if (outputPath.empty()) {
+		fields.push_back(CommandOutputField{.key = "Output", .value = "stdout"});
+		output.blocks.push_back(make_command_field_value_block(fields));
+		output.blocks.push_back(make_command_raw_text_block(rendered));
+		return output;
+	}
+
+	std::filesystem::path filePath(outputPath);
+	if (filePath.is_relative()) {
+		filePath = std::filesystem::current_path() / filePath;
+	}
+	fields.push_back(CommandOutputField{.key = "Output Path", .value = filePath.string()});
+	output.blocks.push_back(make_command_field_value_block(fields));
+	output.blocks.push_back(make_command_artifact_block("artifact", filePath.string()));
+	return output;
+}
+
 bool SnapshotExporter::exportSnapshot(const Request& request) const {
     HistoryManager history(this->config);
     const std::vector<InstalledEntry> entries = history.loadInstalledState();
 
     if (entries.empty()) {
-        std::cerr << "snapshot: no installed packages tracked in history.\n"
-                     "Ensure history.trackInstalled is enabled in your config.\n";
-        // Still write an empty manifest — not a hard error.
+        Logger::instance().emit(OutputAction::DISPLAY_MESSAGE,
+                                OutputContext{.message = "snapshot: no installed packages tracked in history. Ensure history.trackInstalled is enabled in your config."});
     }
 
     // Sort by system then name for deterministic output.
@@ -69,8 +113,7 @@ bool SnapshotExporter::exportSnapshot(const Request& request) const {
     const std::string outputPath = resolveOutputPath(request);
 
     if (outputPath.empty()) {
-        std::cout << rendered;
-        std::cout.flush();
+        render_command_output(buildSnapshotOutput(request));
         return true;
     }
 
@@ -114,7 +157,6 @@ bool SnapshotExporter::exportSnapshot(const Request& request) const {
         return false;
     }
 
-    std::cout << resolvedPath << '\n';
-    std::cout.flush();
+    render_command_output(buildSnapshotOutput(request));
     return true;
 }

@@ -40,18 +40,21 @@ bool actionSupportsRecoveryReconciliation(const ActionType action) {
 }
 
 DisplayMode displayModeFromAction(ActionType action) {
-	switch (action) {
-		case ActionType::INSTALL: return DisplayMode::INSTALL;
-		case ActionType::ENSURE:  return DisplayMode::ENSURE;
-		case ActionType::REMOVE:  return DisplayMode::REMOVE;
-		case ActionType::UPDATE:  return DisplayMode::UPDATE;
-		case ActionType::SEARCH:  return DisplayMode::SEARCH;
-		case ActionType::LIST:    return DisplayMode::LIST;
-		case ActionType::INFO:    return DisplayMode::INFO;
-		case ActionType::OUTDATED: return DisplayMode::LIST;
-		case ActionType::SBOM:    return DisplayMode::SBOM;
-		default:                  return DisplayMode::IDLE;
-	}
+		switch (action) {
+			case ActionType::INSTALL: return DisplayMode::INSTALL;
+			case ActionType::ENSURE:  return DisplayMode::ENSURE;
+			case ActionType::REMOVE:  return DisplayMode::REMOVE;
+			case ActionType::UPDATE:  return DisplayMode::UPDATE;
+			case ActionType::SEARCH:  return DisplayMode::SEARCH;
+			case ActionType::LIST:    return DisplayMode::LIST;
+			case ActionType::INFO:    return DisplayMode::INFO;
+			case ActionType::OUTDATED: return DisplayMode::OUTDATED;
+			case ActionType::SNAPSHOT: return DisplayMode::SNAPSHOT;
+			case ActionType::SERVE: return DisplayMode::SERVE;
+			case ActionType::REMOTE: return DisplayMode::REMOTE;
+			case ActionType::SBOM:    return DisplayMode::SBOM;
+			default:                  return DisplayMode::IDLE;
+		}
 }
 
 // Returns true if 'target' is reachable from any vertex in 'sources' via directed edges.

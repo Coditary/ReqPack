@@ -9,6 +9,7 @@
 #include "core/configuration.h"
 #include "core/types.h"
 #include "core/version_compare.h"
+#include "output/progress_metrics.h"
 
 #define REQPACK_API_VERSION 4
 
@@ -44,7 +45,7 @@ public:
 	virtual void logWarn(const std::string& pluginId, const std::string& message) = 0;
 	virtual void logError(const std::string& pluginId, const std::string& message) = 0;
 	virtual void emitStatus(const std::string& pluginId, int statusCode) = 0;
-	virtual void emitProgress(const std::string& pluginId, int percent) = 0;
+	virtual void emitProgress(const std::string& pluginId, const DisplayProgressMetrics& metrics) = 0;
 	virtual void emitBeginStep(const std::string& pluginId, const std::string& label) = 0;
 	virtual void emitCommit(const std::string& pluginId) = 0;
 	virtual void emitSuccess(const std::string& pluginId) = 0;
@@ -113,8 +114,14 @@ struct PluginCallContext {
 	}
 
 	void emitProgress(int percent) const {
+		DisplayProgressMetrics metrics;
+		metrics.percent = clamp_progress_percent(percent);
+		emitProgress(metrics);
+	}
+
+	void emitProgress(const DisplayProgressMetrics& metrics) const {
 		if (host != nullptr) {
-			host->emitProgress(currentItemId.empty() ? pluginId : currentItemId, percent);
+			host->emitProgress(currentItemId.empty() ? pluginId : currentItemId, metrics);
 		}
 	}
 

@@ -3,6 +3,7 @@
 #include "output/idisplay.h"
 
 #include <mutex>
+#include <ostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -51,7 +52,8 @@ public:
 
 	void onItemBegin(const std::string& itemId,
 	                 const std::string& label) override;
-	void onItemProgress(const std::string& itemId, int percent) override;
+	void onItemProgress(const std::string& itemId,
+	                    const DisplayProgressMetrics& metrics) override;
 	void onItemStep(const std::string& itemId,
 	                const std::string& step) override;
 	void onItemSuccess(const std::string& itemId) override;
@@ -69,6 +71,8 @@ public:
 
 protected:
 	// ── Decoration hooks (override in subclasses for colour / emphasis) ───────
+
+	virtual std::ostream& out() const;
 
 	/// Separator rule string (the `---…` line).
 	virtual std::string decorateRule(const std::string& rule) const;
@@ -109,7 +113,9 @@ private:
 	DisplayMode                                        currentMode{DisplayMode::IDLE};
 	std::unordered_map<std::string, DisplayItemStatus> itemMap;
 	std::vector<std::string>                           tableHeaders;
+	std::vector<std::vector<std::string>>              tableRows;
 	std::vector<size_t>                                colWidths;
+	bool                                               fieldValueTable{false};
 	mutable std::mutex                                 mtx;
 
 	// ── Private helpers ───────────────────────────────────────────────────────
@@ -125,6 +131,9 @@ private:
 
 	/// Formats one item progress line (without trailing newline).
 	std::string formatItemLine(const std::string& itemId,
-	                           int                percent,
+	                           const DisplayProgressMetrics& metrics,
 	                           const std::string& step) const;
+
+	std::vector<std::string> wrapText(const std::string& text, size_t width) const;
+	void renderFieldValueTable() const;
 };

@@ -120,9 +120,20 @@ public:
         Logger::instance().emit(OutputAction::PLUGIN_STATUS, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = "rqp", .statusCode = statusCode});
     }
 
-    void emitProgress(const std::string& pluginId, int percent) override {
+    void emitProgress(const std::string& pluginId, const DisplayProgressMetrics& metrics) override {
         const bool hasItemId = pluginId.find(':') != std::string::npos;
-        Logger::instance().emit(OutputAction::PLUGIN_PROGRESS, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = "rqp", .progressPercent = std::clamp(percent, 0, 100)});
+        const DisplayProgressMetrics normalized = canonicalize_progress_metrics(metrics);
+        if (!normalized.percent.has_value() && !normalized.currentBytes.has_value() && !normalized.totalBytes.has_value() && !normalized.bytesPerSecond.has_value()) {
+            return;
+        }
+        Logger::instance().emit(OutputAction::PLUGIN_PROGRESS, OutputContext{
+            .source = hasItemId ? pluginId : "plugin",
+            .scope = "rqp",
+            .progressPercent = normalized.percent,
+            .currentBytes = normalized.currentBytes,
+            .totalBytes = normalized.totalBytes,
+            .bytesPerSecond = normalized.bytesPerSecond,
+        });
     }
 
     void emitBeginStep(const std::string& pluginId, const std::string& label) override {
@@ -167,7 +178,7 @@ public:
     }
 
     ExecResult execute(const std::string& pluginId, const std::string& command) override {
-        return run_plugin_command(Logger::instance(), pluginId, command);
+        return run_plugin_command(Logger::instance(), pluginId, "rqp", command);
     }
 
     std::string createTempDirectory(const std::string& pluginId) override {
@@ -266,6 +277,7 @@ PackageInfo rq_info_item(const std::string& name, const std::string& version, co
     PackageInfo info;
     info.name = name;
     info.version = version;
+    info.summary = description;
     info.description = description;
     return info;
 }
@@ -954,12 +966,28 @@ std::string RqPlugin::manifestJson(const std::vector<ManifestEntry>& manifest) {
 
 PackageInfo RqPlugin::packageInfoFromInstalled(const RqpInstalledPackage& installed) {
     return PackageInfo{
+		.system = "rqp",
         .name = installed.metadata.name,
+		.packageId = installed.identity,
         .version = installedVersionString(installed.metadata),
+		.status = "installed",
+		.installed = "true",
+		.summary = installed.metadata.summary,
         .description = installed.metadata.summary.empty() ? installed.metadata.description : installed.metadata.summary,
         .homepage = installed.metadata.url,
+		.sourceUrl = installed.metadata.sourceUrl,
+		.repository = installed.source.repository,
+		.architecture = installed.metadata.architecture,
+		.license = installed.metadata.license,
         .author = installed.metadata.vendor,
+		.maintainer = installed.metadata.packager,
         .email = installed.metadata.maintainerEmail,
+		.publishedAt = installed.metadata.buildDate,
+		.dependencies = installed.metadata.depends,
+		.provides = installed.metadata.provides,
+		.conflicts = installed.metadata.conflicts,
+		.replaces = installed.metadata.replaces,
+		.tags = installed.metadata.tags,
     };
 }
 

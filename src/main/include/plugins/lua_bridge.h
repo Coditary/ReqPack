@@ -83,7 +83,7 @@ public:
 	void logWarn(const std::string& pluginId, const std::string& message) override;
 	void logError(const std::string& pluginId, const std::string& message) override;
 	void emitStatus(const std::string& pluginId, int statusCode) override;
-	void emitProgress(const std::string& pluginId, int percent) override;
+	void emitProgress(const std::string& pluginId, const DisplayProgressMetrics& metrics) override;
 	void emitBeginStep(const std::string& pluginId, const std::string& label) override;
 	void emitCommit(const std::string& pluginId) override;
 	void emitSuccess(const std::string& pluginId) override;

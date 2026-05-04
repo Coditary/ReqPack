@@ -897,7 +897,9 @@ TEST_CASE("orchestrator list command loads plugin from workspace plugins directo
 
     const std::string output = run_reqpack(tempDir.path(), configPath, {"list", "workspace"});
 
-    CHECK(output.find("[workspace] (list) workspace 1.0.0 - listed from " + (workspacePluginDirectory / "workspace").string()) != std::string::npos);
+    CHECK(output.find("LIST: workspace") != std::string::npos);
+    CHECK(output.find("1.0.0") != std::string::npos);
+    CHECK(output.find("listed from " + (workspacePluginDirectory / "workspace").string()) != std::string::npos);
 }
 
 TEST_CASE("orchestrator search command prints executor search results", "[integration][orchestrator][service]") {
@@ -909,7 +911,10 @@ TEST_CASE("orchestrator search command prints executor search results", "[integr
 
     const std::string output = run_reqpack(tempDir.path(), configPath, {"search", "query", "alpha", "beta"});
 
-    CHECK(output.find("[query] (search) alpha beta 2.0.0 - searched by query") != std::string::npos);
+    CHECK(output.find("SEARCH: query") != std::string::npos);
+    CHECK(output.find("alpha beta") != std::string::npos);
+    CHECK(output.find("2.0.0") != std::string::npos);
+    CHECK(output.find("searched by query") != std::string::npos);
 }
 
 TEST_CASE("orchestrator info command prints executor info result", "[integration][orchestrator][service]") {
@@ -921,7 +926,12 @@ TEST_CASE("orchestrator info command prints executor info result", "[integration
 
     const std::string output = run_reqpack(tempDir.path(), configPath, {"info", "query", "sample", "ignored"});
 
-    CHECK(output.find("[query] (info) sample 3.0.0 - info from query") != std::string::npos);
+    CHECK(output.find("INFO: query") != std::string::npos);
+    CHECK(output.find("Name") != std::string::npos);
+    CHECK(output.find("sample") != std::string::npos);
+    CHECK(output.find("Version") != std::string::npos);
+    CHECK(output.find("3.0.0") != std::string::npos);
+    CHECK(output.find("info from query") != std::string::npos);
 }
 
 TEST_CASE("orchestrator install command plans validates and executes plugin install", "[integration][orchestrator][service]") {
@@ -987,7 +997,10 @@ TEST_CASE("orchestrator resolves proxy plugin search requests before logging out
 
     const std::string output = run_reqpack(tempDir.path(), configPath, {"search", "java", "alpha", "beta"});
 
-    CHECK(output.find("[maven] (search) alpha beta 2.0.0 - searched by maven") != std::string::npos);
+    CHECK(output.find("SEARCH: maven") != std::string::npos);
+    CHECK(output.find("alpha beta") != std::string::npos);
+    CHECK(output.find("2.0.0") != std::string::npos);
+    CHECK(output.find("searched by maven") != std::string::npos);
 }
 
 TEST_CASE("orchestrator loads repo java proxy plugin from workspace and routes install to configured target", "[integration][orchestrator][service]") {
@@ -1216,8 +1229,14 @@ TEST_CASE("orchestrator list and info read installed rqp state", "[integration][
     const std::string listOutput = run_reqpack(tempDir.path(), configPath, {"list", "rqp"});
     const std::string infoOutput = run_reqpack(tempDir.path(), configPath, {"info", "rqp", "listed-artifact"});
 
-    CHECK(listOutput.find("listed-artifact 1.0.0-1+r0 - test package") != std::string::npos);
-    CHECK(infoOutput.find("listed-artifact 1.0.0-1+r0 - test package") != std::string::npos);
+    CHECK(listOutput.find("LIST: rqp") != std::string::npos);
+    CHECK(listOutput.find("listed-artifact") != std::string::npos);
+    CHECK(listOutput.find("1.0.0-1+r0") != std::string::npos);
+    CHECK(listOutput.find("test package") != std::string::npos);
+    CHECK(infoOutput.find("INFO: rqp") != std::string::npos);
+    CHECK(infoOutput.find("listed-artifact") != std::string::npos);
+    CHECK(infoOutput.find("1.0.0-1+r0") != std::string::npos);
+    CHECK(infoOutput.find("test package") != std::string::npos);
 }
 
 TEST_CASE("orchestrator remove rqp package deletes state and artifacts", "[integration][orchestrator][service]") {
@@ -1810,7 +1829,9 @@ TEST_CASE("reqpack serve stdin executes commands line by line and continues afte
     REQUIRE(std::filesystem::exists(installMarker));
     CHECK(read_file(installMarker) == "alpha");
     CHECK(output.find("stdin line 2: invalid command syntax") != std::string::npos);
-    CHECK(output.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+    CHECK(output.find("LIST: apply") != std::string::npos);
+    CHECK(output.find("1.0.0") != std::string::npos);
+    CHECK(output.find("listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
 }
 
 TEST_CASE("reqpack install returns non-zero when security validation blocks execution", "[integration][orchestrator][security]") {
@@ -1902,7 +1923,9 @@ TEST_CASE("reqpack serve remote text mode supports token auth", "[integration][o
     REQUIRE(send_socket_text(client, "list apply\n"));
     const auto listResponse = read_text_protocol_response(client);
     CHECK(listResponse.first == "OK");
-    CHECK(listResponse.second.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+    CHECK(listResponse.second.find("apply") != std::string::npos);
+    CHECK(listResponse.second.find("1.0.0") != std::string::npos);
+    CHECK(listResponse.second.find("listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
     ::close(client);
 }
 
@@ -2100,14 +2123,18 @@ TEST_CASE("reqpack serve remote supports admin commands from server remote users
     REQUIRE(send_socket_text(adminClient, "connections count\n"));
     const auto countResponse = read_text_protocol_response(adminClient);
     CHECK(countResponse.first == "OK");
-    CHECK(countResponse.second == "2");
+    CHECK(countResponse.second.find("SERVE: connections") != std::string::npos);
+    CHECK(countResponse.second.find("Active Connections") != std::string::npos);
+    CHECK(countResponse.second.find("2") != std::string::npos);
 
     REQUIRE(send_socket_text(adminClient, "connections list\n"));
     const auto listResponse = read_text_protocol_response(adminClient);
     CHECK(listResponse.first == "OK");
-    CHECK(listResponse.second.find("user=alice") != std::string::npos);
-    CHECK(listResponse.second.find("user=root") != std::string::npos);
-    CHECK(listResponse.second.find("admin=true") != std::string::npos);
+    CHECK(listResponse.second.find("User") != std::string::npos);
+    CHECK(listResponse.second.find("Admin") != std::string::npos);
+    CHECK(listResponse.second.find("alice") != std::string::npos);
+    CHECK(listResponse.second.find("root") != std::string::npos);
+    CHECK(listResponse.second.find("true") != std::string::npos);
 
     REQUIRE(send_socket_text(userClient, "exit\n"));
     const auto exitResponse = read_text_protocol_response(userClient);
@@ -2226,7 +2253,9 @@ TEST_CASE("reqpack remote loads profile from default remote.lua and forwards com
     ::close(warmupClient);
 
     const std::string output = run_reqpack_with_home(tempDir.path(), configPath, tempDir.path(), {"remote", "dev", "list", "apply"});
-    CHECK(output.find("[apply] (list) apply 1.0.0 - listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+    CHECK(output.find("apply") != std::string::npos);
+    CHECK(output.find("1.0.0") != std::string::npos);
+    CHECK(output.find("listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
 }
 
 TEST_CASE("reqpack remote preserves forwarded command flags after profile name", "[integration][orchestrator][remote]") {

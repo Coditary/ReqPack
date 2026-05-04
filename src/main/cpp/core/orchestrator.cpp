@@ -4,6 +4,7 @@
 #include "core/downloader.h"
 #include "core/planner_core.h"
 #include "core/request_resolution.h"
+#include "output/command_output.h"
 #include "output/logger.h"
 
 #include <algorithm>
@@ -22,6 +23,69 @@ std::string package_specifier_from_info(const PackageInfo& item) {
         return item.name;
     }
     return item.name + '@' + item.version;
+}
+
+bool package_info_has_details(const PackageInfo& item) {
+	return !item.packageId.empty() || !item.version.empty() || !item.latestVersion.empty() ||
+		!item.status.empty() || !item.installed.empty() || !item.summary.empty() || !item.description.empty() ||
+		!item.homepage.empty() || !item.documentation.empty() || !item.sourceUrl.empty() || !item.repository.empty() ||
+		!item.channel.empty() || !item.section.empty() || !item.architecture.empty() || !item.license.empty() ||
+		!item.author.empty() || !item.maintainer.empty() || !item.email.empty() || !item.publishedAt.empty() ||
+		!item.updatedAt.empty() || !item.size.empty() || !item.installedSize.empty() ||
+		!item.dependencies.empty() || !item.optionalDependencies.empty() || !item.provides.empty() ||
+		!item.conflicts.empty() || !item.replaces.empty() || !item.binaries.empty() || !item.tags.empty() ||
+		!item.extraFields.empty();
+}
+
+CommandOutput package_table_output(ActionType action,
+	                               const std::vector<Request>& requests,
+	                               const std::vector<PackageInfo>& items) {
+	CommandOutput output;
+	output.mode = action == ActionType::LIST ? DisplayMode::LIST
+	              : action == ActionType::SEARCH ? DisplayMode::SEARCH
+	              : action == ActionType::OUTDATED ? DisplayMode::OUTDATED
+	              : DisplayMode::LIST;
+	for (const auto& request : requests) {
+		output.sessionItems.push_back(request.system.empty() ? "all" : request.system);
+	}
+	const bool includeSystem = requests.size() > 1;
+	std::vector<std::string> headers;
+	if (includeSystem) {
+		headers.push_back("System");
+	}
+	headers.push_back("Name");
+	headers.push_back("Version");
+	headers.push_back("Summary");
+	output.blocks.push_back(make_command_table_block(headers, package_infos_to_rows(items, includeSystem)));
+	if (items.empty()) {
+		output.blocks.push_back(make_command_message_block("No results"));
+	}
+	output.success = true;
+	output.succeeded = static_cast<int>(items.size());
+	return output;
+}
+
+CommandOutput package_info_output(const Request& request, PackageInfo item) {
+	CommandOutput output;
+	output.mode = DisplayMode::INFO;
+	output.sessionItems = {request.system.empty() ? "info" : request.system};
+	if (!package_info_has_details(item)) {
+		output.success = false;
+		output.failed = 1;
+		output.blocks.push_back(make_command_message_block("No package info found"));
+		return output;
+	}
+	if (item.system.empty()) {
+		item.system = request.system;
+	}
+	if (item.name.empty() && !request.packages.empty()) {
+		item.name = request.packages.front();
+	}
+	const auto fields = package_info_to_fields(item);
+	output.blocks.push_back(make_command_field_value_block(fields));
+	output.success = true;
+	output.succeeded = 1;
+	return output;
 }
 
 // Extract the filename from a URL path (everything after the last '/').
@@ -297,43 +361,60 @@ int Orchestrator::run() {
 	// ─────────────────────────────────────────────────────────────────────────
 
 	if (this->requests.front().action == ActionType::LIST) {
+		std::vector<PackageInfo> items;
 		for (const Request& request : this->requests) {
-			for (const PackageInfo& item : this->executor->list(request)) {
-				Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "list");
+			auto listed = this->executor->list(request);
+			for (auto& item : listed) {
+				if (item.system.empty()) {
+					item.system = request.system;
+				}
+				items.push_back(std::move(item));
 			}
 		}
+		render_command_output(package_table_output(ActionType::LIST, this->requests, items));
 		return 0;
 	}
 
 	if (this->requests.front().action == ActionType::OUTDATED) {
+		std::vector<PackageInfo> items;
 		for (const Request& request : this->requests) {
-			for (const PackageInfo& item : this->executor->outdated(request)) {
-				Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "outdated");
+			auto outdated = this->executor->outdated(request);
+			for (auto& item : outdated) {
+				if (item.system.empty()) {
+					item.system = request.system;
+				}
+				items.push_back(std::move(item));
 			}
 		}
+		render_command_output(package_table_output(ActionType::OUTDATED, this->requests, items));
 		return 0;
 	}
 
 	if (this->requests.front().action == ActionType::SNAPSHOT) {
-		(void)this->snapshotExporter->exportSnapshot(this->requests.front());
-		return 0;
+		const bool ok = this->snapshotExporter->exportSnapshot(this->requests.front());
+		return ok ? 0 : 1;
 	}
 
 	if (this->requests.front().action == ActionType::SEARCH) {
+		std::vector<PackageInfo> items;
 		for (const Request& request : this->requests) {
-			for (const PackageInfo& item : this->executor->search(request)) {
-				Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "search");
+			auto searched = this->executor->search(request);
+			for (auto& item : searched) {
+				if (item.system.empty()) {
+					item.system = request.system;
+				}
+				items.push_back(std::move(item));
 			}
 		}
+		render_command_output(package_table_output(ActionType::SEARCH, this->requests, items));
 		return 0;
 	}
 
 	if (this->requests.front().action == ActionType::INFO) {
-		for (const Request& request : this->requests) {
-			const PackageInfo item = this->executor->info(request);
-			Logger::instance().stdout(item.name + " " + item.version + " - " + item.description, request.system, "info");
-		}
-		return 0;
+		const PackageInfo item = this->executor->info(this->requests.front());
+		const CommandOutput output = package_info_output(this->requests.front(), item);
+		render_command_output(output);
+		return output.success ? 0 : 1;
 	}
 
 	std::vector<Request> plannedRequests = this->requests;

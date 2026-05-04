@@ -1109,6 +1109,7 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
 ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackConfigOverrides& overrides) {
     ReqPackConfig config = base;
 
+    if (overrides.consoleOutput.has_value()) config.logging.consoleOutput = overrides.consoleOutput.value();
     if (overrides.logLevel.has_value()) config.logging.level = overrides.logLevel.value();
     if (overrides.logPattern.has_value()) config.logging.pattern = overrides.logPattern.value();
     if (overrides.fileOutput.has_value()) config.logging.fileOutput = overrides.fileOutput.value();
@@ -1236,6 +1237,10 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
     if (argument == "--log-level") {
         if (require_value(value)) overrides.logLevel = log_level_from_string(value);
+        return true;
+    }
+    if (argument == "--verbose" || argument == "-v") {
+        overrides.consoleOutput = true;
         return true;
     }
     if (argument == "--log-pattern") {

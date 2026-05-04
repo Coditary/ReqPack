@@ -47,7 +47,7 @@ TEST_CASE("exec rules parser accepts valid unified rules", "[unit][exec_rules][p
                     source = "line",
                     regex = "^Progress:\\s+(\\d+)%$",
                     actions = {
-                        { type = "progress", percent = "${1}" },
+                        { type = "progress", percent = "${1}", current = "16.4", currentUnit = "MiB", total = "40.0", totalUnit = "MiB", speed = "2.5", speedUnit = "MiB/s" },
                     },
                 },
             },
@@ -106,8 +106,30 @@ TEST_CASE("exec rules parser rejects missing action fields", "[unit][exec_rules]
 
     REQUIRE_THROWS_WITH(
         parse_exec_rules(rulesObject),
-        Catch::Contains("progress action requires field 'percent'")
+        Catch::Contains("progress action requires field 'percent', 'current', 'total', or 'speed'")
     );
+}
+
+TEST_CASE("exec rules parser accepts rich progress fields without percent", "[unit][exec_rules][parse]") {
+    sol::state lua = make_lua();
+    const sol::object rulesObject = eval_lua(lua, R"(
+        return {
+            rules = {
+                {
+                    source = "line",
+                    regex = "^Loaded (.+)$",
+                    actions = {
+                        { type = "progress", current = "16.4", currentUnit = "MiB", total = "40.0", totalUnit = "MiB", speed = "2.5", speedUnit = "MiB/s" },
+                    },
+                },
+            },
+        }
+    )");
+
+    const ExecRuleset ruleset = parse_exec_rules(rulesObject);
+    REQUIRE(ruleset.rules.size() == 1);
+    CHECK(ruleset.rules[0].actions[0].fields.at("currentUnit") == "MiB");
+    CHECK(ruleset.rules[0].actions[0].fields.at("speedUnit") == "MiB/s");
 }
 
 TEST_CASE("exec rules parser rejects unknown action type", "[unit][exec_rules][parse]") {

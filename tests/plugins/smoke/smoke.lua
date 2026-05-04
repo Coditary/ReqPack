@@ -143,6 +143,22 @@ function plugin.search(context, prompt)
         return { result_item("control-ok", "control-failed", result) }
     end
 
+    if prompt == "rich" then
+        local result = context.exec.run("python3 -c \"print('loaded:16.4/40.0@2.5')\"", {
+            rules = {
+                {
+                    source = "line",
+                    regex = "^loaded:(\\d+\\.\\d+)/(\\d+\\.\\d+)@(\\d+\\.\\d+)$",
+                    actions = {
+                        { type = "progress", current = "${1}", currentUnit = "MiB", total = "${2}", totalUnit = "MiB", speed = "${3}", speedUnit = "MiB/s" },
+                        { type = "event", name = "line_progress", payload = "${1}/${2}@${3}" },
+                    },
+                },
+            },
+        })
+        return { result_item("rich-ok", "rich-failed", result) }
+    end
+
     if prompt == "invalid" then
         local result = context.exec.run("python3 -c \"print('noop')\"", {
             rules = {

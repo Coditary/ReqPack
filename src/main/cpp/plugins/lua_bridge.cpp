@@ -2,6 +2,7 @@
 
 #include "core/archive_resolver.h"
 #include "core/downloader.h"
+#include "output/progress_metrics_lua.h"
 #include "plugins/exec_rules.h"
 
 #include <algorithm>
@@ -249,12 +250,37 @@ void register_types(sol::state& lua) {
     lua.new_usertype<PackageInfo>(
         "PackageInfo",
         sol::constructors<PackageInfo()>(),
+        "system", &PackageInfo::system,
         "name", &PackageInfo::name,
+        "packageId", &PackageInfo::packageId,
         "version", &PackageInfo::version,
+        "latestVersion", &PackageInfo::latestVersion,
+        "status", &PackageInfo::status,
+        "installed", &PackageInfo::installed,
+        "summary", &PackageInfo::summary,
         "description", &PackageInfo::description,
         "homepage", &PackageInfo::homepage,
+        "documentation", &PackageInfo::documentation,
+        "sourceUrl", &PackageInfo::sourceUrl,
+        "repository", &PackageInfo::repository,
+        "channel", &PackageInfo::channel,
+        "section", &PackageInfo::section,
+        "architecture", &PackageInfo::architecture,
+        "license", &PackageInfo::license,
         "author", &PackageInfo::author,
-        "email", &PackageInfo::email
+        "maintainer", &PackageInfo::maintainer,
+        "email", &PackageInfo::email,
+        "publishedAt", &PackageInfo::publishedAt,
+        "updatedAt", &PackageInfo::updatedAt,
+        "size", &PackageInfo::size,
+        "installedSize", &PackageInfo::installedSize,
+        "dependencies", &PackageInfo::dependencies,
+        "optionalDependencies", &PackageInfo::optionalDependencies,
+        "provides", &PackageInfo::provides,
+        "conflicts", &PackageInfo::conflicts,
+        "replaces", &PackageInfo::replaces,
+        "binaries", &PackageInfo::binaries,
+		"tags", &PackageInfo::tags
     );
 
     lua.new_usertype<ExecResult>(
@@ -328,6 +354,92 @@ sol::table make_string_array_table(sol::state& lua, const std::vector<std::strin
         table[static_cast<int>(index + 1)] = values[index];
     }
     return table;
+}
+
+std::vector<std::string> string_array_from_lua_table(const sol::table& table) {
+	std::vector<std::string> values;
+	for (const auto& [_, value] : table) {
+		if (value.is<std::string>()) {
+			values.push_back(value.as<std::string>());
+		}
+	}
+	return values;
+}
+
+std::vector<std::pair<std::string, std::string>> extra_fields_from_lua_table(const sol::table& table) {
+	std::vector<std::pair<std::string, std::string>> fields;
+	for (const auto& [key, value] : table) {
+		if (key.is<std::string>() && !value.is<sol::table>()) {
+			fields.emplace_back(key.as<std::string>(), value_to_string(value));
+			continue;
+		}
+		if (!value.is<sol::table>()) {
+			continue;
+		}
+		const sol::table field = value.as<sol::table>();
+		const std::string fieldKey = field.get_or("key", std::string{});
+		const std::string fieldValue = field.get_or("value", std::string{});
+		if (!fieldKey.empty() && !fieldValue.empty()) {
+			fields.emplace_back(fieldKey, fieldValue);
+		}
+	}
+	return fields;
+}
+
+PackageInfo package_info_from_lua_table(const sol::table& info) {
+	PackageInfo packageInfo;
+	packageInfo.system = info.get_or("system", std::string{});
+	packageInfo.name = info.get_or("name", std::string{});
+	packageInfo.packageId = info.get_or("packageId", std::string{});
+	packageInfo.version = info.get_or("version", std::string{});
+	packageInfo.latestVersion = info.get_or("latestVersion", std::string{});
+	packageInfo.status = info.get_or("status", std::string{});
+	packageInfo.installed = info.get_or("installed", std::string{});
+	packageInfo.summary = info.get_or("summary", std::string{});
+	packageInfo.description = info.get_or("description", std::string{});
+	packageInfo.homepage = info.get_or("homepage", std::string{});
+	packageInfo.documentation = info.get_or("documentation", std::string{});
+	packageInfo.sourceUrl = info.get_or("sourceUrl", std::string{});
+	packageInfo.repository = info.get_or("repository", std::string{});
+	packageInfo.channel = info.get_or("channel", std::string{});
+	packageInfo.section = info.get_or("section", std::string{});
+	packageInfo.architecture = info.get_or("architecture", std::string{});
+	packageInfo.license = info.get_or("license", std::string{});
+	packageInfo.author = info.get_or("author", std::string{});
+	packageInfo.maintainer = info.get_or("maintainer", std::string{});
+	packageInfo.email = info.get_or("email", std::string{});
+	packageInfo.publishedAt = info.get_or("publishedAt", std::string{});
+	packageInfo.updatedAt = info.get_or("updatedAt", std::string{});
+	packageInfo.size = info.get_or("size", std::string{});
+	packageInfo.installedSize = info.get_or("installedSize", std::string{});
+	if (const sol::object dependencies = info["dependencies"]; dependencies.is<sol::table>()) {
+		packageInfo.dependencies = string_array_from_lua_table(dependencies.as<sol::table>());
+	}
+	if (const sol::object optionalDependencies = info["optionalDependencies"]; optionalDependencies.is<sol::table>()) {
+		packageInfo.optionalDependencies = string_array_from_lua_table(optionalDependencies.as<sol::table>());
+	}
+	if (const sol::object provides = info["provides"]; provides.is<sol::table>()) {
+		packageInfo.provides = string_array_from_lua_table(provides.as<sol::table>());
+	}
+	if (const sol::object conflicts = info["conflicts"]; conflicts.is<sol::table>()) {
+		packageInfo.conflicts = string_array_from_lua_table(conflicts.as<sol::table>());
+	}
+	if (const sol::object replaces = info["replaces"]; replaces.is<sol::table>()) {
+		packageInfo.replaces = string_array_from_lua_table(replaces.as<sol::table>());
+	}
+	if (const sol::object binaries = info["binaries"]; binaries.is<sol::table>()) {
+		packageInfo.binaries = string_array_from_lua_table(binaries.as<sol::table>());
+	}
+	if (const sol::object tags = info["tags"]; tags.is<sol::table>()) {
+		packageInfo.tags = string_array_from_lua_table(tags.as<sol::table>());
+	}
+	if (const sol::object extraFields = info["extraFields"]; extraFields.is<sol::table>()) {
+		packageInfo.extraFields = extra_fields_from_lua_table(extraFields.as<sol::table>());
+	}
+	if (packageInfo.summary.empty()) {
+		packageInfo.summary = packageInfo.description;
+	}
+	return packageInfo;
 }
 
 sol::table make_repository_entry_table(sol::state& lua, const RepositoryEntry& repository) {
@@ -539,62 +651,102 @@ void LuaBridge::register_context_types() {
         }),
         "log", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table log = m_lua.create_table();
-            log.set_function("debug", [context](const std::string& message) { context.logDebug(message); });
-            log.set_function("info", [context](const std::string& message) { context.logInfo(message); });
-            log.set_function("warn", [context](const std::string& message) { context.logWarn(message); });
-            log.set_function("error", [context](const std::string& message) { context.logError(message); });
+			const PluginCallContext* contextPtr = &context;
+			log.set_function("debug", [contextPtr](const std::string& message) {
+				if (contextPtr->host != nullptr) contextPtr->host->logDebug(contextPtr->pluginId, message);
+			});
+			log.set_function("info", [contextPtr](const std::string& message) {
+				if (contextPtr->host != nullptr) contextPtr->host->logInfo(contextPtr->pluginId, message);
+			});
+			log.set_function("warn", [contextPtr](const std::string& message) {
+				if (contextPtr->host != nullptr) contextPtr->host->logWarn(contextPtr->pluginId, message);
+			});
+			log.set_function("error", [contextPtr](const std::string& message) {
+				if (contextPtr->host != nullptr) contextPtr->host->logError(contextPtr->pluginId, message);
+			});
             return log;
         }),
         "tx", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table tx = m_lua.create_table();
-            tx.set_function("status", [context](int code) { context.emitStatus(code); });
-            tx.set_function("progress", [context](int percent) { context.emitProgress(percent); });
-            tx.set_function("begin_step", [context](const std::string& label) { context.emitBeginStep(label); });
-            tx.set_function("commit", [context]() { context.emitCommit(); });
-            tx.set_function("success", [context]() { context.emitSuccess(); });
-            tx.set_function("failed", [context](const std::string& message) { context.emitFailure(message); });
+			const PluginCallContext* contextPtr = &context;
+			tx.set_function("status", [contextPtr](int code) {
+				if (contextPtr->host != nullptr) contextPtr->host->emitStatus(contextPtr->currentItemId.empty() ? contextPtr->pluginId : contextPtr->currentItemId, code);
+			});
+			tx.set_function("progress", [contextPtr](sol::object payload) {
+                if (const std::optional<DisplayProgressMetrics> metrics = progress_metrics_from_lua_object(payload); metrics.has_value()) {
+					if (contextPtr->host != nullptr) {
+						contextPtr->host->emitProgress(contextPtr->currentItemId.empty() ? contextPtr->pluginId : contextPtr->currentItemId, metrics.value());
+					}
+                }
+            });
+			tx.set_function("begin_step", [contextPtr](const std::string& label) {
+				if (contextPtr->host != nullptr) contextPtr->host->emitBeginStep(contextPtr->currentItemId.empty() ? contextPtr->pluginId : contextPtr->currentItemId, label);
+			});
+			tx.set_function("commit", [contextPtr]() {
+				if (contextPtr->host != nullptr) contextPtr->host->emitCommit(contextPtr->currentItemId.empty() ? contextPtr->pluginId : contextPtr->currentItemId);
+			});
+			tx.set_function("success", [contextPtr]() {
+				if (contextPtr->host != nullptr) contextPtr->host->emitSuccess(contextPtr->currentItemId.empty() ? contextPtr->pluginId : contextPtr->currentItemId);
+			});
+			tx.set_function("failed", [contextPtr](const std::string& message) {
+				if (contextPtr->host != nullptr) contextPtr->host->emitFailure(contextPtr->currentItemId.empty() ? contextPtr->pluginId : contextPtr->currentItemId, message);
+			});
             return tx;
         }),
         "events", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table events = m_lua.create_table();
             const std::array<const char*, 8> names{"installed", "deleted", "updated", "listed", "searched", "informed", "outdated", "unavailable"};
+			const PluginCallContext* contextPtr = &context;
             for (const char* name : names) {
-                events.set_function(name, [this, context, name](sol::object payload) {
-                    context.emitEvent(name, serializeLuaPayload(payload));
+				events.set_function(name, [this, contextPtr, name](sol::object payload) {
+					if (contextPtr->host != nullptr) {
+						contextPtr->host->emitEvent(contextPtr->currentItemId.empty() ? contextPtr->pluginId : contextPtr->currentItemId, name, serializeLuaPayload(payload));
+					}
                 });
             }
             return events;
         }),
         "artifacts", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table artifacts = m_lua.create_table();
-            artifacts.set_function("register", [this, context](sol::object payload) {
-                context.registerArtifact(serializeLuaPayload(payload));
+			const PluginCallContext* contextPtr = &context;
+            artifacts.set_function("register", [this, contextPtr](sol::object payload) {
+				if (contextPtr->host != nullptr) contextPtr->host->registerArtifact(contextPtr->pluginId, serializeLuaPayload(payload));
             });
             return artifacts;
         }),
         "exec", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table exec = m_lua.create_table();
+			const PluginCallContext* contextPtr = &context;
             exec.set_function("run", sol::overload(
-                [context](const std::string& command) {
-                    return context.execute(command);
+				[contextPtr](const std::string& command) {
+					return contextPtr->host != nullptr ? contextPtr->host->execute(contextPtr->pluginId, command) : ExecResult{};
                 },
-                [this, context](const std::string& command, const sol::object& rules) {
-                    return run_plugin_command(m_logger, context.pluginId, command, rules, hasSilentRuntimeFlag(context.flags));
+				[this, contextPtr](const std::string& command, const sol::object& rules) {
+                    return run_plugin_command(
+                        m_logger,
+						contextPtr->currentItemId.empty() ? contextPtr->pluginId : contextPtr->currentItemId,
+						contextPtr->pluginId,
+                        command,
+                        rules,
+						hasSilentRuntimeFlag(contextPtr->flags)
+                    );
                 }
             ));
             return exec;
         }),
         "fs", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table fs = m_lua.create_table();
-            fs.set_function("get_tmp_dir", [context]() {
-                return context.createTempDirectory();
+			const PluginCallContext* contextPtr = &context;
+            fs.set_function("get_tmp_dir", [contextPtr]() {
+				return contextPtr->host != nullptr ? contextPtr->host->createTempDirectory(contextPtr->pluginId) : std::string{};
             });
             return fs;
         }),
         "net", sol::readonly_property([this](const PluginCallContext& context) {
             sol::table net = m_lua.create_table();
-            net.set_function("download", [context](const std::string& url, const std::string& destinationPath) {
-                const DownloadResult result = context.downloadFile(url, destinationPath);
+			const PluginCallContext* contextPtr = &context;
+            net.set_function("download", [contextPtr](const std::string& url, const std::string& destinationPath) {
+				const DownloadResult result = contextPtr->host != nullptr ? contextPtr->host->download(contextPtr->pluginId, url, destinationPath) : DownloadResult{};
                 return result.success;
             });
             return net;
@@ -717,6 +869,9 @@ bool LuaBridge::shutdown() {
 }
 
 std::vector<Package> LuaBridge::getRequirements() {
+	if (!m_pluginTable.valid()) {
+		return {};
+	}
     sol::protected_function func = m_pluginTable["getRequirements"];
     if (func.valid()) {
         auto result = func();
@@ -732,6 +887,9 @@ std::vector<Package> LuaBridge::getRequirements() {
 }
 
 std::vector<std::string> LuaBridge::getCategories() {
+	if (!m_pluginTable.valid()) {
+		return {};
+	}
     sol::protected_function func = m_pluginTable["getCategories"];
     if (func.valid()) {
         auto result = func();
@@ -743,6 +901,9 @@ std::vector<std::string> LuaBridge::getCategories() {
 }
 
 std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& packages) {
+	if (!m_pluginTable.valid()) {
+		return packages;
+	}
     sol::protected_function func = m_pluginTable["getMissingPackages"];
     if (!func.valid()) {
         log_lua_error(m_logger, m_pluginId, "[Lua API Error] getMissingPackages(packages) is required.");
@@ -858,25 +1019,17 @@ std::vector<PackageInfo> LuaBridge::packageInfoListFromObject(const sol::object&
 
     std::vector<PackageInfo> result;
     const sol::table table = value.as<sol::table>();
-    for (const auto& [_, entry] : table) {
-        if (entry.get_type() == sol::type::userdata) {
-            result.push_back(entry.as<PackageInfo>());
-            continue;
-        }
-        if (entry.get_type() != sol::type::table) {
-            continue;
-        }
-        const sol::table info = entry.as<sol::table>();
-        PackageInfo packageInfo;
-        packageInfo.name = info.get_or("name", std::string{});
-        packageInfo.version = info.get_or("version", std::string{});
-        packageInfo.description = info.get_or("description", std::string{});
-        packageInfo.homepage = info.get_or("homepage", std::string{});
-        packageInfo.author = info.get_or("author", std::string{});
-        packageInfo.email = info.get_or("email", std::string{});
-        result.push_back(std::move(packageInfo));
-    }
-    return result;
+	for (const auto& [_, entry] : table) {
+		if (entry.get_type() == sol::type::userdata) {
+			result.push_back(entry.as<PackageInfo>());
+			continue;
+		}
+		if (entry.get_type() != sol::type::table) {
+			continue;
+		}
+		result.push_back(package_info_from_lua_table(entry.as<sol::table>()));
+	}
+	return result;
 }
 
 PackageInfo LuaBridge::packageInfoFromObject(const sol::object& value) const {
@@ -886,18 +1039,10 @@ PackageInfo LuaBridge::packageInfoFromObject(const sol::object& value) const {
     if (value.get_type() == sol::type::userdata) {
         return value.as<PackageInfo>();
     }
-    if (value.get_type() != sol::type::table) {
-        return {};
-    }
-    const sol::table info = value.as<sol::table>();
-    return PackageInfo{
-        .name = info.get_or("name", std::string{}),
-        .version = info.get_or("version", std::string{}),
-        .description = info.get_or("description", std::string{}),
-        .homepage = info.get_or("homepage", std::string{}),
-        .author = info.get_or("author", std::string{}),
-        .email = info.get_or("email", std::string{})
-    };
+	if (value.get_type() != sol::type::table) {
+		return {};
+	}
+	return package_info_from_lua_table(value.as<sol::table>());
 }
 
 std::vector<PackageInfo> LuaBridge::list(const PluginCallContext& context) {
@@ -1073,7 +1218,7 @@ ExecResult LuaBridge::runCommand(const std::string& command) const {
 }
 
 ExecResult LuaBridge::runCommand(const std::string& command, const bool silent) const {
-    return run_plugin_command(m_logger, m_pluginId, command, silent);
+    return run_plugin_command(m_logger, m_pluginId, m_pluginId, command, silent);
 }
 
 DownloadResult LuaBridge::downloadToPath(const std::string& url, const std::string& destinationPath) {
@@ -1156,12 +1301,23 @@ void LuaBridge::emitStatus(const std::string& pluginId, int statusCode) {
     m_logger.emit(OutputAction::PLUGIN_STATUS, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .statusCode = statusCode});
 }
 
-void LuaBridge::emitProgress(const std::string& pluginId, int percent) {
+void LuaBridge::emitProgress(const std::string& pluginId, const DisplayProgressMetrics& metrics) {
     if (m_silentRuntimeOutput.load()) {
         return;
     }
     const bool hasItemId = pluginId.find(':') != std::string::npos;
-    m_logger.emit(OutputAction::PLUGIN_PROGRESS, OutputContext{.source = hasItemId ? pluginId : "plugin", .scope = m_pluginId, .progressPercent = std::clamp(percent, 0, 100)});
+    const DisplayProgressMetrics normalized = canonicalize_progress_metrics(metrics);
+    if (!normalized.percent.has_value() && !normalized.currentBytes.has_value() && !normalized.totalBytes.has_value() && !normalized.bytesPerSecond.has_value()) {
+        return;
+    }
+    m_logger.emit(OutputAction::PLUGIN_PROGRESS, OutputContext{
+        .source = hasItemId ? pluginId : "plugin",
+        .scope = m_pluginId,
+        .progressPercent = normalized.percent,
+        .currentBytes = normalized.currentBytes,
+        .totalBytes = normalized.totalBytes,
+        .bytesPerSecond = normalized.bytesPerSecond,
+    });
 }
 
 void LuaBridge::emitBeginStep(const std::string& pluginId, const std::string& label) {

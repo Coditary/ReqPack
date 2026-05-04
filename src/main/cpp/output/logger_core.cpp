@@ -26,13 +26,20 @@ std::string logger_render_output_event(const OutputEvent& event) {
 				.scope   = event.context.scope,
 			});
 
-		case OutputAction::PLUGIN_PROGRESS:
+		case OutputAction::PLUGIN_PROGRESS: {
+			const std::string summary = format_progress_summary(DisplayProgressMetrics{
+				.percent = event.context.progressPercent,
+				.currentBytes = event.context.currentBytes,
+				.totalBytes = event.context.totalBytes,
+				.bytesPerSecond = event.context.bytesPerSecond,
+			});
 			return logger_format_message(OutputContext{
 				.level   = spdlog::level::info,
-				.message = "progress=" + std::to_string(event.context.progressPercent) + "%",
+				.message = summary.empty() ? "progress" : "progress=" + summary,
 				.source  = event.context.source,
 				.scope   = event.context.scope,
 			});
+		}
 
 		case OutputAction::PLUGIN_EVENT:
 			return logger_format_message(OutputContext{
@@ -64,6 +71,8 @@ std::string logger_render_output_event(const OutputEvent& event) {
 			return "[display:item_success] " + event.context.source;
 		case OutputAction::DISPLAY_ITEM_FAILURE:
 			return "[display:item_failure] " + event.context.source + " " + event.context.message;
+		case OutputAction::DISPLAY_MESSAGE:
+			return "[display:message] " + event.context.message;
 		case OutputAction::DISPLAY_TABLE_HEADER:
 			return "[display:table_header] " + event.context.payload;
 		case OutputAction::DISPLAY_TABLE_ROW:

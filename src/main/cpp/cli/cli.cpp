@@ -15,6 +15,7 @@ namespace {
 const std::string PROGRAM_NAME = "ReqPack";
 const std::string USAGE = "Usage: ReqPack <command> <system> [packages...] [additional systems/packages...] [flags...]";
 const std::string HELP_DESCRIPTION = "Displays this help";
+const std::string VERBOSE_DESCRIPTION = "Shows verbose command transcript and logger console output";
 
 std::string to_lower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
@@ -88,6 +89,7 @@ Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package M
     app->allow_extras(true);
     app->prefix_command(true);
     app->set_help_flag("-h,--help", HELP_DESCRIPTION);
+    app->add_flag("-v,--verbose", VERBOSE_DESCRIPTION);
     app->usage(USAGE);
 }
 

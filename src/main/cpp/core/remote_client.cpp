@@ -1,5 +1,8 @@
 #include "core/remote_client.h"
 
+#include "output/command_output.h"
+#include "output/logger.h"
+
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/socket.h>
@@ -308,16 +311,18 @@ int connect_remote(const RemoteProfile& profile) {
     return fd;
 }
 
-int send_text_command_and_print_response(int fd, const std::string& command) {
+int send_text_command_and_render_response(int fd, const std::string& command, IDisplay* display) {
+	(void)display;
     if (!send_all(fd, command + "\n")) {
         throw std::runtime_error("failed to send remote command");
     }
     const auto response = read_text_response(fd);
-    std::cout << response.second;
+	std::cout << response.second;
     return response.first == "OK" ? 0 : 1;
 }
 
-int send_upload_install_request(int fd, const UploadInstallRequest& request) {
+int send_upload_install_request(int fd, const UploadInstallRequest& request, IDisplay* display) {
+	(void)display;
     const std::string header = join_arguments({
         REMOTE_UPLOAD_INSTALL_COMMAND,
         std::to_string(request.size),
@@ -348,12 +353,12 @@ int send_upload_install_request(int fd, const UploadInstallRequest& request) {
         throw std::runtime_error("failed while reading local upload file");
     }
 
-    const auto response = read_text_response(fd);
-    std::cout << response.second;
+	const auto response = read_text_response(fd);
+	std::cout << response.second;
     return response.first == "OK" ? 0 : 1;
 }
 
-int run_text_client_session(const RemoteProfile& profile, const std::vector<std::string>& forwardedArguments) {
+int run_text_client_session(const RemoteProfile& profile, const std::vector<std::string>& forwardedArguments, IDisplay* display) {
     std::optional<UploadInstallRequest> forwardedUpload;
     if (!forwardedArguments.empty()) {
         std::string uploadError;
@@ -390,8 +395,8 @@ int run_text_client_session(const RemoteProfile& profile, const std::vector<std:
 
     if (!forwardedArguments.empty()) {
         const int result = forwardedUpload.has_value()
-            ? send_upload_install_request(fd, forwardedUpload.value())
-            : send_text_command_and_print_response(fd, join_arguments(forwardedArguments));
+			? send_upload_install_request(fd, forwardedUpload.value(), display)
+			: send_text_command_and_render_response(fd, join_arguments(forwardedArguments), display);
         closeGuard();
         return result;
     }
@@ -416,8 +421,8 @@ int run_text_client_session(const RemoteProfile& profile, const std::vector<std:
         }
 
         const int result = upload.has_value()
-            ? send_upload_install_request(fd, upload.value())
-            : send_text_command_and_print_response(fd, trimmed);
+			? send_upload_install_request(fd, upload.value(), display)
+			: send_text_command_and_render_response(fd, trimmed, display);
         if (trimmed == "quit" || trimmed == "exit") {
             break;
         }
@@ -428,7 +433,7 @@ int run_text_client_session(const RemoteProfile& profile, const std::vector<std:
     return 0;
 }
 
-int run_json_client_session(const RemoteProfile& profile, const std::vector<std::string>& forwardedArguments) {
+int run_json_client_session(const RemoteProfile& profile, const std::vector<std::string>& forwardedArguments, IDisplay* display) {
     if (forwardedArguments.empty()) {
         throw std::runtime_error("json remote profiles require a forwarded command");
     }
@@ -472,7 +477,8 @@ int run_json_client_session(const RemoteProfile& profile, const std::vector<std:
     const std::optional<std::string> output = extract_json_string_field(responseLine.value(), "output");
     const std::optional<std::string> error = extract_json_string_field(responseLine.value(), "error");
     if (output.has_value()) {
-        std::cout << output.value();
+		(void)display;
+		std::cout << output.value();
         closeGuard();
         return 0;
     }
@@ -486,7 +492,8 @@ int run_remote_client(
     const ReqPackConfig& config,
     const std::filesystem::path& profilePath,
     const std::string& profileName,
-    const std::vector<std::string>& forwardedArguments
+	const std::vector<std::string>& forwardedArguments,
+	IDisplay* display
 ) {
     (void)config;
     const std::optional<RemoteProfile> profile = find_remote_profile(profilePath, profileName);
@@ -496,7 +503,7 @@ int run_remote_client(
 
     switch (profile->protocol) {
         case RemoteProfileProtocol::JSON:
-            return run_json_client_session(profile.value(), forwardedArguments);
+			return run_json_client_session(profile.value(), forwardedArguments, display);
         case RemoteProfileProtocol::HTTP:
             throw std::runtime_error("http remote profiles are not implemented yet");
         case RemoteProfileProtocol::HTTPS:
@@ -504,6 +511,6 @@ int run_remote_client(
         case RemoteProfileProtocol::AUTO:
         case RemoteProfileProtocol::TEXT:
         default:
-            return run_text_client_session(profile.value(), forwardedArguments);
+			return run_text_client_session(profile.value(), forwardedArguments, display);
     }
 }

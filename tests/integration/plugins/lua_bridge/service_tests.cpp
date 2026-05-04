@@ -250,6 +250,7 @@ function plugin.install(context, packages)
 
   context.tx.status(17)
   context.tx.progress(33)
+  context.tx.progress({ percent = 25, current = 10.0, currentUnit = "MiB", total = 40.0, totalUnit = "MiB", speed = 2.5, speedUnit = "MiB/s" })
   context.tx.begin_step("phase one")
   context.tx.commit()
   context.tx.success()
@@ -262,16 +263,16 @@ function plugin.install(context, packages)
   local tmp = context.fs.get_tmp_dir()
   local tmp_check = context.exec.run("test -d '" .. tmp .. "'")
   local plain = context.exec.run("printf 'ctx-exec'")
-  local ruled = context.exec.run("printf 'line:41\\n'", {
+  local ruled = context.exec.run("printf 'loaded:16.4/40.0@2.5\\n'", {
     initial = "scan",
     rules = {
       {
         state = "scan",
         source = "line",
-        regex = "^line:(\\d+)$",
+        regex = "^loaded:(\\d+\\.\\d+)/(\\d+\\.\\d+)@(\\d+\\.\\d+)$",
         actions = {
-          { type = "progress", percent = "${1}" },
-          { type = "event", name = "line_progress", payload = "${1}" },
+          { type = "progress", current = "${1}", currentUnit = "MiB", total = "${2}", totalUnit = "MiB", speed = "${3}", speedUnit = "MiB/s" },
+          { type = "event", name = "line_progress", payload = "${1}/${2}@${3}" },
         },
       },
     },
@@ -493,6 +494,7 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
     CHECK(output.find("[plugin] (bridge) error-msg") != std::string::npos);
     CHECK(output.find("[plugin] (bridge) status=17") != std::string::npos);
     CHECK(output.find("[plugin] (bridge) progress=33%") != std::string::npos);
+    CHECK(output.find("[plugin] (bridge) progress=25%  10.0 MiB / 40.0 MiB  2.5 MiB/s") != std::string::npos);
     CHECK(output.find("[plugin] (bridge) begin_step: phase one") != std::string::npos);
     CHECK(output.find("[plugin] (bridge) commit: committed") != std::string::npos);
     CHECK(output.find("[plugin] (bridge) success: ok") != std::string::npos);
@@ -502,8 +504,8 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
     CHECK(output.find("[plugin] (bridge) artifact: artifact.json") != std::string::npos);
     CHECK(output.find("ctx-exec") != std::string::npos);
     CHECK(output.find("global-exec") != std::string::npos);
-    CHECK(output.find("progress=41%") != std::string::npos);
-    CHECK(output.find("line_progress: 41") != std::string::npos);
+    CHECK(output.find("progress=41%  16.4 MiB / 40.0 MiB  2.5 MiB/s") != std::string::npos);
+    CHECK(output.find("line_progress: 16.4/40.0@2.5") != std::string::npos);
 }
 
 TEST_CASE("lua bridge exposes ordered repositories for current plugin", "[integration][lua_bridge][service]") {

@@ -14,6 +14,7 @@
 #include <memory>
 #include <thread>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +57,9 @@ enum class OutputAction {
 	/// context: source = itemId, message = failure reason.
 	DISPLAY_ITEM_FAILURE,
 
+	/// context: message = plain display line, source = optional source label.
+	DISPLAY_MESSAGE,
+
 	// ── Display table output ─────────────────────────────────────────────────
 	/// context: payload = pipe-delimited column headers.
 	DISPLAY_TABLE_HEADER,
@@ -79,7 +83,10 @@ struct OutputContext {
 	std::string               source{};     ///< Plugin id / item id.
 	std::string               scope{};      ///< Package name / sub-scope.
 	int                       statusCode{0};
-	int                       progressPercent{0};
+	std::optional<int>        progressPercent{};
+	std::optional<std::uint64_t> currentBytes{};
+	std::optional<std::uint64_t> totalBytes{};
+	std::optional<std::uint64_t> bytesPerSecond{};
 	std::string               eventName{};
 	std::string               payload{};    ///< Multi-purpose encoded data.
 	int                       displayMode{0}; ///< Cast of DisplayMode enum.
@@ -115,6 +122,7 @@ class Logger {
 	std::uint64_t                   processedEventId{0};
 	bool                            stopRequested{false};
 	std::string                     pattern{"%^[%T] [%l] %v%$"};
+	std::atomic<bool>              consoleOutputEnabled{true};
 
 	/// IDisplay implementation; accessed only on the worker thread after set.
 	std::atomic<IDisplay*>          display{nullptr};
@@ -127,6 +135,7 @@ class Logger {
 	void        processLoop();
 	void        processEvent(const OutputEvent& event);
 	static std::string formatMessage(const OutputContext& context);
+	void        updateConsoleSinkLevel();
 
 	/// Route an OutputEvent to the active IDisplay (called on worker thread).
 	void routeToDisplay(const OutputEvent& event);
@@ -142,6 +151,8 @@ public:
 	void setLevel(const std::string& level);
 	void setLevel(spdlog::level::level_enum level);
 	void setPattern(const std::string& pattern);
+	void setConsoleOutput(bool enable);
+	bool isConsoleOutputEnabled() const;
 	void setFileSink(const std::string& filename);
 	void setBacktrace(bool enable, size_t max_size = 10);
 

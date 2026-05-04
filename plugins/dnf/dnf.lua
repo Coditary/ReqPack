@@ -60,6 +60,97 @@ local function shell_join(values)
     return table.concat(quoted, " ")
 end
 
+local function dnf_progress_rules()
+    return {
+        initial = "running",
+        rules = {
+            {
+                state = "running",
+                source = "line",
+                regex = "^Updating and loading repositories:$",
+                actions = {
+                    { type = "begin_step", label = "load repositories" },
+                },
+            },
+            {
+                state = "running",
+                source = "line",
+                regex = "^Running transaction$",
+                actions = {
+                    { type = "begin_step", label = "running transaction" },
+                },
+            },
+            {
+                state = "running",
+                source = "line",
+                regex = [[^\[[0-9]+/[0-9]+\]\s+([A-Za-z][A-Za-z ]*[A-Za-z])\s+.+?\s+(\d+)%%\s+\|\s+([0-9.]+)\s*(B/s|[KMGTP]i?B/s)\s+\|\s+([0-9.]+)\s*(B|[KMGTP]i?B)\s+\|\s+.*$]],
+                actions = {
+                    { type = "begin_step", label = "${1}" },
+                    { type = "progress", percent = "${2}", speed = "${3}", speedUnit = "${4}", current = "${5}", currentUnit = "${6}" },
+                },
+            },
+            {
+                state = "running",
+                source = "line",
+                regex = [[^.+?\s+(\d+)%%\s+\|\s+([0-9.]+)\s*(B/s|[KMGTP]i?B/s)\s+\|\s+([0-9.]+)\s*(B|[KMGTP]i?B)\s+\|\s+.*$]],
+                actions = {
+                    { type = "progress", percent = "${1}", speed = "${2}", speedUnit = "${3}", current = "${4}", currentUnit = "${5}" },
+                },
+            },
+        },
+    }
+end
+
+local function append_info_field(fields, key, value)
+    local text = trim(value)
+    if text == "" then
+        return
+    end
+    if fields[key] == nil or fields[key] == "" then
+        fields[key] = text
+    else
+        fields[key] = fields[key] .. " " .. text
+    end
+end
+
+local function parse_dnf_info_fields(text)
+    local fields = {}
+    local current_key = nil
+    for line in (text or ""):gmatch("[^\r\n]+") do
+        local trimmed_line = trim(line)
+        if trimmed_line == "Installed packages" then
+            fields.__status = "installed"
+        elseif trimmed_line == "Available Packages" then
+            fields.__status = "available"
+        else
+            local key, value = line:match("^([%a][%a%s%-]+)%s*:%s*(.*)$")
+            if key ~= nil then
+                current_key = trim(key)
+                append_info_field(fields, current_key, value)
+            else
+                local continuation = line:match("^%s*:%s*(.*)$")
+                if continuation ~= nil and current_key ~= nil then
+                    append_info_field(fields, current_key, continuation)
+                end
+            end
+        end
+    end
+    return fields
+end
+
+local function info_version_from_fields(fields)
+    local version = trim(fields["Version"] or "")
+    local release = trim(fields["Release"] or "")
+    local epoch = trim(fields["Epoch"] or "")
+    if version ~= "" and release ~= "" then
+        version = version .. "-" .. release
+    end
+    if version ~= "" and epoch ~= "" and epoch ~= "0" then
+        version = epoch .. ":" .. version
+    end
+    return version
+end
+
 local function resolve_local_file(path, extension)
     local file_type = reqpack.exec.run("test -d " .. shell_quote(path) .. " && printf dir || printf file")
     if not file_type.success or trim(file_type.stdout or "") ~= "dir" then
@@ -200,7 +291,7 @@ function plugin.install(context, packages)
 
     if #installable_names > 0 then
         context.log.info("installing batch: " .. table.concat(installable_names, " "))
-        local result = context.exec.run("sudo dnf install -y " .. shell_join(installable_names))
+        local result = context.exec.run("sudo dnf install -y " .. shell_join(installable_names), dnf_progress_rules())
         if not result.success then
             context.tx.failed("dnf install failed")
             return false
@@ -225,7 +316,7 @@ function plugin.installLocal(context, path)
     end
 
     context.tx.begin_step("install local rpm")
-    local result = context.exec.run("sudo dnf install -y " .. shell_quote(resolved_path))
+    local result = context.exec.run("sudo dnf install -y " .. shell_quote(resolved_path), dnf_progress_rules())
     if not result.success then
         context.tx.failed("dnf local install failed")
         return false
@@ -243,7 +334,7 @@ function plugin.remove(context, packages)
     for _, pkg in ipairs(packages) do table.insert(names, pkg.name) end
 
     context.tx.begin_step("remove dnf packages")
-    local result = context.exec.run("sudo dnf remove -y " .. shell_join(names))
+    local result = context.exec.run("sudo dnf remove -y " .. shell_join(names), dnf_progress_rules())
     if not result.success then
         context.tx.failed("dnf remove failed")
         return false
@@ -261,7 +352,7 @@ function plugin.update(context, packages)
     end
 
     context.tx.begin_step("update dnf packages")
-    local result = context.exec.run(cmd)
+    local result = context.exec.run(cmd, dnf_progress_rules())
     if not result.success then
         context.tx.failed("dnf update failed")
         return false
@@ -332,13 +423,44 @@ end
 
 function plugin.info(context, name)
     local result = context.exec.run("dnf info " .. shell_quote(name) .. " --quiet")
-    local description = trim(result.stdout or "")
+    local fields = parse_dnf_info_fields(result.stdout or "")
     local installed_version = installed_package_version(name)
+    local version = info_version_from_fields(fields)
+    if version == "" then
+        version = installed_version
+    end
+
+    if next(fields) == nil and version == "" then
+        return {}
+    end
+
+    local extra_fields = {}
+    if trim(fields["Vendor"] or "") ~= "" then
+        table.insert(extra_fields, { key = "Vendor", value = trim(fields["Vendor"]) })
+    end
+
     local item = {
-        name = name,
-        version = installed_version ~= "" and installed_version or "unknown",
-        description = description ~= "" and description or "DNF Package"
+        name = trim(fields["Name"] or "") ~= "" and trim(fields["Name"]) or name,
+        version = version ~= "" and version or "unknown",
+        status = trim(fields.__status or ""),
+        installed = installed_version ~= "" and "yes" or "",
+        summary = trim(fields["Summary"] or ""),
+        description = trim(fields["Description"] or ""),
+        homepage = trim(fields["URL"] or ""),
+        sourceUrl = trim(fields["Source"] or ""),
+        repository = trim(fields["From repository"] or ""),
+        architecture = trim(fields["Architecture"] or ""),
+        license = trim(fields["License"] or ""),
+        size = trim(fields["Size"] or ""),
+        installedSize = trim(fields["Installed size"] or ""),
+        extraFields = extra_fields,
     }
+    if item.summary == "" then
+        item.summary = item.description ~= "" and item.description or "DNF Package"
+    end
+    if item.description == "" then
+        item.description = item.summary
+    end
     context.events.informed(item)
     return item
 end
