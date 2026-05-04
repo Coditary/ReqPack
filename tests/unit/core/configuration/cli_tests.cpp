@@ -13,7 +13,8 @@
 namespace {
 
 std::filesystem::path reqpack_user_home() {
-    return reqpack_home_directory().parent_path();
+    const char* home = std::getenv("HOME");
+    return home != nullptr ? std::filesystem::path(home) : std::filesystem::path{};
 }
 
 }  // namespace
@@ -257,7 +258,7 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
 
 TEST_CASE("cli parses token vectors and defaults list and outdated to all systems", "[unit][cli][parse]") {
     Cli cli;
-    ReqPackConfig config = DEFAULT_REQPACK_CONFIG;
+    ReqPackConfig config = default_reqpack_config();
     config.registry.pluginDirectory = (repo_root() / "plugins").string();
 
     SECTION("token vector install parse") {
@@ -455,7 +456,7 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
 
 TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli][remote]") {
     Cli cli;
-    ReqPackConfig config = DEFAULT_REQPACK_CONFIG;
+    ReqPackConfig config = default_reqpack_config();
 
     SECTION("remote command does not produce orchestrator requests") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"remote", "dev", "list", "apply"}, config);
@@ -477,6 +478,7 @@ TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli
 
         CHECK(handled);
         CHECK(capture.str().find("Usage: ReqPack remote <profile>") != std::string::npos);
-        CHECK(capture.str().find("~/.reqpack/remote.lua") != std::string::npos);
+        CHECK(capture.str().find("$XDG_CONFIG_HOME/reqpack/remote.lua") != std::string::npos);
+        CHECK(capture.str().find("~/.config/reqpack/remote.lua") != std::string::npos);
     }
 }

@@ -36,7 +36,7 @@ TEST_CASE("registry database cache path derivation is stable for source and plug
     const std::filesystem::path differentSource = registry_database_git_repository_cache_path(config, "git+https://github.com/org/other.git", "dnf");
 
     CHECK(first == second);
-    CHECK(first.parent_path() == std::filesystem::path("/tmp/reqpack-registry/repos"));
+    CHECK(first.parent_path() == default_reqpack_repo_cache_path());
     CHECK(first.filename() != differentPlugin.filename());
     CHECK(first.filename() != differentSource.filename());
 }

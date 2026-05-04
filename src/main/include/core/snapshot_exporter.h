@@ -17,7 +17,7 @@ class SnapshotExporter {
     std::string render(const std::vector<InstalledEntry>& entries) const;
 
 public:
-    explicit SnapshotExporter(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    explicit SnapshotExporter(const ReqPackConfig& config = default_reqpack_config());
 
     // Read history, render reqpack.lua, write to file or stdout.
     // Returns true on success.

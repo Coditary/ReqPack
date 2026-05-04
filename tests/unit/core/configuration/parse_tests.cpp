@@ -65,7 +65,51 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
 }
 
 std::filesystem::path reqpack_user_home() {
-    return reqpack_home_directory().parent_path();
+    const char* home = std::getenv("HOME");
+    return home != nullptr ? std::filesystem::path(home) : std::filesystem::path{};
+}
+
+TEST_CASE("configuration resolves XDG directories with standard fallbacks", "[unit][configuration][xdg]") {
+    TempDir tempDir{"reqpack-xdg-roots"};
+    ScopedEnvVar home{"HOME", (tempDir.path() / "home").string()};
+    ScopedEnvVar configHome{"XDG_CONFIG_HOME", ""};
+    ScopedEnvVar dataHome{"XDG_DATA_HOME", ""};
+    ScopedEnvVar cacheHome{"XDG_CACHE_HOME", ""};
+
+    CHECK(reqpack_config_directory() == tempDir.path() / "home" / ".config" / "reqpack");
+    CHECK(reqpack_data_directory() == tempDir.path() / "home" / ".local" / "share" / "reqpack");
+    CHECK(reqpack_cache_directory() == tempDir.path() / "home" / ".cache" / "reqpack");
+    CHECK(default_reqpack_config_path() == tempDir.path() / "home" / ".config" / "reqpack" / "config.lua");
+    CHECK(default_reqpack_registry_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "registry");
+    CHECK(default_reqpack_plugin_directory() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "plugins");
+    CHECK(default_reqpack_repo_cache_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "repos");
+    CHECK(default_reqpack_history_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "history");
+    CHECK(default_reqpack_rqp_state_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "rqp" / "state");
+    CHECK(default_reqpack_security_index_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "security" / "index");
+    CHECK(default_reqpack_osv_database_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "security" / "osv");
+    CHECK(default_reqpack_transaction_path() == tempDir.path() / "home" / ".cache" / "reqpack" / "transactions");
+    CHECK(default_reqpack_security_cache_path() == tempDir.path() / "home" / ".cache" / "reqpack" / "security" / "cache");
+    CHECK(default_remote_profiles_path() == tempDir.path() / "home" / ".config" / "reqpack" / "remote.lua");
+}
+
+TEST_CASE("configuration honors explicit XDG directories", "[unit][configuration][xdg]") {
+    TempDir tempDir{"reqpack-xdg-explicit"};
+    ScopedEnvVar configHome{"XDG_CONFIG_HOME", (tempDir.path() / "cfg").string()};
+    ScopedEnvVar dataHome{"XDG_DATA_HOME", (tempDir.path() / "data").string()};
+    ScopedEnvVar cacheHome{"XDG_CACHE_HOME", (tempDir.path() / "cache").string()};
+
+    const ReqPackConfig config;
+    CHECK(reqpack_config_directory() == tempDir.path() / "cfg" / "reqpack");
+    CHECK(reqpack_data_directory() == tempDir.path() / "data" / "reqpack");
+    CHECK(reqpack_cache_directory() == tempDir.path() / "cache" / "reqpack");
+    CHECK(std::filesystem::path(config.registry.databasePath) == tempDir.path() / "data" / "reqpack" / "registry");
+    CHECK(std::filesystem::path(config.registry.pluginDirectory) == tempDir.path() / "data" / "reqpack" / "plugins");
+    CHECK(std::filesystem::path(config.history.historyPath) == tempDir.path() / "data" / "reqpack" / "history");
+    CHECK(std::filesystem::path(config.rqp.statePath) == tempDir.path() / "data" / "reqpack" / "rqp" / "state");
+    CHECK(std::filesystem::path(config.security.indexPath) == tempDir.path() / "data" / "reqpack" / "security" / "index");
+    CHECK(std::filesystem::path(config.security.osvDatabasePath) == tempDir.path() / "data" / "reqpack" / "security" / "osv");
+    CHECK(std::filesystem::path(config.execution.transactionDatabasePath) == tempDir.path() / "cache" / "reqpack" / "transactions");
+    CHECK(std::filesystem::path(config.security.cachePath) == tempDir.path() / "cache" / "reqpack" / "security" / "cache");
 }
 
 }  // namespace

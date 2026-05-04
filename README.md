@@ -41,6 +41,35 @@ ReqPack will detect whether Python or `pip` are installed, download them if miss
 
 ---
 
+## 📁 File Locations
+
+ReqPack follows XDG base directory rules.
+
+### Config
+
+- `$XDG_CONFIG_HOME/reqpack/config.lua`
+- `$XDG_CONFIG_HOME/reqpack/remote.lua`
+- Fallback when `XDG_CONFIG_HOME` is unset or empty: `~/.config/reqpack/...`
+
+### Data
+
+- `$XDG_DATA_HOME/reqpack/plugins`
+- `$XDG_DATA_HOME/reqpack/repos`
+- `$XDG_DATA_HOME/reqpack/registry`
+- `$XDG_DATA_HOME/reqpack/history`
+- `$XDG_DATA_HOME/reqpack/rqp/state`
+- `$XDG_DATA_HOME/reqpack/security/index`
+- `$XDG_DATA_HOME/reqpack/security/osv`
+- Fallback when `XDG_DATA_HOME` is unset or empty: `~/.local/share/reqpack/...`
+
+### Cache
+
+- `$XDG_CACHE_HOME/reqpack/transactions`
+- `$XDG_CACHE_HOME/reqpack/security/cache`
+- Fallback when `XDG_CACHE_HOME` is unset or empty: `~/.cache/reqpack/...`
+
+---
+
 ## 📋 SBOM Generation
 
 ReqPack can generate a **Software Bill of Materials** for any set of packages using the `sbom` command. The output follows the [CycloneDX 1.5](https://cyclonedx.org/) standard and includes component metadata, PURL identifiers, and optional dependency edges.
@@ -180,8 +209,8 @@ reqpack audit --no-wrap
 ReqPack (C++ Core)
 ├── CLI → Dispatcher → Lua Engine
 ├── Downloader → fetches registry & Lua scripts
-├── SQLite Registry: remote.sqlite + local.sqlite
-└── Lua Scripts: scripts/python.lua, scripts/node.lua, ...
+├── LMDB storage → registry, history, transactions, vulnerability data
+└── Lua Plugins → plugins/dnf/dnf.lua, plugins/maven/maven.lua, ...
 ```
 
 ---
@@ -205,16 +234,16 @@ The registry defines available languages and where to fetch their handlers:
 
 ### Sync Mechanism
 
-* The remote registry is stored in `remote.sqlite`
-* Custom extensions go into `local.sqlite`
-* Updates use patch files (`patches/103.json`) containing minimal diffs
+* Registry metadata is stored under the ReqPack data directory
+* Registry sources are loaded from the configured registry path (`registry.lua` or a registry directory)
+* Downloaded plugin bundles are stored under the ReqPack data directory
 
 ---
 
 ## 🧰 Lua Script Example
 
 ```lua
--- scripts/python.lua
+-- plugins/python/python.lua
 
 function install(package)
     if not is_installed("python3") then
@@ -233,7 +262,7 @@ end
 
 * C++17 or higher
 * Lua (via sol2 binding)
-* SQLite3
+* LMDB
 * curl (for downloads)
 
 ---
@@ -252,7 +281,7 @@ make
 
 ## ❤️ Contributing
 
-Want to add support for a new package manager? Just drop a Lua script into the `scripts/` folder, register it in your `local.sqlite`, or submit a pull request to update the central registry.
+Want to add support for a new package manager? Add a Lua plugin under `plugins/<system>/`, register a source in `registry.lua`, or submit a pull request to update the shared registry sources.
 
 ---
 

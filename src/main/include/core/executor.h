@@ -71,7 +71,7 @@ class Executer {
 	std::vector<TransactionRecord> buildFailureRecords(const TaskGroup& taskGroup) const;
 
 public:
-	Executer(Registry* registry, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+	Executer(Registry* registry, const ReqPackConfig& config = default_reqpack_config());
 	~Executer();
 
 	void setRequestedItemCount(int count, bool inputAlreadyFiltered = false) const;

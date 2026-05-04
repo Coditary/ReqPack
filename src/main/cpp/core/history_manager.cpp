@@ -608,11 +608,10 @@ bool replace_installed_state_database(
 HistoryManager::HistoryManager(const ReqPackConfig& cfg) : config(cfg) {}
 
 std::filesystem::path HistoryManager::historyDir() const {
-    // config.history.historyPath is already tilde-expanded by configuration.cpp.
     if (!config.history.historyPath.empty()) {
         return std::filesystem::path(config.history.historyPath);
     }
-    return reqpack_home_directory() / "history";
+    return default_reqpack_history_path();
 }
 
 std::filesystem::path HistoryManager::historyLogPath() const {

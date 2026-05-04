@@ -145,7 +145,7 @@ bool Cli::handleHelp(int argc, char* argv[]) {
 }
 
 std::vector<Request> Cli::parse(int argc, char* argv[]) {
-    return this->parse(argc, argv, DEFAULT_REQPACK_CONFIG);
+    return this->parse(argc, argv, default_reqpack_config());
 }
 
 std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& config) {
@@ -624,7 +624,7 @@ void Cli::print_help() {
         "  audit                   Audits planned graph for vulnerabilities\n"
         "  snapshot                Snapshots installed packages to reqpack.lua\n"
         "  serve                   Reads commands from stdin and keeps process running\n"
-        "  remote                  Connects to remote profile from ~/.reqpack/remote.lua\n"
+        "  remote                  Connects to remote profile from XDG config (~/.config/reqpack fallback)\n"
         "\nConfig:\n"
         "  --config <path>         Loads config from a custom Lua file\n"
         "  --config=<path>         Same as above\n"
@@ -946,7 +946,7 @@ void Cli::print_command_help(ActionType action) {
                 "stdin mode executes one command per line until EOF.\n"
                 "remote mode starts a TCP server and returns command responses to clients.\n"
                 "Without protocol flag, remote mode accepts text protocol and auto-detects JSON requests per connection.\n"
-                "Server-side users can be loaded from ~/.reqpack/remote.lua under users = { ... }.\n"
+                "Server-side users can be loaded from $XDG_CONFIG_HOME/reqpack/remote.lua (or ~/.config/reqpack/remote.lua) under users = { ... }.\n"
                 "Admin users may run: shutdown, connections count, connections list, reload-config.\n"
                 "--token/--username/--password remain fallback auth when no valid server users exist.\n"
                 "\n"
@@ -975,13 +975,13 @@ void Cli::print_command_help(ActionType action) {
             help =
                 "Usage: ReqPack remote <profile> [<command>...]\n"
                 "\n"
-                "Connect to remote profile from ~/.reqpack/remote.lua.\n"
+                "Connect to remote profile from $XDG_CONFIG_HOME/reqpack/remote.lua or ~/.config/reqpack/remote.lua.\n"
                 "With forwarded command, execute once and exit. Without command, start interactive text session.\n"
                 "Forwarded install of local file uploads it to text/auto remotes: ReqPack remote <profile> install <system> <local-file>.\n"
                 "JSON remotes reject file uploads.\n"
                 "\n"
                 "Arguments:\n"
-                "  <profile>               Profile name defined in ~/.reqpack/remote.lua\n"
+                "  <profile>               Profile name defined in $XDG_CONFIG_HOME/reqpack/remote.lua\n"
                 "  <command>               Optional forwarded ReqPack command\n"
                 "\n"
                 "Profile fields:\n"

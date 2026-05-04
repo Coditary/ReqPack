@@ -31,7 +31,7 @@ protected:
 	virtual void generateReport(const Graph& graph, const std::vector<ValidationFinding>& findings) const;
 
 public:
-	Validator(PluginMetadataProvider* metadataProvider = nullptr, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+	Validator(PluginMetadataProvider* metadataProvider = nullptr, const ReqPackConfig& config = default_reqpack_config());
 	virtual ~Validator();
 
 	Graph* validate(Graph *graph);

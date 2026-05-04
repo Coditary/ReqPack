@@ -135,6 +135,14 @@ std::filesystem::path expand_user_path(const std::filesystem::path& path) {
     return path;
 }
 
+std::filesystem::path xdg_directory(const char* envName, const std::filesystem::path& fallback) {
+    const char* value = std::getenv(envName);
+    if (value != nullptr && std::string(value).size() > 0) {
+        return std::filesystem::path(value) / "reqpack";
+    }
+    return fallback / "reqpack";
+}
+
 std::string expand_env_reference(const std::string& value) {
     if (value.size() < 2 || value.front() != '$') {
         return value;
@@ -713,16 +721,80 @@ std::optional<DisplayRenderer> display_renderer_from_string(const std::string& r
     return std::nullopt;
 }
 
-std::filesystem::path reqpack_home_directory() {
-    return invoking_user_home_directory() / ".reqpack";
+ReqPackConfig::ReqPackConfig()
+    : security(SecurityConfig{
+          .cachePath = default_reqpack_security_cache_path().string(),
+          .indexPath = default_reqpack_security_index_path().string(),
+          .osvDatabasePath = default_reqpack_osv_database_path().string(),
+      }),
+      execution(ExecutionConfig{
+          .transactionDatabasePath = default_reqpack_transaction_path().string(),
+      }),
+      registry(RegistryConfig{
+          .databasePath = default_reqpack_registry_path().string(),
+          .pluginDirectory = default_reqpack_plugin_directory().string(),
+      }),
+      rqp(RqpConfig{
+          .statePath = default_reqpack_rqp_state_path().string(),
+      }),
+      history(HistoryConfig{
+          .historyPath = default_reqpack_history_path().string(),
+      }) {}
+
+ReqPackConfig default_reqpack_config() {
+    return ReqPackConfig{};
+}
+
+std::filesystem::path reqpack_config_directory() {
+    return xdg_directory("XDG_CONFIG_HOME", invoking_user_home_directory() / ".config");
+}
+
+std::filesystem::path reqpack_data_directory() {
+    return xdg_directory("XDG_DATA_HOME", invoking_user_home_directory() / ".local" / "share");
+}
+
+std::filesystem::path reqpack_cache_directory() {
+    return xdg_directory("XDG_CACHE_HOME", invoking_user_home_directory() / ".cache");
 }
 
 std::filesystem::path default_reqpack_config_path() {
-    return reqpack_home_directory() / "config.lua";
+    return reqpack_config_directory() / "config.lua";
 }
 
 std::filesystem::path default_reqpack_registry_path() {
-    return reqpack_home_directory() / "registry";
+    return reqpack_data_directory() / "registry";
+}
+
+std::filesystem::path default_reqpack_plugin_directory() {
+    return reqpack_data_directory() / "plugins";
+}
+
+std::filesystem::path default_reqpack_history_path() {
+    return reqpack_data_directory() / "history";
+}
+
+std::filesystem::path default_reqpack_transaction_path() {
+    return reqpack_cache_directory() / "transactions";
+}
+
+std::filesystem::path default_reqpack_rqp_state_path() {
+    return reqpack_data_directory() / "rqp" / "state";
+}
+
+std::filesystem::path default_reqpack_security_cache_path() {
+    return reqpack_cache_directory() / "security" / "cache";
+}
+
+std::filesystem::path default_reqpack_security_index_path() {
+    return reqpack_data_directory() / "security" / "index";
+}
+
+std::filesystem::path default_reqpack_osv_database_path() {
+    return reqpack_data_directory() / "security" / "osv";
+}
+
+std::filesystem::path default_reqpack_repo_cache_path() {
+    return reqpack_data_directory() / "repos";
 }
 
 std::filesystem::path registry_database_directory(const std::filesystem::path& registryPath) {
@@ -908,8 +980,8 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
             config.security.backends[name] = backend;
         }
     }
-    const std::string defaultIndexPath = expand_user_path(SecurityConfig{}.indexPath).string();
-    const std::string defaultOsvDatabasePath = expand_user_path(SecurityConfig{}.osvDatabasePath).string();
+    const std::string defaultIndexPath = default_reqpack_security_index_path().string();
+    const std::string defaultOsvDatabasePath = default_reqpack_osv_database_path().string();
     if (config.security.indexPath == defaultIndexPath && config.security.osvDatabasePath != defaultOsvDatabasePath) {
         config.security.indexPath = config.security.osvDatabasePath;
     }
@@ -1131,8 +1203,8 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.onUnresolvedVersion.has_value()) config.security.onUnresolvedVersion = overrides.onUnresolvedVersion.value();
     if (overrides.strictEcosystemMapping.has_value()) config.security.strictEcosystemMapping = overrides.strictEcosystemMapping.value();
     if (overrides.includeWithdrawnInReport.has_value()) config.security.includeWithdrawnInReport = overrides.includeWithdrawnInReport.value();
-    if (config.security.indexPath == expand_user_path(SecurityConfig{}.indexPath).string() &&
-        config.security.osvDatabasePath != expand_user_path(SecurityConfig{}.osvDatabasePath).string()) {
+    if (config.security.indexPath == default_reqpack_security_index_path().string() &&
+        config.security.osvDatabasePath != default_reqpack_osv_database_path().string()) {
         config.security.indexPath = config.security.osvDatabasePath;
     }
     if (!overrides.ignoreVulnerabilityIds.empty()) config.security.ignoreVulnerabilityIds = overrides.ignoreVulnerabilityIds;

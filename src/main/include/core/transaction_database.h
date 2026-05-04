@@ -40,7 +40,7 @@ class TransactionDatabase {
 	std::vector<std::pair<std::string, std::string>> loadPrefixedEntries(const std::string& prefix) const;
 
 public:
-	TransactionDatabase(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+	TransactionDatabase(const ReqPackConfig& config = default_reqpack_config());
 	~TransactionDatabase();
 
 	bool ensureReady() const;

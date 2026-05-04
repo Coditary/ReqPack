@@ -16,7 +16,7 @@ class SbomExporter {
     std::string renderJson(const Graph& graph, bool cyclonedx) const;
 
 public:
-    explicit SbomExporter(PluginMetadataProvider* metadataProvider = nullptr, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    explicit SbomExporter(PluginMetadataProvider* metadataProvider = nullptr, const ReqPackConfig& config = default_reqpack_config());
 
     std::string renderGraph(const Graph& graph, const Request& request) const;
     bool exportGraph(const Graph& graph, const Request& request) const;

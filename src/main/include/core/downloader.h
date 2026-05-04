@@ -14,7 +14,7 @@ class Downloader {
     static std::size_t write_to_file(void* contents, std::size_t size, std::size_t nmemb, void* userp);
 
 public:
-    Downloader(RegistryDatabase* database, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    Downloader(RegistryDatabase* database, const ReqPackConfig& config = default_reqpack_config());
 
     bool downloadPlugin(const std::string& system) const;
     bool download(const std::string& source, const std::string& destinationPath) const;

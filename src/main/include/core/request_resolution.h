@@ -21,7 +21,7 @@ class RequestResolutionService {
     ) const;
 
 public:
-    RequestResolutionService(Registry* registry, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    RequestResolutionService(Registry* registry, const ReqPackConfig& config = default_reqpack_config());
 
     std::optional<Request> resolveRequest(const Request& request, std::string* errorMessage = nullptr) const;
     std::optional<std::vector<Request>> resolveRequests(const std::vector<Request>& requests, std::string* errorMessage = nullptr) const;

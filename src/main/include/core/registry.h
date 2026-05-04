@@ -32,7 +32,7 @@ private:
     bool ensurePluginConstructed(const std::string& name);
 
 public:
-    Registry(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    Registry(const ReqPackConfig& config = default_reqpack_config());
     ~Registry();
 
     RegistryDatabase* getDatabase();

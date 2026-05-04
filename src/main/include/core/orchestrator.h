@@ -27,7 +27,7 @@ class Orchestrator {
 
 
 public:
-	Orchestrator(std::vector<Request> requests, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+	Orchestrator(std::vector<Request> requests, const ReqPackConfig& config = default_reqpack_config());
 	~Orchestrator();
 
 	int countRequestedItems() const;

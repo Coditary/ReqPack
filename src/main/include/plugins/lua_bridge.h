@@ -43,7 +43,7 @@ private:
 	DownloadResult downloadToPath(const std::string& url, const std::string& destinationPath);
 
 public:
-    LuaBridge(const std::string& scriptPath, const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    LuaBridge(const std::string& scriptPath, const ReqPackConfig& config = default_reqpack_config());
     virtual ~LuaBridge() = default;
 
     bool init() override;

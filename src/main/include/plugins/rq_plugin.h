@@ -15,7 +15,7 @@
 
 class RqPlugin final : public IPlugin {
 public:
-    explicit RqPlugin(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    explicit RqPlugin(const ReqPackConfig& config = default_reqpack_config());
 
     bool init() override;
     bool shutdown() override;

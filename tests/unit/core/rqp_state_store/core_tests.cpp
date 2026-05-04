@@ -78,7 +78,7 @@ return {
 
 TEST_CASE("rqp state store lists installed packages in stable order", "[unit][rqp_state_store][core]") {
     TempDir tempDir{"reqpack-rqp-state-list"};
-    ReqPackConfig config = DEFAULT_REQPACK_CONFIG;
+    ReqPackConfig config = default_reqpack_config();
     config.rqp.statePath = tempDir.path().string();
     write_installed_state(tempDir.path(), "zeta", "1.0.0", 1, 0);
     write_installed_state(tempDir.path(), "alpha", "2.0.0", 1, 0);
@@ -92,7 +92,7 @@ TEST_CASE("rqp state store lists installed packages in stable order", "[unit][rq
 
 TEST_CASE("rqp state store finds exact version match", "[unit][rqp_state_store][core]") {
     TempDir tempDir{"reqpack-rqp-state-find"};
-    ReqPackConfig config = DEFAULT_REQPACK_CONFIG;
+    ReqPackConfig config = default_reqpack_config();
     config.rqp.statePath = tempDir.path().string();
     write_installed_state(tempDir.path(), "tool", "1.0.0", 1, 0);
     write_installed_state(tempDir.path(), "tool", "2.0.0", 1, 0);
@@ -106,7 +106,7 @@ TEST_CASE("rqp state store finds exact version match", "[unit][rqp_state_store][
 
 TEST_CASE("rqp state store removes installed state and prunes empty package directory", "[unit][rqp_state_store][core]") {
     TempDir tempDir{"reqpack-rqp-state-remove"};
-    ReqPackConfig config = DEFAULT_REQPACK_CONFIG;
+    ReqPackConfig config = default_reqpack_config();
     config.rqp.statePath = tempDir.path().string();
     write_installed_state(tempDir.path(), "tool", "1.0.0", 1, 0);
 

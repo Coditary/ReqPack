@@ -77,7 +77,7 @@ std::filesystem::path registry_database_git_repository_cache_path(
 ) {
     std::ostringstream stream;
     stream << std::hex << fnv1a_hash(source);
-    return registry_database_directory(config.registry.databasePath) / "repos" / (pluginName + "-" + stream.str());
+    return default_reqpack_repo_cache_path() / (pluginName + "-" + stream.str());
 }
 
 std::string registry_database_escape_field(const std::string& value) {

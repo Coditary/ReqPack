@@ -30,7 +30,7 @@ class RegistryDatabase {
     mutable bool bootstrapped{false};
 
 public:
-    RegistryDatabase(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    RegistryDatabase(const ReqPackConfig& config = default_reqpack_config());
     ~RegistryDatabase();
 
     RegistryDatabase(const RegistryDatabase&) = delete;

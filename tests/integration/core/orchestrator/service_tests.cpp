@@ -372,9 +372,9 @@ std::filesystem::path write_rq_repository_index(
 }
 
 std::filesystem::path write_remote_profiles(const std::filesystem::path& root, const std::string& content) {
-    const std::filesystem::path reqpackHome = root / ".reqpack";
-    std::filesystem::create_directories(reqpackHome);
-    const std::filesystem::path profilePath = reqpackHome / "remote.lua";
+    const std::filesystem::path reqpackConfig = root / ".config" / "reqpack";
+    std::filesystem::create_directories(reqpackConfig);
+    const std::filesystem::path profilePath = reqpackConfig / "remote.lua";
     write_file(profilePath, content);
     return profilePath;
 }

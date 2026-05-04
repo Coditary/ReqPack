@@ -23,7 +23,7 @@ public:
     SecurityGatewayService(
         Registry* registry,
         PluginMetadataProvider* metadataProvider = nullptr,
-        const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG
+        const ReqPackConfig& config = default_reqpack_config()
     );
 
     bool isGatewaySystem(const std::string& system) const;

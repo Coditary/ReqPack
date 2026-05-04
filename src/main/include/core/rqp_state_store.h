@@ -23,7 +23,7 @@ struct RqpInstalledPackage {
 
 class RqpStateStore {
 public:
-    explicit RqpStateStore(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    explicit RqpStateStore(const ReqPackConfig& config = default_reqpack_config());
 
     std::vector<RqpInstalledPackage> listInstalled() const;
     std::vector<RqpInstalledPackage> findInstalled(const std::string& name, const std::string& version = {}) const;

@@ -249,7 +249,7 @@ std::optional<sol::table> load_named_table(sol::state& lua, const std::filesyste
 }  // namespace
 
 std::filesystem::path default_remote_profiles_path() {
-    return reqpack_home_directory() / REMOTE_PROFILES_FILENAME;
+    return reqpack_config_directory() / REMOTE_PROFILES_FILENAME;
 }
 
 std::vector<RemoteProfile> load_remote_profiles(const std::filesystem::path& profilePath) {

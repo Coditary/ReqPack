@@ -490,11 +490,12 @@ int main(int argc, char* argv[]) {
     Cli cli;
     const ReqPackConfigOverrides configOverrides = cli.parseConfigOverrides(argc, argv);
     const std::filesystem::path configPath = configOverrides.configPath.value_or(default_reqpack_config_path());
-    const ReqPackConfig fileConfig = load_config_from_lua(configPath, DEFAULT_REQPACK_CONFIG);
+    const ReqPackConfig defaults = default_reqpack_config();
+    const ReqPackConfig fileConfig = load_config_from_lua(configPath, defaults);
     ReqPackConfig config = apply_config_overrides(fileConfig, configOverrides);
     const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";
     if (!configOverrides.pluginDirectory.has_value() &&
-        config.registry.pluginDirectory == DEFAULT_REQPACK_CONFIG.registry.pluginDirectory &&
+        config.registry.pluginDirectory == defaults.registry.pluginDirectory &&
         std::filesystem::exists(workspacePluginDirectory)) {
         config.registry.pluginDirectory = workspacePluginDirectory.string();
     }

@@ -107,9 +107,9 @@ struct SecurityConfig {
     bool promptOnUnsafe{false};
     bool allowUnassigned{true};
     std::string defaultGateway{"security"};
-    std::string cachePath{"~/.reqpack/security/cache"};
-    std::string indexPath{"~/.reqpack/security/index"};
-    std::string osvDatabasePath{"~/.reqpack/osv"};
+    std::string cachePath{};
+    std::string indexPath{};
+    std::string osvDatabasePath{};
     std::string osvFeedUrl{"https://storage.googleapis.com/osv-vulnerabilities"};
     OsvRefreshMode osvRefreshMode{OsvRefreshMode::MANUAL};
     long osvRefreshIntervalSeconds{24L * 60L * 60L};
@@ -139,7 +139,7 @@ struct ExecutionConfig {
     bool checkVirtualFileSystemWrite{true};
     bool stopOnFirstFailure{false};
     bool dryRun{false};
-    std::string transactionDatabasePath{"~/.reqpack/transactions"};
+    std::string transactionDatabasePath{};
 };
 
 struct ProxyConfig {
@@ -176,11 +176,11 @@ struct RegistrySourceEntry {
 using RegistrySourceMap = std::map<std::string, RegistrySourceEntry>;
 
 struct RegistryConfig {
-    std::string databasePath{"~/.reqpack/registry"};
+    std::string databasePath{};
     std::string remoteUrl{};
     std::string overlayPath{};
     RegistrySourceMap sources{};
-    std::string pluginDirectory{"./plugins"};
+    std::string pluginDirectory{};
     bool autoLoadPlugins{true};
     bool shutDownPluginsOnExit{true};
 };
@@ -207,7 +207,7 @@ struct SbomConfig {
 
 struct RqpConfig {
     std::vector<std::string> repositories{};
-    std::string statePath{"~/.reqpack/rqp/state"};
+    std::string statePath{};
 };
 
 struct RepositoryAuthConfig {
@@ -252,7 +252,7 @@ struct HistoryConfig {
     bool trackInstalled{true};
 
     // Directory that holds history.jsonl and installed-state data.
-    std::string historyPath{"~/.reqpack/history"};
+    std::string historyPath{};
 
     // Maximum number of lines kept in history.jsonl.
     // When exceeded, oldest entries are trimmed.  0 = unlimited.
@@ -303,6 +303,8 @@ struct ReqPackConfig {
 
     std::vector<std::string> enabledScanners{};
     std::vector<std::string> enabledReportFormats{};
+
+    ReqPackConfig();
 };
 
 struct ReqPackConfigOverrides {
@@ -357,7 +359,7 @@ struct ReqPackConfigOverrides {
     std::optional<bool> sbomSkipMissingPackages;
 };
 
-inline const ReqPackConfig DEFAULT_REQPACK_CONFIG{};
+ReqPackConfig default_reqpack_config();
 
 std::optional<SeverityLevel> severity_level_from_string(const std::string& severity);
 std::optional<LogLevel> log_level_from_string(const std::string& level);
@@ -368,9 +370,19 @@ std::optional<SbomOutputFormat> sbom_output_format_from_string(const std::string
 std::optional<AuditOutputFormat> audit_output_format_from_string(const std::string& format);
 std::optional<DisplayRenderer> display_renderer_from_string(const std::string& renderer);
 
-std::filesystem::path reqpack_home_directory();
+std::filesystem::path reqpack_config_directory();
+std::filesystem::path reqpack_data_directory();
+std::filesystem::path reqpack_cache_directory();
 std::filesystem::path default_reqpack_config_path();
 std::filesystem::path default_reqpack_registry_path();
+std::filesystem::path default_reqpack_plugin_directory();
+std::filesystem::path default_reqpack_history_path();
+std::filesystem::path default_reqpack_transaction_path();
+std::filesystem::path default_reqpack_rqp_state_path();
+std::filesystem::path default_reqpack_security_cache_path();
+std::filesystem::path default_reqpack_security_index_path();
+std::filesystem::path default_reqpack_osv_database_path();
+std::filesystem::path default_reqpack_repo_cache_path();
 std::filesystem::path registry_database_directory(const std::filesystem::path& registryPath);
 std::filesystem::path registry_source_file_path(const std::filesystem::path& registryPath);
 
@@ -381,7 +393,7 @@ std::optional<ProxyConfig> proxy_config_for_system(const ReqPackConfig& config, 
 
 ReqPackConfig load_config_from_lua(
     const std::filesystem::path& configPath,
-    const ReqPackConfig& fallback = DEFAULT_REQPACK_CONFIG
+    const ReqPackConfig& fallback = default_reqpack_config()
 );
 
 ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackConfigOverrides& overrides);

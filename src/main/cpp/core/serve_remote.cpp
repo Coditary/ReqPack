@@ -504,11 +504,12 @@ void set_session_protocol(RemoteServerState& state, int sessionId, ConnectionPro
 
 bool reload_remote_state(RemoteServerState& state, Logger& logger, std::string& error) {
     try {
-        ReqPackConfig config = load_config_from_lua(state.configPath, DEFAULT_REQPACK_CONFIG);
+        const ReqPackConfig defaults = default_reqpack_config();
+        ReqPackConfig config = load_config_from_lua(state.configPath, defaults);
         config = apply_config_overrides(config, state.configOverrides);
         const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";
         if (!state.configOverrides.pluginDirectory.has_value() &&
-            config.registry.pluginDirectory == DEFAULT_REQPACK_CONFIG.registry.pluginDirectory &&
+            config.registry.pluginDirectory == defaults.registry.pluginDirectory &&
             std::filesystem::exists(workspacePluginDirectory)) {
             config.registry.pluginDirectory = workspacePluginDirectory.string();
         }

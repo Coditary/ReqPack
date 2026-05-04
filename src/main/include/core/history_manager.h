@@ -27,9 +27,9 @@ struct InstalledEntry {
     std::string installedAt;    // ISO-8601 UTC timestamp of last install/update
 };
 
-// Manages ~/.reqpack/history/history.jsonl (append-only event log, guarded by history.enabled)
-// and an LMDB-backed installed-state snapshot under ~/.reqpack/history/ (guarded by history.trackInstalled).
-// Legacy ~/.reqpack/history/installed.json is imported once on first access when present.
+// Manages XDG data history.jsonl (append-only event log, guarded by history.enabled)
+// and an LMDB-backed installed-state snapshot under XDG data history/ (guarded by history.trackInstalled).
+// Legacy installed.json in configured history directory is imported once on first access when present.
 class HistoryManager {
     ReqPackConfig config;
     mutable std::mutex mutex;
@@ -50,7 +50,7 @@ class HistoryManager {
     void trimHistoryLog() const;
 
 public:
-    explicit HistoryManager(const ReqPackConfig& config = DEFAULT_REQPACK_CONFIG);
+    explicit HistoryManager(const ReqPackConfig& config = default_reqpack_config());
 
     // Read the current installed-packages snapshot from installed-state storage.
     std::vector<InstalledEntry> loadInstalledState() const;
