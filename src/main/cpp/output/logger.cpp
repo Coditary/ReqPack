@@ -22,9 +22,10 @@ std::vector<std::string> splitPipe(const std::string& s) {
 	std::istringstream       ss(s);
 	std::string              token;
 	while (std::getline(ss, token, '|')) {
-		if (!token.empty()) {
-			out.push_back(std::move(token));
-		}
+		out.push_back(std::move(token));
+	}
+	if (!s.empty() && s.back() == '|') {
+		out.emplace_back();
 	}
 	return out;
 }

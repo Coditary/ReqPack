@@ -133,8 +133,19 @@ std::vector<CommandOutputField> package_info_to_fields(const PackageInfo& info) 
 	return fields;
 }
 
-std::vector<std::vector<std::string>> package_infos_to_rows(const std::vector<PackageInfo>& items,
-	                                                      bool includeSystem) {
+namespace {
+
+std::string package_row_description(const PackageInfo& item) {
+	if (!item.summary.empty()) {
+		return item.summary;
+	}
+	return item.description;
+}
+
+} // namespace
+
+std::vector<std::vector<std::string>> package_list_infos_to_rows(const std::vector<PackageInfo>& items,
+	                                                           bool includeSystem) {
 	std::vector<std::vector<std::string>> rows;
 	rows.reserve(items.size());
 	for (const auto& item : items) {
@@ -144,7 +155,9 @@ std::vector<std::vector<std::string>> package_infos_to_rows(const std::vector<Pa
 		}
 		row.push_back(item.name);
 		row.push_back(item.version);
-		row.push_back(item.summary.empty() ? item.description : item.summary);
+		row.push_back(item.packageType);
+		row.push_back(item.architecture);
+		row.push_back(package_row_description(item));
 		rows.push_back(std::move(row));
 	}
 	return rows;
@@ -163,7 +176,27 @@ std::vector<std::vector<std::string>> package_search_infos_to_rows(const std::ve
 		row.push_back(item.version);
 		row.push_back(item.packageType);
 		row.push_back(item.architecture);
-		row.push_back(item.summary.empty() ? item.description : item.summary);
+		row.push_back(package_row_description(item));
+		rows.push_back(std::move(row));
+	}
+	return rows;
+}
+
+std::vector<std::vector<std::string>> package_outdated_infos_to_rows(const std::vector<PackageInfo>& items,
+	                                                               bool includeSystem) {
+	std::vector<std::vector<std::string>> rows;
+	rows.reserve(items.size());
+	for (const auto& item : items) {
+		std::vector<std::string> row;
+		if (includeSystem) {
+			row.push_back(item.system);
+		}
+		row.push_back(item.name);
+		row.push_back(item.version);
+		row.push_back(item.latestVersion);
+		row.push_back(item.packageType);
+		row.push_back(item.architecture);
+		row.push_back(package_row_description(item));
 		rows.push_back(std::move(row));
 	}
 	return rows;

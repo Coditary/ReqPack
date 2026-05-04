@@ -420,6 +420,37 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(cli.parse(std::vector<std::string>{"search", "dnf", "python3", "--type"}, config).empty());
         CHECK(cli.parseFailed());
     }
+
+    SECTION("list and outdated parse repeated arch and type filters") {
+        const std::vector<Request> listed = cli.parse(
+            std::vector<std::string>{"list", "dnf", "--arch", "noarch", "--type", "doc", "--type", "devel"},
+            config
+        );
+        REQUIRE(listed.size() == 1);
+        CHECK(listed.front().action == ActionType::LIST);
+        CHECK(listed.front().system == "dnf");
+        CHECK(listed.front().flags == std::vector<std::string>{"arch=noarch", "type=doc", "type=devel"});
+
+        const std::vector<Request> outdated = cli.parse(
+            std::vector<std::string>{"outdated", "dnf", "--arch", "x86_64", "--arch", "noarch", "--type", "doc"},
+            config
+        );
+        REQUIRE(outdated.size() == 1);
+        CHECK(outdated.front().action == ActionType::OUTDATED);
+        CHECK(outdated.front().system == "dnf");
+        CHECK(outdated.front().flags == std::vector<std::string>{"arch=x86_64", "arch=noarch", "type=doc"});
+    }
+
+    SECTION("list and outdated reject missing filter values") {
+        CHECK(cli.parse(std::vector<std::string>{"list", "dnf", "--arch"}, config).empty());
+        CHECK(cli.parseFailed());
+        CHECK(cli.parse(std::vector<std::string>{"list", "dnf", "--type"}, config).empty());
+        CHECK(cli.parseFailed());
+        CHECK(cli.parse(std::vector<std::string>{"outdated", "dnf", "--arch"}, config).empty());
+        CHECK(cli.parseFailed());
+        CHECK(cli.parse(std::vector<std::string>{"outdated", "dnf", "--type"}, config).empty());
+        CHECK(cli.parseFailed());
+    }
 }
 
 TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli][remote]") {

@@ -30,6 +30,13 @@ std::string repeatChar(char c, int n) {
 	return (n > 0) ? std::string(static_cast<size_t>(n), c) : std::string{};
 }
 
+std::string pad_right(const std::string& text, size_t width) {
+	if (text.size() >= width) {
+		return text;
+	}
+	return text + std::string(width - text.size(), ' ');
+}
+
 void merge_progress_metrics(DisplayProgressMetrics& target, const DisplayProgressMetrics& update) {
 	if (update.percent.has_value()) {
 		target.percent = update.percent;
@@ -62,6 +69,46 @@ size_t terminal_width() {
 	}
 
 	return 100;
+}
+
+std::string truncate_middle(const std::string& text, size_t width) {
+	if (width == 0 || text.size() <= width) {
+		return text;
+	}
+	if (width <= 3) {
+		return text.substr(0, width);
+	}
+	const size_t prefixWidth = (width - 3) / 2;
+	const size_t suffixWidth = width - 3 - prefixWidth;
+	return text.substr(0, prefixWidth) + "..." + text.substr(text.size() - suffixWidth);
+}
+
+std::vector<std::string> split_long_token(const std::string& token, size_t width) {
+	if (width == 0 || token.size() <= width) {
+		return {token};
+	}
+
+	std::vector<std::string> segments;
+	size_t offset = 0;
+	while (offset < token.size()) {
+		const size_t remaining = token.size() - offset;
+		if (remaining <= width) {
+			segments.push_back(token.substr(offset));
+			break;
+		}
+
+		const std::string chunk = token.substr(offset, width);
+		size_t splitAt = width;
+		const size_t delimiter = chunk.find_last_of("-._:/+");
+		if (delimiter != std::string::npos && delimiter + 1 >= width / 3 && delimiter + 1 < width) {
+			splitAt = delimiter + 1;
+		}
+
+		segments.push_back(token.substr(offset, splitAt));
+		offset += splitAt;
+	}
+
+	return segments;
 }
 
 } // namespace
@@ -181,8 +228,13 @@ std::vector<std::string> PlainDisplay::wrapText(const std::string& text, size_t 
 				if (word.size() <= width) {
 					current = word;
 				} else {
-					for (size_t offset = 0; offset < word.size(); offset += width) {
-						lines.push_back(word.substr(offset, width));
+					const std::vector<std::string> segments = split_long_token(word, width);
+					for (size_t segmentIndex = 0; segmentIndex < segments.size(); ++segmentIndex) {
+						if (segmentIndex + 1 < segments.size()) {
+							lines.push_back(segments[segmentIndex]);
+						} else {
+							current = segments[segmentIndex];
+						}
 					}
 				}
 				continue;
@@ -198,12 +250,12 @@ std::vector<std::string> PlainDisplay::wrapText(const std::string& text, size_t 
 				current = word;
 			} else {
 				current.clear();
-				for (size_t offset = 0; offset < word.size(); offset += width) {
-					const std::string segment = word.substr(offset, width);
-					if (offset + width < word.size()) {
-						lines.push_back(segment);
+				const std::vector<std::string> segments = split_long_token(word, width);
+				for (size_t segmentIndex = 0; segmentIndex < segments.size(); ++segmentIndex) {
+					if (segmentIndex + 1 < segments.size()) {
+						lines.push_back(segments[segmentIndex]);
 					} else {
-						current = segment;
+						current = segments[segmentIndex];
 					}
 				}
 			}
@@ -233,6 +285,13 @@ bool PlainDisplay::isPackageSummaryTable() const {
 	        && tableHeaders[2] == "Type"
 	        && tableHeaders[3] == "Architecture"
 	        && tableHeaders[4] == "Description")
+	    || (tableHeaders.size() == 6
+	        && tableHeaders[0] == "Name"
+	        && tableHeaders[1] == "Installed"
+	        && tableHeaders[2] == "Latest"
+	        && tableHeaders[3] == "Type"
+	        && tableHeaders[4] == "Architecture"
+	        && tableHeaders[5] == "Description")
 	    || (tableHeaders.size() == 4
 	        && tableHeaders[0] == "System"
 	        && tableHeaders[1] == "Name"
@@ -244,7 +303,15 @@ bool PlainDisplay::isPackageSummaryTable() const {
 	        && tableHeaders[2] == "Version"
 	        && tableHeaders[3] == "Type"
 	        && tableHeaders[4] == "Architecture"
-	        && tableHeaders[5] == "Description");
+	        && tableHeaders[5] == "Description")
+	    || (tableHeaders.size() == 7
+	        && tableHeaders[0] == "System"
+	        && tableHeaders[1] == "Name"
+	        && tableHeaders[2] == "Installed"
+	        && tableHeaders[3] == "Latest"
+	        && tableHeaders[4] == "Type"
+	        && tableHeaders[5] == "Architecture"
+	        && tableHeaders[6] == "Description");
 }
 
 void PlainDisplay::renderFieldValueTable() const {
@@ -273,76 +340,150 @@ void PlainDisplay::renderFieldValueTable() const {
 
 void PlainDisplay::renderWrappedPackageTable() const {
 	const size_t terminalWidth = terminal_width();
-	const bool hasSystem = tableHeaders.size() == 4 || tableHeaders.size() == 6;
-	const bool extended = tableHeaders.size() == 5 || tableHeaders.size() == 6;
+	const bool hasSystem = !tableHeaders.empty() && tableHeaders[0] == "System";
+	const bool outdated = std::find(tableHeaders.begin(), tableHeaders.end(), "Installed") != tableHeaders.end()
+	    && std::find(tableHeaders.begin(), tableHeaders.end(), "Latest") != tableHeaders.end();
+	const bool extended = std::find(tableHeaders.begin(), tableHeaders.end(), "Type") != tableHeaders.end()
+	    && std::find(tableHeaders.begin(), tableHeaders.end(), "Architecture") != tableHeaders.end();
 	const size_t systemIndex = hasSystem ? 0 : static_cast<size_t>(-1);
 	const size_t nameIndex = hasSystem ? 1 : 0;
-	const size_t versionIndex = hasSystem ? 2 : 1;
-	const size_t typeIndex = extended ? (hasSystem ? 3 : 2) : static_cast<size_t>(-1);
-	const size_t archIndex = extended ? (hasSystem ? 4 : 3) : static_cast<size_t>(-1);
-	const size_t summaryIndex = extended ? (hasSystem ? 5 : 4) : (hasSystem ? 3 : 2);
+	const size_t versionIndex = outdated ? static_cast<size_t>(-1) : (hasSystem ? 2 : 1);
+	const size_t installedIndex = outdated ? (hasSystem ? 2 : 1) : static_cast<size_t>(-1);
+	const size_t latestIndex = outdated ? (hasSystem ? 3 : 2) : static_cast<size_t>(-1);
+	const size_t typeIndex = extended ? (outdated ? (hasSystem ? 4 : 3) : (hasSystem ? 3 : 2)) : static_cast<size_t>(-1);
+	const size_t archIndex = extended ? (outdated ? (hasSystem ? 5 : 4) : (hasSystem ? 4 : 3)) : static_cast<size_t>(-1);
+	const size_t summaryIndex = outdated ? (hasSystem ? 6 : 5) : (extended ? (hasSystem ? 5 : 4) : (hasSystem ? 3 : 2));
 
 	std::vector<size_t> widths(tableHeaders.size(), 0);
-	for (size_t i = 0; i < tableHeaders.size(); ++i) {
-		widths[i] = tableHeaders[i].size();
-	}
-	for (const auto& row : tableRows) {
-		for (size_t i = 0; i < row.size() && i < widths.size(); ++i) {
-			widths[i] = std::max(widths[i], row[i].size());
+	auto preferredWidthFor = [&](size_t index) {
+		if (index == summaryIndex) {
+			return static_cast<size_t>(0);
 		}
-	}
+		if (hasSystem && index == systemIndex) {
+			size_t systemWidth = tableHeaders[index].size();
+			for (const auto& row : tableRows) {
+				if (index < row.size()) {
+					systemWidth = std::max(systemWidth, row[index].size());
+				}
+			}
+			return std::clamp(systemWidth, static_cast<size_t>(6), static_cast<size_t>(12));
+		}
+		if (index == nameIndex) {
+			return static_cast<size_t>(50);
+		}
+		if ((!outdated && index == versionIndex)
+		    || (outdated && (index == installedIndex || index == latestIndex))) {
+			return static_cast<size_t>(16);
+		}
+		if (extended && index == typeIndex) {
+			return static_cast<size_t>(14);
+		}
+		if (extended && index == archIndex) {
+			return static_cast<size_t>(12);
+		}
+		return std::max(tableHeaders[index].size(), static_cast<size_t>(12));
+	};
 
-	if (hasSystem) {
-		widths[systemIndex] = std::clamp(widths[systemIndex], static_cast<size_t>(6), static_cast<size_t>(12));
-	}
-	widths[nameIndex] = std::clamp(widths[nameIndex], static_cast<size_t>(18), static_cast<size_t>(36));
-	widths[versionIndex] = std::clamp(widths[versionIndex], static_cast<size_t>(8), static_cast<size_t>(18));
-	if (extended) {
-		widths[typeIndex] = std::clamp(widths[typeIndex], static_cast<size_t>(6), static_cast<size_t>(12));
-		widths[archIndex] = std::clamp(widths[archIndex], static_cast<size_t>(8), static_cast<size_t>(12));
+	auto minimumWidthFor = [&](size_t index) {
+		if (hasSystem && index == systemIndex) {
+			return static_cast<size_t>(6);
+		}
+		if (index == nameIndex) {
+			return static_cast<size_t>(12);
+		}
+		if ((!outdated && index == versionIndex)
+		    || (outdated && (index == installedIndex || index == latestIndex))) {
+			return static_cast<size_t>(8);
+		}
+		if (extended && index == typeIndex) {
+			return static_cast<size_t>(6);
+		}
+		if (extended && index == archIndex) {
+			return static_cast<size_t>(8);
+		}
+		return tableHeaders[index].size();
+	};
+
+	for (size_t i = 0; i < tableHeaders.size(); ++i) {
+		if (i == summaryIndex) {
+			continue;
+		}
+		widths[i] = std::max(tableHeaders[i].size(), preferredWidthFor(i));
 	}
 
 	const size_t separatorWidth = tableHeaders.size() > 1 ? (tableHeaders.size() - 1) * 2 : 0;
-	size_t nonSummaryWidth = separatorWidth;
-	for (size_t i = 0; i < tableHeaders.size(); ++i) {
-		if (i != summaryIndex) {
-			nonSummaryWidth += widths[i];
+	const size_t availableWidth = terminalWidth > separatorWidth ? terminalWidth - separatorWidth : 0;
+	const size_t preferredSummaryWidth = std::max(tableHeaders[summaryIndex].size(), static_cast<size_t>(20));
+
+	auto usedNonSummaryWidth = [&]() {
+		size_t used = 0;
+		for (size_t i = 0; i < tableHeaders.size(); ++i) {
+			if (i != summaryIndex) {
+				used += widths[i];
+			}
 		}
+		return used;
+	};
+
+	auto shrinkColumn = [&](size_t index, size_t& remaining) {
+		if (index == static_cast<size_t>(-1) || remaining == 0) {
+			return;
+		}
+		const size_t minWidth = minimumWidthFor(index);
+		const size_t reducible = widths[index] > minWidth ? widths[index] - minWidth : 0;
+		const size_t taken = std::min(reducible, remaining);
+		widths[index] -= taken;
+		remaining -= taken;
+	};
+
+	const size_t desiredSummaryWidth = availableWidth == 0 ? static_cast<size_t>(0)
+	                                                       : std::min(preferredSummaryWidth, availableWidth);
+	const size_t maxNonSummaryWidth = availableWidth > desiredSummaryWidth ? availableWidth - desiredSummaryWidth : 0;
+	size_t remaining = usedNonSummaryWidth() > maxNonSummaryWidth ? usedNonSummaryWidth() - maxNonSummaryWidth : 0;
+	shrinkColumn(nameIndex, remaining);
+	if (hasSystem) {
+		shrinkColumn(systemIndex, remaining);
+	}
+	if (extended) {
+		shrinkColumn(typeIndex, remaining);
+		shrinkColumn(archIndex, remaining);
+	}
+	if (outdated) {
+		shrinkColumn(installedIndex, remaining);
+		shrinkColumn(latestIndex, remaining);
+	} else {
+		shrinkColumn(versionIndex, remaining);
 	}
 
-	size_t summaryWidth = terminalWidth > nonSummaryWidth ? terminalWidth - nonSummaryWidth : static_cast<size_t>(16);
-	const size_t minSummaryWidth = 20;
-	const size_t minNameWidth = 16;
-	const size_t minVersionWidth = 8;
-	const size_t minSystemWidth = 6;
-	const size_t minTypeWidth = 6;
-	const size_t minArchWidth = 8;
-	if (summaryWidth < minSummaryWidth) {
-		auto reclaim = [&](size_t index, size_t minWidth) {
-			if (summaryWidth >= minSummaryWidth) {
-				return;
-			}
-			const size_t reducible = widths[index] > minWidth ? widths[index] - minWidth : 0;
-			const size_t needed = minSummaryWidth - summaryWidth;
-			const size_t taken = std::min(reducible, needed);
-			widths[index] -= taken;
-			summaryWidth += taken;
-		};
-		reclaim(nameIndex, minNameWidth);
-		reclaim(versionIndex, minVersionWidth);
-		if (extended) {
-			reclaim(typeIndex, minTypeWidth);
-			reclaim(archIndex, minArchWidth);
-		}
+	size_t summaryWidth = availableWidth > usedNonSummaryWidth() ? availableWidth - usedNonSummaryWidth() : 0;
+	const size_t minSummaryHeaderWidth = tableHeaders[summaryIndex].size();
+	if (summaryWidth < minSummaryHeaderWidth) {
+		remaining = minSummaryHeaderWidth - summaryWidth;
+		shrinkColumn(nameIndex, remaining);
 		if (hasSystem) {
-			reclaim(systemIndex, minSystemWidth);
+			shrinkColumn(systemIndex, remaining);
 		}
+		if (extended) {
+			shrinkColumn(typeIndex, remaining);
+			shrinkColumn(archIndex, remaining);
+		}
+		if (outdated) {
+			shrinkColumn(installedIndex, remaining);
+			shrinkColumn(latestIndex, remaining);
+		} else {
+			shrinkColumn(versionIndex, remaining);
+		}
+		summaryWidth = availableWidth > usedNonSummaryWidth() ? availableWidth - usedNonSummaryWidth() : 0;
 	}
-	widths[summaryIndex] = std::max(summaryWidth, tableHeaders[summaryIndex].size());
+	widths[summaryIndex] = std::max(summaryWidth, minSummaryHeaderWidth);
 
 	out() << '\n';
 	for (size_t i = 0; i < tableHeaders.size(); ++i) {
-		out() << std::left << std::setw(static_cast<int>(widths[i])) << decorateHeader(tableHeaders[i]);
+		if (i + 1 == tableHeaders.size()) {
+			out() << decorateHeader(tableHeaders[i]);
+		} else {
+			out() << decorateHeader(pad_right(tableHeaders[i], widths[i]));
+		}
 		if (i + 1 < tableHeaders.size()) {
 			out() << "  ";
 		}
@@ -361,14 +502,22 @@ void PlainDisplay::renderWrappedPackageTable() const {
 		size_t rowHeight = 1;
 		for (size_t i = 0; i < tableHeaders.size(); ++i) {
 			const std::string cell = i < row.size() ? row[i] : std::string{};
-			wrappedCells.push_back(wrapText(cell, widths[i]));
+			if (i == nameIndex || i == summaryIndex) {
+				wrappedCells.push_back(wrapText(cell, widths[i]));
+			} else {
+				wrappedCells.push_back({truncate_middle(cell, widths[i])});
+			}
 			rowHeight = std::max(rowHeight, wrappedCells.back().size());
 		}
 
 		for (size_t lineIndex = 0; lineIndex < rowHeight; ++lineIndex) {
 			for (size_t i = 0; i < tableHeaders.size(); ++i) {
 				const std::string segment = lineIndex < wrappedCells[i].size() ? wrappedCells[i][lineIndex] : std::string{};
-				out() << std::left << std::setw(static_cast<int>(widths[i])) << segment;
+				if (i + 1 == tableHeaders.size()) {
+					out() << segment;
+				} else {
+					out() << std::left << std::setw(static_cast<int>(widths[i])) << segment;
+				}
 				if (i + 1 < tableHeaders.size()) {
 					out() << "  ";
 				}
@@ -596,7 +745,8 @@ void PlainDisplay::onTableEnd() {
 	}
 	const size_t tableWidth = std::accumulate(colWidths.begin(), colWidths.end(), static_cast<size_t>(0))
 	    + (tableHeaders.size() > 1 ? (tableHeaders.size() - 1) * 2 : 0);
-	if (currentMode == DisplayMode::SEARCH && isPackageSummaryTable() && tableWidth > terminal_width()) {
+	if ((currentMode == DisplayMode::SEARCH || currentMode == DisplayMode::LIST || currentMode == DisplayMode::OUTDATED)
+	    && isPackageSummaryTable()) {
 		renderWrappedPackageTable();
 		tableHeaders.clear();
 		tableRows.clear();
@@ -606,8 +756,7 @@ void PlainDisplay::onTableEnd() {
 	}
 	out() << '\n';
 	for (size_t i = 0; i < tableHeaders.size(); ++i) {
-		out() << std::left << std::setw(static_cast<int>(colWidths[i]))
-		      << decorateHeader(tableHeaders[i]);
+		out() << decorateHeader(pad_right(tableHeaders[i], colWidths[i]));
 		if (i + 1 < tableHeaders.size()) out() << "  ";
 	}
 	out() << '\n';

@@ -715,7 +715,21 @@ function plugin.list(context)
     {
       name = context.plugin.id,
       version = "1.0.0",
+      type = "doc",
+      architecture = "noarch",
       description = "listed from " .. context.plugin.dir,
+    }
+  }
+end
+function plugin.outdated(context)
+  return {
+    {
+      name = context.plugin.id,
+      version = "1.0.0",
+      latestVersion = "2.0.0",
+      type = "doc",
+      architecture = "noarch",
+      description = "outdated from " .. context.plugin.id,
     }
   }
 end
@@ -901,7 +915,314 @@ TEST_CASE("orchestrator list command loads plugin from workspace plugins directo
 
     CHECK(output.find("LIST: workspace") != std::string::npos);
     CHECK(output.find("1.0.0") != std::string::npos);
-    CHECK(output.find("listed from " + (workspacePluginDirectory / "workspace").string()) != std::string::npos);
+    CHECK(output.find("doc") != std::string::npos);
+    CHECK(output.find("noarch") != std::string::npos);
+    CHECK(output.find("listed from") != std::string::npos);
+    CHECK(output.find("workspace") != std::string::npos);
+}
+
+TEST_CASE("orchestrator outdated command prints normalized latest version columns", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-outdated"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "query", ORCHESTRATOR_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"outdated", "query"});
+
+    CHECK(output.find("OUTDATED: query") != std::string::npos);
+    CHECK(output.find("Installed") != std::string::npos);
+    CHECK(output.find("Latest") != std::string::npos);
+    CHECK(output.find("1.0.0") != std::string::npos);
+    CHECK(output.find("2.0.0") != std::string::npos);
+    CHECK(output.find("doc") != std::string::npos);
+    CHECK(output.find("noarch") != std::string::npos);
+    CHECK(output.find("outdated from") != std::string::npos);
+    CHECK(output.find("query") != std::string::npos);
+}
+
+TEST_CASE("orchestrator dnf list normalizes metadata and filters architecture", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-dnf-list-arch-filter"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "dnf");
+
+    write_file(fakeBin / "dnf",
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"repoquery\" ] && [ \"$2\" = \"--installed\" ]; then\n"
+        "  case \"$4\" in\n"
+        "    *'%{summary}'*) printf 'ripgrep.x86_64\\tFast line-oriented search tool\\nripgrep.noarch\\tFast line-oriented search tool\\n' ; exit 0 ;;&\n"
+        "    *) printf 'ripgrep.x86_64\\t14.1.1-1.fc43\\nripgrep.noarch\\t14.1.1-1.fc43\\n' ; exit 0 ;;&\n"
+        "  esac\n"
+        "fi\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "dnf").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"COLUMNS", "120"},
+        },
+        {"list", "dnf", "--arch", "x86_64"},
+        status
+    );
+    INFO(output);
+
+    CHECK(status == 0);
+    CHECK(output.find("LIST: dnf") != std::string::npos);
+    CHECK(output.find("ripgrep") != std::string::npos);
+    CHECK(output.find("14.1.1-1.fc43") != std::string::npos);
+    CHECK(output.find("package") != std::string::npos);
+    CHECK(output.find("x86_64") != std::string::npos);
+    CHECK(output.find("Fast line-oriented") != std::string::npos);
+    CHECK(output.find("search tool") != std::string::npos);
+    CHECK(output.find("Installed RPM") == std::string::npos);
+    CHECK(output.find("noarch") == std::string::npos);
+}
+
+TEST_CASE("orchestrator dnf outdated shows installed and latest versions", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-dnf-outdated"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "dnf");
+
+    write_file(fakeBin / "dnf",
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"check-update\" ]; then\n"
+        "  printf 'ripgrep.x86_64 15.0.0-1.fc43 updates\\n'\n"
+        "  exit 100\n"
+        "fi\n"
+        "if [ \"$1\" = \"repoquery\" ] && [ \"$2\" = \"--installed\" ]; then\n"
+        "  printf 'ripgrep.x86_64\\tFast line-oriented search tool\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"$1\" = \"repoquery\" ]; then\n"
+        "  printf 'ripgrep.x86_64\\t15.0.0-1.fc43\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n");
+    write_file(fakeBin / "rpm",
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-q\" ] && [ \"$2\" = \"--qf\" ]; then\n"
+        "  printf '14.1.1-1.fc43\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"$1\" = \"-q\" ] && [ \"$2\" = \"--quiet\" ]; then\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"$1\" = \"-q\" ] && [ \"$2\" = \"--whatprovides\" ]; then\n"
+        "  printf 'ripgrep\\t14.1.1-1.fc43\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "dnf").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "rpm").string())).c_str()) == 0);
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"COLUMNS", "120"},
+        },
+        {"outdated", "dnf"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("OUTDATED: dnf") != std::string::npos);
+    CHECK(output.find("Installed") != std::string::npos);
+    CHECK(output.find("Latest") != std::string::npos);
+    CHECK(output.find("ripgrep") != std::string::npos);
+    CHECK(output.find("14.1.1-1.fc43") != std::string::npos);
+    CHECK(output.find("15.0.0-1.fc43") != std::string::npos);
+    CHECK(output.find("package") != std::string::npos);
+    CHECK(output.find("x86_64") != std::string::npos);
+    CHECK(output.find("Fast line-oriented") != std::string::npos);
+    CHECK(output.find("search tool") != std::string::npos);
+}
+
+TEST_CASE("orchestrator maven list normalizes type metadata without fake status description", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-maven-list"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path repoRoot = tempDir.path() / ".m2" / "repository";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "maven");
+
+    write_file(fakeBin / "java",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "mvn",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "java").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "mvn").string())).c_str()) == 0);
+
+    write_file(repoRoot / "org/example/demo-lib/1.2.3/demo-lib-1.2.3.pom",
+        "<project>\n"
+        "  <modelVersion>4.0.0</modelVersion>\n"
+        "  <groupId>org.example</groupId>\n"
+        "  <artifactId>demo-lib</artifactId>\n"
+        "  <version>1.2.3</version>\n"
+        "  <description>Demo library artifact</description>\n"
+        "</project>\n");
+    write_file(repoRoot / "org/example/demo-bom/2.0.0/demo-bom-2.0.0.pom",
+        "<project>\n"
+        "  <modelVersion>4.0.0</modelVersion>\n"
+        "  <groupId>org.example</groupId>\n"
+        "  <artifactId>demo-bom</artifactId>\n"
+        "  <version>2.0.0</version>\n"
+        "  <packaging>pom</packaging>\n"
+        "  <description>Demo bill of materials</description>\n"
+        "</project>\n");
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"REQPACK_MAVEN_REPO", repoRoot.string()},
+            {"COLUMNS", "120"},
+        },
+        {"list", "maven"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("LIST: maven") != std::string::npos);
+    CHECK(output.find("demo-lib") != std::string::npos);
+    CHECK(output.find("1.2.3") != std::string::npos);
+    CHECK(output.find("Type") != std::string::npos);
+    CHECK(output.find("jar") != std::string::npos);
+    CHECK(output.find("Demo") != std::string::npos);
+    CHECK(output.find("artifact") != std::string::npos);
+    CHECK(output.find("demo-bom") != std::string::npos);
+    CHECK(output.find("2.0.0") != std::string::npos);
+    CHECK(output.find("pom") != std::string::npos);
+    CHECK(output.find("materials") != std::string::npos);
+    CHECK(output.find("Installed in local Maven repository") == std::string::npos);
+}
+
+TEST_CASE("orchestrator maven outdated shows latest version once per artifact", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-maven-outdated"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path fakeBin = tempDir.path() / "bin";
+    const std::filesystem::path repoRoot = tempDir.path() / ".m2" / "repository";
+    const std::filesystem::path curlLog = tempDir.path() / "curl.log";
+    std::filesystem::create_directories(fakeBin);
+
+    copy_repo_plugin(pluginDirectory, "maven");
+
+    write_file(fakeBin / "java",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "mvn",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "curl",
+        "#!/bin/sh\n"
+        "printf '%s\n' \"$*\" >> " + escape_shell_arg(curlLog.string()) + "\n"
+        "case \"$*\" in\n"
+        "  *'g:org.example+AND+a:demo-lib'*)\n"
+        "    printf '{\"response\":{\"docs\":[{\"latestVersion\":\"1.5.0\"}]}}'\n"
+        "    ;;\n"
+        "  *)\n"
+        "    exit 1\n"
+        "    ;;\n"
+        "esac\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "java").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "mvn").string())).c_str()) == 0);
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "curl").string())).c_str()) == 0);
+
+    write_file(repoRoot / "org/example/demo-lib/1.2.3/demo-lib-1.2.3.pom",
+        "<project>\n"
+        "  <modelVersion>4.0.0</modelVersion>\n"
+        "  <groupId>org.example</groupId>\n"
+        "  <artifactId>demo-lib</artifactId>\n"
+        "  <version>1.2.3</version>\n"
+        "  <description>Demo library artifact</description>\n"
+        "</project>\n");
+    write_file(repoRoot / "org/example/demo-lib/1.5.0/demo-lib-1.5.0.pom",
+        "<project>\n"
+        "  <modelVersion>4.0.0</modelVersion>\n"
+        "  <groupId>org.example</groupId>\n"
+        "  <artifactId>demo-lib</artifactId>\n"
+        "  <version>1.5.0</version>\n"
+        "  <description>Demo library artifact</description>\n"
+        "</project>\n");
+
+    const char* currentPath = std::getenv("PATH");
+    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"REQPACK_MAVEN_REPO", repoRoot.string()},
+            {"COLUMNS", "120"},
+        },
+        {"outdated", "maven"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(output.find("OUTDATED: maven") != std::string::npos);
+    CHECK(output.find("org.example:demo-lib") == std::string::npos);
+
+    std::filesystem::remove(repoRoot / "org/example/demo-lib/1.5.0/demo-lib-1.5.0.pom");
+
+    const std::string secondOutput = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {
+            {"PATH", pathValue},
+            {"REQPACK_MAVEN_REPO", repoRoot.string()},
+            {"COLUMNS", "120"},
+        },
+        {"outdated", "maven"},
+        status
+    );
+
+    CHECK(status == 0);
+    CHECK(secondOutput.find("OUTDATED: maven") != std::string::npos);
+    CHECK(secondOutput.find("demo-lib") != std::string::npos);
+    CHECK(secondOutput.find("1.2.3") != std::string::npos);
+    CHECK(secondOutput.find("1.5.0") != std::string::npos);
+    CHECK(secondOutput.find("jar") != std::string::npos);
+    CHECK(secondOutput.find("Demo") != std::string::npos);
+    CHECK(secondOutput.find("artifact") != std::string::npos);
+    CHECK(secondOutput.find("Newer version available") == std::string::npos);
 }
 
 TEST_CASE("orchestrator search command prints executor search results", "[integration][orchestrator][service]") {
@@ -1926,7 +2247,8 @@ TEST_CASE("reqpack serve stdin executes commands line by line and continues afte
     CHECK(output.find("stdin line 2: invalid command syntax") != std::string::npos);
     CHECK(output.find("LIST: apply") != std::string::npos);
     CHECK(output.find("1.0.0") != std::string::npos);
-    CHECK(output.find("listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+    CHECK(output.find("listed from") != std::string::npos);
+    CHECK(output.find("apply") != std::string::npos);
 }
 
 TEST_CASE("reqpack install returns non-zero when security validation blocks execution", "[integration][orchestrator][security]") {
@@ -2020,7 +2342,8 @@ TEST_CASE("reqpack serve remote text mode supports token auth", "[integration][o
     CHECK(listResponse.first == "OK");
     CHECK(listResponse.second.find("apply") != std::string::npos);
     CHECK(listResponse.second.find("1.0.0") != std::string::npos);
-    CHECK(listResponse.second.find("listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+    CHECK(listResponse.second.find("listed from") != std::string::npos);
+    CHECK(listResponse.second.find("apply") != std::string::npos);
     ::close(client);
 }
 
@@ -2350,7 +2673,8 @@ TEST_CASE("reqpack remote loads profile from default remote.lua and forwards com
     const std::string output = run_reqpack_with_home(tempDir.path(), configPath, tempDir.path(), {"remote", "dev", "list", "apply"});
     CHECK(output.find("apply") != std::string::npos);
     CHECK(output.find("1.0.0") != std::string::npos);
-    CHECK(output.find("listed from " + (pluginDirectory / "apply").string()) != std::string::npos);
+    CHECK(output.find("listed from") != std::string::npos);
+    CHECK(output.find("apply") != std::string::npos);
 }
 
 TEST_CASE("reqpack remote preserves forwarded command flags after profile name", "[integration][orchestrator][remote]") {

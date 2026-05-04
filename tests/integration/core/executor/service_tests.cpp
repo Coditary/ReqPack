@@ -126,8 +126,22 @@ function plugin.list(context)
     {
       name = context.plugin.id,
       version = join(context.flags),
+      type = "doc",
+      architecture = "noarch",
       description = context.plugin.dir,
       homepage = context.plugin.script,
+    }
+  }
+end
+function plugin.outdated(context)
+  return {
+    {
+      name = context.plugin.id,
+      version = "1.0.0",
+      latestVersion = "2.0.0",
+      type = "doc",
+      architecture = "noarch",
+      description = context.plugin.dir,
     }
   }
 end
@@ -511,8 +525,46 @@ TEST_CASE("executor list dispatches flags and plugin context", "[integration][ex
     CHECK(registry.isLoaded("query"));
     CHECK(packages[0].name == "query");
     CHECK(packages[0].version == "--installed|--json");
+    CHECK(packages[0].packageType == "doc");
+    CHECK(packages[0].architecture == "noarch");
     CHECK(packages[0].description == (tempDir.path() / "plugins" / "query").string());
     CHECK(packages[0].homepage == scriptPath.string());
+}
+
+TEST_CASE("executor list and outdated apply arch and type post filters", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-list-outdated-filters"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+
+    add_plugin_script(tempDir.path() / "plugins", "query", QUERY_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Request listRequest;
+    listRequest.action = ActionType::LIST;
+    listRequest.system = "query";
+    listRequest.flags = {"arch=noarch", "type=doc"};
+
+    const std::vector<PackageInfo> listed = executer.list(listRequest);
+    REQUIRE(listed.size() == 1);
+    CHECK(listed[0].name == "query");
+
+    listRequest.flags = {"arch=x86_64"};
+    CHECK(executer.list(listRequest).empty());
+
+    Request outdatedRequest;
+    outdatedRequest.action = ActionType::OUTDATED;
+    outdatedRequest.system = "query";
+    outdatedRequest.flags = {"type=doc"};
+
+    const std::vector<PackageInfo> outdated = executer.outdated(outdatedRequest);
+    REQUIRE(outdated.size() == 1);
+    CHECK(outdated[0].name == "query");
+    CHECK(outdated[0].latestVersion == "2.0.0");
+
+    outdatedRequest.flags = {"type=cli"};
+    CHECK(executer.outdated(outdatedRequest).empty());
 }
 
 TEST_CASE("executor search joins package prompt and resolves aliases", "[integration][executor][service]") {

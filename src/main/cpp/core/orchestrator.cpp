@@ -50,20 +50,31 @@ CommandOutput package_table_output(ActionType action,
 	}
 	const bool includeSystem = requests.size() > 1;
 	std::vector<std::string> headers;
-	const bool searchTable = action == ActionType::SEARCH;
 	if (includeSystem) {
 		headers.push_back("System");
 	}
 	headers.push_back("Name");
-	headers.push_back("Version");
-	if (searchTable) {
+	if (action == ActionType::OUTDATED) {
+		headers.push_back("Installed");
+		headers.push_back("Latest");
 		headers.push_back("Type");
 		headers.push_back("Architecture");
 		headers.push_back("Description");
-		output.blocks.push_back(make_command_table_block(headers, package_search_infos_to_rows(items, includeSystem)));
+		output.blocks.push_back(make_command_table_block(headers, package_outdated_infos_to_rows(items, includeSystem)));
+	} else if (action == ActionType::SEARCH || action == ActionType::LIST) {
+		headers.push_back("Version");
+		headers.push_back("Type");
+		headers.push_back("Architecture");
+		headers.push_back("Description");
+		if (action == ActionType::SEARCH) {
+			output.blocks.push_back(make_command_table_block(headers, package_search_infos_to_rows(items, includeSystem)));
+		} else {
+			output.blocks.push_back(make_command_table_block(headers, package_list_infos_to_rows(items, includeSystem)));
+		}
 	} else {
+		headers.push_back("Version");
 		headers.push_back("Summary");
-		output.blocks.push_back(make_command_table_block(headers, package_infos_to_rows(items, includeSystem)));
+		output.blocks.push_back(make_command_table_block(headers, package_list_infos_to_rows(items, includeSystem)));
 	}
 	if (items.empty()) {
 		output.blocks.push_back(make_command_message_block("No results"));

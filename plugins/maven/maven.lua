@@ -4,6 +4,10 @@ local function trim(value)
     return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+local function escape_lua_pattern(value)
+    return (tostring(value or ""):gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1"))
+end
+
 local function shell_quote(value)
     return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
 end
@@ -104,6 +108,15 @@ local function path_exists(path)
     return reqpack.exec.run("test -e " .. shell_quote(path)).success
 end
 
+local function read_text_file(path)
+    local result = reqpack.exec.run("test -f " .. shell_quote(path) .. " && cat " .. shell_quote(path))
+    if not result.success then
+        return nil
+    end
+
+    return result.stdout or ""
+end
+
 local function resolve_local_file(path)
     local file_type = reqpack.exec.run("test -d " .. shell_quote(path) .. " && printf dir || printf file")
     if not file_type.success or trim(file_type.stdout or "") ~= "dir" then
@@ -137,6 +150,83 @@ local function url_encode(s)
     return (tostring(s or ""):gsub("[^%w%-%.%_%~]", function(c)
         return string.format("%%%02X", string.byte(c))
     end))
+end
+
+local function pom_tag_value(pomText, tagName)
+    if pomText == nil or trim(tagName) == "" then
+        return ""
+    end
+
+    local value = pomText:match("<" .. tagName .. ">([\0-\255]-)</" .. tagName .. ">")
+    if value == nil then
+        return ""
+    end
+
+    value = value:gsub("<!%[CDATA%[([\0-\255]-)%]%]>", "%1")
+    value = value:gsub("<[^>]+>", " ")
+    value = value:gsub("%s+", " ")
+    return trim(value)
+end
+
+local function short_summary(name, description)
+    local summary = trim(name)
+    if summary ~= "" and summary:find("${", 1, true) == nil then
+        return summary
+    end
+
+    local normalized = trim(description)
+    if normalized == "" then
+        return ""
+    end
+
+    local sentence = normalized:match("^(.-[%.%!%?])%s+") or normalized
+    sentence = trim(sentence)
+    if #sentence > 120 then
+        return sentence:sub(1, 117) .. "..."
+    end
+    return sentence
+end
+
+local function local_artifact_metadata(groupId, artifactId, version)
+    local pomArtifact = {
+        groupId = groupId,
+        artifactId = artifactId,
+        packaging = "pom",
+        classifier = nil,
+        version = version,
+    }
+    local pomText = read_text_file(artifact_repo_path(pomArtifact))
+    if pomText == nil then
+        return {
+            packageType = "",
+            description = "",
+        }
+    end
+
+    local packageType = pom_tag_value(pomText, "packaging")
+    if packageType == "" then
+        packageType = "jar"
+    end
+
+    local description = pom_tag_value(pomText, "description")
+
+    return {
+        packageType = packageType,
+        summary = short_summary(pom_tag_value(pomText, "name"), description),
+        description = description,
+    }
+end
+
+local function maven_central_latest_version(context, groupId, artifactId)
+    local url = "https://search.maven.org/solrsearch/select?q=g:" ..
+                url_encode(groupId) .. "+AND+a:" .. url_encode(artifactId) ..
+                "&rows=1&wt=json"
+    local result = context.exec.run("curl -sf --max-time 10 " .. shell_quote(url))
+    if not result.success then
+        return ""
+    end
+
+    return trim((result.stdout or ""):match('"latestVersion":"([^"]+)"') or "")
 end
 
 local function xml_escape(value)
@@ -398,11 +488,12 @@ local function search_maven_central(context, prompt)
         local g   = entry:match('"g":"([^"]+)"')
         local a   = entry:match('"a":"([^"]+)"')
         local ver = entry:match('"latestVersion":"([^"]+)"')
+        local packaging = trim(entry:match('"p":"([^"]+)"') or "")
         if g and a and ver then
             table.insert(items, {
-                name        = g .. ":" .. a,
-                version     = ver,
-                description = "Available on Maven Central"
+                name = g .. ":" .. a,
+                version = ver,
+                type = packaging,
             })
         end
     end
@@ -415,7 +506,13 @@ local function local_artifact_versions(groupId, artifactId)
     local versions = {}
     for line in (result.stdout or ""):gmatch("[^\r\n]+") do
         local version = trim(line)
-        if version ~= "" then
+        if version ~= "" and path_exists(artifact_repo_path({
+            groupId = groupId,
+            artifactId = artifactId,
+            packaging = "pom",
+            classifier = nil,
+            version = version,
+        })) then
             table.insert(versions, version)
         end
     end
@@ -430,7 +527,7 @@ local function search_local_artifacts(prompt)
     local items = {}
     for line in (result.stdout or ""):gmatch("[^\r\n]+") do
         local path = trim(line)
-        local relative = path:gsub("^" .. repo .. "/?", "")
+        local relative = path:gsub("^" .. escape_lua_pattern(repo) .. "/?", "")
         local parts = split(relative, "/")
         if #parts >= 4 then
             local version = parts[#parts - 1]
@@ -442,10 +539,13 @@ local function search_local_artifacts(prompt)
             local groupId = join(groupParts, ".")
             local name = groupId .. ":" .. artifactId
             if normalized == "" or name:lower():find(normalized, 1, true) ~= nil then
+                local metadata = local_artifact_metadata(groupId, artifactId, version)
                 table.insert(items, {
                     name = name,
                     version = version,
-                    description = "Installed in local Maven repository"
+                    type = metadata.packageType,
+                    summary = metadata.summary,
+                    description = metadata.description,
                 })
             end
         end
@@ -734,23 +834,34 @@ end
 function plugin.outdated(context)
     local installed = search_local_artifacts("")
     local items = {}
+    local seen = {}
     for _, pkg in ipairs(installed) do
         local parts = split(pkg.name, ":")
         if #parts >= 2 then
             local g = parts[1]
             local a = parts[2]
-            local localVersion = pkg.version
-            local url = "https://search.maven.org/solrsearch/select?q=g:" ..
-                        url_encode(g) .. "+AND+a:" .. url_encode(a) ..
-                        "&rows=1&wt=json"
-            local result = context.exec.run("curl -sf --max-time 10 " .. shell_quote(url))
-            if result.success then
-                local latestVersion = (result.stdout or ""):match('"latestVersion":"([^"]+)"')
-                if latestVersion and latestVersion ~= localVersion then
+            if not seen[pkg.name] then
+                seen[pkg.name] = true
+                local versions = local_artifact_versions(g, a)
+                local localVersion = #versions > 0 and versions[#versions] or pkg.version
+                local metadata = local_artifact_metadata(g, a, localVersion)
+                local latestVersion = maven_central_latest_version(context, g, a)
+                local hasLatestLocally = false
+                for _, version in ipairs(versions) do
+                    if version == latestVersion then
+                        hasLatestLocally = true
+                        break
+                    end
+                end
+
+                if latestVersion ~= "" and latestVersion ~= localVersion and not hasLatestLocally then
                     table.insert(items, {
-                        name        = pkg.name,
-                        version     = localVersion,
-                        description = "Newer version available: " .. latestVersion
+                        name = pkg.name,
+                        version = localVersion,
+                        latestVersion = latestVersion,
+                        type = metadata.packageType,
+                        summary = metadata.summary,
+                        description = metadata.description,
                     })
                 end
             end

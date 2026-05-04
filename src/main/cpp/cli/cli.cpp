@@ -82,11 +82,11 @@ std::optional<AuditOutputFormat> infer_audit_output_format_from_path(const std::
 	return std::nullopt;
 }
 
-bool consume_search_filter_flag(ActionType action,
-	                             const std::vector<std::string>& arguments,
-	                             std::size_t& index,
-	                             std::vector<std::string>& flags) {
-	if (action != ActionType::SEARCH) {
+bool consume_package_result_filter_flag(ActionType action,
+	                                    const std::vector<std::string>& arguments,
+	                                    std::size_t& index,
+	                                    std::vector<std::string>& flags) {
+	if (action != ActionType::SEARCH && action != ActionType::LIST && action != ActionType::OUTDATED) {
 		return false;
 	}
 	const std::string& argument = arguments[index];
@@ -372,7 +372,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 
 		if (is_flag(argument)) {
 			const std::size_t previousFlagCount = global_flags.size();
-			if (consume_search_filter_flag(action, requestArguments, i, global_flags)) {
+			if (consume_package_result_filter_flag(action, requestArguments, i, global_flags)) {
 				if (global_flags.size() == previousFlagCount) {
 					lastParseFailed_ = true;
 					return {};
@@ -787,13 +787,17 @@ void Cli::print_command_help(ActionType action) {
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
+                "  --arch <value>          Filter listed packages by architecture (repeatable)\n"
+                "  --type <value>          Filter listed packages by package type/class (repeatable)\n"
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
                 "  ReqPack list\n"
                 "  ReqPack list apt\n"
                 "  ReqPack list npm\n"
-                "  ReqPack list brew\n";
+                "  ReqPack list brew\n"
+                "  ReqPack list dnf --arch x86_64\n"
+                "  ReqPack list dnf --type doc --type devel\n";
             break;
         case ActionType::INFO:
             help =
@@ -904,12 +908,16 @@ void Cli::print_command_help(ActionType action) {
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
+                "  --arch <value>          Filter outdated packages by architecture (repeatable)\n"
+                "  --type <value>          Filter outdated packages by package type/class (repeatable)\n"
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
                 "  ReqPack outdated\n"
                 "  ReqPack outdated dnf\n"
-                "  ReqPack outdated maven\n";
+                "  ReqPack outdated maven\n"
+                "  ReqPack outdated dnf --arch noarch\n"
+                "  ReqPack outdated dnf --type doc\n";
             break;
         case ActionType::SNAPSHOT:
             help =

@@ -106,6 +106,72 @@ local function split_package_arch(name)
     return tostring(name or ""), ""
 end
 
+local function collect_installed_summaries(entries)
+    local summaries = {}
+    local batch = {}
+
+    local function load_batch()
+        if #batch == 0 then
+            return
+        end
+        local result = reqpack.exec.run(
+            "dnf repoquery --installed --qf '%{name}.%{arch}\t%{summary}\n' " .. shell_join(batch) .. " 2>/dev/null"
+        )
+        for line in (result.stdout or ""):gmatch("[^\r\n]+") do
+            local trimmed = trim(line)
+            if trimmed ~= "" then
+                local name_with_arch, summary = trimmed:match("^(.-)\t(.+)$")
+                if name_with_arch ~= nil and summary ~= nil then
+                    summaries[name_with_arch] = trim(summary)
+                end
+            end
+        end
+        batch = {}
+    end
+
+    for _, entry in ipairs(entries or {}) do
+        batch[#batch + 1] = entry.name_with_arch
+        if #batch >= 250 then
+            load_batch()
+        end
+    end
+    load_batch()
+    return summaries
+end
+
+local function collect_latest_versions(entries)
+    local versions = {}
+    local batch = {}
+
+    local function load_batch()
+        if #batch == 0 then
+            return
+        end
+        local result = reqpack.exec.run(
+            "dnf repoquery --latest-limit=1 --qf '%{name}.%{arch}\t%{version}-%{release}\n' " .. shell_join(batch) .. " 2>/dev/null"
+        )
+        for line in (result.stdout or ""):gmatch("[^\r\n]+") do
+            local trimmed = trim(line)
+            if trimmed ~= "" and trimmed ~= "Updating and loading repositories:" and trimmed ~= "Repositories loaded." then
+                local name_with_arch, version = trimmed:match("^(.-)\t(.+)$")
+                if name_with_arch ~= nil and version ~= nil then
+                    versions[name_with_arch] = trim(version)
+                end
+            end
+        end
+        batch = {}
+    end
+
+    for _, entry in ipairs(entries or {}) do
+        batch[#batch + 1] = entry.name_with_arch
+        if #batch >= 250 then
+            load_batch()
+        end
+    end
+    load_batch()
+    return versions
+end
+
 local function collect_search_versions(entries)
     local versions = {}
     local batch = {}
@@ -453,41 +519,80 @@ function plugin.update(context, packages)
 end
 
 function plugin.list(context)
-    local result = context.exec.run("dnf repoquery --installed --qf '%{name}\t%{version}-%{release}\n'")
+    local filters = search_filters(context.flags)
+    local result = context.exec.run("dnf repoquery --installed --qf '%{name}.%{arch}\t%{version}-%{release}\n'")
+    local raw_items = {}
     local items = {}
     for line in (result.stdout or ""):gmatch("[^\r\n]+") do
-        local name, ver = line:match("^(.-)\t(.+)$")
-        if name and ver then
-            table.insert(items, { name = name, version = ver, description = "Installed RPM" })
+        local name_with_arch, ver = line:match("^(.-)\t(.+)$")
+        if name_with_arch and ver then
+            local package_name, architecture = split_package_arch(name_with_arch)
+            local item = {
+                name_with_arch = name_with_arch,
+                name = package_name,
+                version = ver,
+                type = dnf_package_type(package_name),
+                architecture = architecture,
+                description = "",
+            }
+            if matches_search_filters(item, filters) then
+                table.insert(raw_items, item)
+            end
         end
+    end
+
+    local summaries = collect_installed_summaries(raw_items)
+    for _, item in ipairs(raw_items) do
+        item.summary = summaries[item.name_with_arch] or ""
+        item.description = item.summary
+        item.name_with_arch = nil
+        table.insert(items, item)
     end
     context.events.listed(items)
     return items
 end
 
 function plugin.outdated(context)
+    local filters = search_filters(context.flags)
     -- dnf check-update exits 100 when updates available, 0 when none, non-zero on error
     local result = context.exec.run("dnf check-update --quiet 2>/dev/null; echo \"EXIT:$?\"")
     local stdout = result.stdout or ""
-    local exit_code = tonumber(stdout:match("EXIT:(%d+)$")) or 1
+    local exit_code = tonumber(trim(stdout):match("EXIT:(%d+)$")) or 1
     if exit_code ~= 0 and exit_code ~= 100 then
         context.log.warn("dnf check-update failed with exit code " .. tostring(exit_code))
         return {}
     end
+    local raw_items = {}
     local items = {}
     for line in stdout:gmatch("[^\r\n]+") do
         if line:match("^EXIT:") then break end
         -- output format: "name.arch    new-version    repo"
-        local name, ver = line:match("^(%S+)%s+(%S+)%s")
-        if name and ver then
-            -- strip architecture suffix (e.g. ".x86_64", ".noarch")
-            local baseName = name:match("^(.-)%.[^.]+$") or name
-            table.insert(items, {
+        local name_with_arch, ver = line:match("^(%S+)%s+(%S+)%s")
+        if name_with_arch and ver then
+            local baseName, architecture = split_package_arch(name_with_arch)
+            local item = {
+                name_with_arch = name_with_arch,
                 name = baseName,
-                version = ver,
-                description = "Update available"
-            })
+                version = installed_package_version(baseName),
+                latestVersion = ver,
+                type = dnf_package_type(baseName),
+                architecture = architecture,
+                description = "",
+            }
+            if matches_search_filters(item, filters) then
+                table.insert(raw_items, item)
+            end
         end
+    end
+
+    local summaries = collect_installed_summaries(raw_items)
+    local latest_versions = collect_latest_versions(raw_items)
+    for _, item in ipairs(raw_items) do
+        item.latestVersion = latest_versions[item.name_with_arch] or item.latestVersion
+        item.summary = summaries[item.name_with_arch] or ""
+        item.description = item.summary
+        item.name_with_arch = nil
+        table.insert(items, item)
     end
     context.events.outdated(items)
     return items

@@ -87,6 +87,13 @@ private:
     std::string previous_;
 };
 
+std::string padRight(const std::string& text, size_t width) {
+    if (text.size() >= width) {
+        return text;
+    }
+    return text + std::string(width - text.size(), ' ');
+}
+
 } // namespace
 
 TEST_CASE("logger formats source and scope prefixes", "[unit][logger][format]") {
@@ -127,6 +134,55 @@ TEST_CASE("logger renders plugin output strings", "[unit][logger][format]") {
         .action = OutputAction::PLUGIN_ARTIFACT,
         .context = OutputContext{.source = "smoke", .scope = "search", .payload = "report.json"},
     }) == "[smoke] (search) artifact: report.json");
+}
+
+TEST_CASE("logger preserves trailing empty table cells", "[unit][logger][display]") {
+    Logger& logger = Logger::instance();
+
+    class RecordingTableDisplay final : public IDisplay {
+    public:
+        void onSessionBegin(DisplayMode, const std::vector<std::string>&) override {}
+        void onSessionEnd(bool, int, int, int) override {}
+        void onItemBegin(const std::string&, const std::string&) override {}
+        void onItemProgress(const std::string&, const DisplayProgressMetrics&) override {}
+        void onItemStep(const std::string&, const std::string&) override {}
+        void onItemSuccess(const std::string&) override {}
+        void onItemFailure(const std::string&, const std::string&) override {}
+        void onMessage(const std::string&, const std::string&) override {}
+        void onTableBegin(const std::vector<std::string>& headers) override {
+            seenHeaders = headers;
+        }
+        void onTableRow(const std::vector<std::string>& cells) override {
+            seenRows.push_back(cells);
+        }
+        void onTableEnd() override {}
+        void flush() override {}
+
+        std::vector<std::string> seenHeaders;
+        std::vector<std::vector<std::string>> seenRows;
+    } display;
+
+    logger.flushSync();
+    logger.setConsoleOutput(false);
+    logger.setDisplay(&display);
+
+    logger.displayTableHeader({"Name", "Version", "Type", "Architecture", "Description"});
+    logger.displayTableRow({"org.example:demo-lib", "1.2.3", "jar", "", "Demo library artifact"});
+    logger.displayTableEnd();
+    logger.flushSync();
+
+    REQUIRE(display.seenHeaders.size() == 5);
+    REQUIRE(display.seenRows.size() == 1);
+    REQUIRE(display.seenRows[0].size() == 5);
+    CHECK(display.seenRows[0][0] == "org.example:demo-lib");
+    CHECK(display.seenRows[0][1] == "1.2.3");
+    CHECK(display.seenRows[0][2] == "jar");
+    CHECK(display.seenRows[0][3].empty());
+    CHECK(display.seenRows[0][4] == "Demo library artifact");
+
+    logger.setDisplay(nullptr);
+    logger.setConsoleOutput(true);
+    logger.flushSync();
 }
 
 TEST_CASE("logger stdout newline decision handles empty and terminated messages", "[unit][logger][format]") {
@@ -288,10 +344,110 @@ TEST_CASE("command output wraps oversized package tables to terminal width", "[u
     output.succeeded = 1;
 
     const std::string rendered = render_command_output_text(output);
-    CHECK(rendered.find("python3-snakemake") != std::string::npos);
-    CHECK(rendered.find("webdav.noarch") != std::string::npos);
+    CHECK(rendered.find("python3-") != std::string::npos);
+    CHECK(rendered.find("webdav") != std::string::npos);
     CHECK(rendered.find("plugin") != std::string::npos);
     CHECK(rendered.find("noarch") != std::string::npos);
-    CHECK(rendered.find("Snakemake storage") != std::string::npos);
+    CHECK(rendered.find("storage") != std::string::npos);
+    CHECK(rendered.find("HTTP(s)") != std::string::npos);
     CHECK(rendered.find("webdav") != std::string::npos);
+}
+
+TEST_CASE("command output wraps normalized list and outdated tables to terminal width", "[unit][logger][format]") {
+    const ScopedEnvVar columns("COLUMNS", "76");
+
+    SECTION("list table uses search-style wrapped layout") {
+        CommandOutput output;
+        output.mode = DisplayMode::LIST;
+        output.sessionItems = {"dnf"};
+        output.blocks.push_back(make_command_table_block(
+            {"Name", "Version", "Type", "Architecture", "Description"},
+            {{"python3-snakemake-storage-plugin-webdav", "1.2.3", "plugin", "noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
+        ));
+        output.success = true;
+        output.succeeded = 1;
+
+        const std::string rendered = render_command_output_text(output);
+        CHECK(rendered.find("LIST: dnf") != std::string::npos);
+        CHECK(rendered.find("plugin") != std::string::npos);
+        CHECK(rendered.find("noarch") != std::string::npos);
+        CHECK(rendered.find("Snakemake storage") != std::string::npos);
+    }
+
+    SECTION("outdated table wraps with installed and latest columns") {
+        CommandOutput output;
+        output.mode = DisplayMode::OUTDATED;
+        output.sessionItems = {"dnf"};
+        output.blocks.push_back(make_command_table_block(
+            {"Name", "Installed", "Latest", "Type", "Architecture", "Description"},
+            {{"python3-snakemake-storage-plugin-webdav", "1.2.3-1.fc43", "1.2.4-1.fc43", "plugin", "noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
+        ));
+        output.success = true;
+        output.succeeded = 1;
+
+        const std::string rendered = render_command_output_text(output);
+        CHECK(rendered.find("OUTDATED: dnf") != std::string::npos);
+        CHECK(rendered.find("Installed") != std::string::npos);
+        CHECK(rendered.find("Latest") != std::string::npos);
+        CHECK(rendered.find("1.2.4-1.fc43") != std::string::npos);
+        CHECK(rendered.find("plugin") != std::string::npos);
+        CHECK(rendered.find("noarch") != std::string::npos);
+        CHECK(rendered.find("...") != std::string::npos);
+    }
+}
+
+TEST_CASE("command output uses preferred package table widths on wide terminals", "[unit][logger][format]") {
+    const ScopedEnvVar columns("COLUMNS", "160");
+
+    CommandOutput output;
+    output.mode = DisplayMode::LIST;
+    output.sessionItems = {"maven"};
+    output.blocks.push_back(make_command_table_block(
+        {"Name", "Version", "Type", "Architecture", "Description"},
+        {{"org.apache.maven.plugins:maven-clean-plugin", "3.2.0", "maven-plugin", "", "Apache Maven Clean Plugin"}}
+    ));
+    output.success = true;
+    output.succeeded = 1;
+
+    const std::string rendered = render_command_output_text(output);
+    const std::string expectedHeader = padRight("Name", 50)
+        + "  " + padRight("Version", 16)
+        + "  " + padRight("Type", 14)
+        + "  " + padRight("Architecture", 12)
+        + "  Description";
+    const std::string expectedRow = padRight("org.apache.maven.plugins:maven-clean-plugin", 50)
+        + "  " + padRight("3.2.0", 16)
+        + "  " + padRight("maven-plugin", 14)
+        + "  " + padRight("", 12)
+        + "  Apache Maven Clean Plugin";
+
+    CHECK(rendered.find(expectedHeader) != std::string::npos);
+    CHECK(rendered.find(expectedRow) != std::string::npos);
+}
+
+TEST_CASE("command output uses preferred outdated table widths on wide terminals", "[unit][logger][format]") {
+    const ScopedEnvVar columns("COLUMNS", "160");
+
+    CommandOutput output;
+    output.mode = DisplayMode::OUTDATED;
+    output.sessionItems = {"dnf"};
+    output.blocks.push_back(make_command_table_block(
+        {"Name", "Installed", "Latest", "Type", "Architecture", "Description"},
+        {{"python3-snakemake-storage-plugin-webdav", "1.2.3-1.fc43", "1.2.4-1.fc43", "plugin", "noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
+    ));
+    output.success = true;
+    output.succeeded = 1;
+
+    const std::string rendered = render_command_output_text(output);
+    const std::string expectedHeader = padRight("Name", 50)
+        + "  " + padRight("Installed", 16)
+        + "  " + padRight("Latest", 16)
+        + "  " + padRight("Type", 14)
+        + "  " + padRight("Architecture", 12)
+        + "  Description";
+
+    CHECK(rendered.find(expectedHeader) != std::string::npos);
+    CHECK(rendered.find("python3-snakemake-storage-plugin-webdav") != std::string::npos);
+    CHECK(rendered.find("1.2.3-1.fc43") != std::string::npos);
+    CHECK(rendered.find("1.2.4-1.fc43") != std::string::npos);
 }

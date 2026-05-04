@@ -23,13 +23,13 @@ std::string normalize_search_filter_value(std::string value) {
 	return value;
 }
 
-struct SearchFilters {
+struct PackageResultFilters {
 	std::set<std::string> architectures;
 	std::set<std::string> packageTypes;
 };
 
-SearchFilters parse_search_filters(const std::vector<std::string>& flags) {
-	SearchFilters filters;
+PackageResultFilters parse_package_result_filters(const std::vector<std::string>& flags) {
+	PackageResultFilters filters;
 	for (const auto& flag : flags) {
 		if (flag.rfind("arch=", 0) == 0 && flag.size() > 5) {
 			filters.architectures.insert(normalize_search_filter_value(flag.substr(5)));
@@ -41,7 +41,7 @@ SearchFilters parse_search_filters(const std::vector<std::string>& flags) {
 	return filters;
 }
 
-bool matches_search_filters(const PackageInfo& info, const SearchFilters& filters) {
+bool matches_package_result_filters(const PackageInfo& info, const PackageResultFilters& filters) {
 	if (!filters.architectures.empty()) {
 		if (info.architecture.empty() || !filters.architectures.contains(normalize_search_filter_value(info.architecture))) {
 			return false;
@@ -53,6 +53,17 @@ bool matches_search_filters(const PackageInfo& info, const SearchFilters& filter
 		}
 	}
 	return true;
+}
+
+std::vector<PackageInfo> apply_package_result_filters(std::vector<PackageInfo> results, const std::vector<std::string>& flags) {
+	const PackageResultFilters filters = parse_package_result_filters(flags);
+	if (filters.architectures.empty() && filters.packageTypes.empty()) {
+		return results;
+	}
+	results.erase(std::remove_if(results.begin(), results.end(), [&](const PackageInfo& info) {
+		return !matches_package_result_filters(info, filters);
+	}), results.end());
+	return results;
 }
 
 bool samePackage(const Package& left, const Package& right) {
@@ -182,7 +193,7 @@ std::vector<PackageInfo> Executer::list(const Request& request) const {
 	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
 	TaskGroup taskGroup{.action = ActionType::LIST, .system = resolvedRequest->system};
 	taskGroup.flags = resolvedRequest->flags;
-	return plugin->list(this->buildPluginContext(plugin, taskGroup));
+	return apply_package_result_filters(plugin->list(this->buildPluginContext(plugin, taskGroup)), resolvedRequest->flags);
 }
 
 std::vector<PackageInfo> Executer::outdated(const Request& request) const {
@@ -200,7 +211,7 @@ std::vector<PackageInfo> Executer::outdated(const Request& request) const {
 	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
 	TaskGroup taskGroup{.action = ActionType::OUTDATED, .system = resolvedRequest->system};
 	taskGroup.flags = resolvedRequest->flags;
-	return plugin->outdated(this->buildPluginContext(plugin, taskGroup));
+	return apply_package_result_filters(plugin->outdated(this->buildPluginContext(plugin, taskGroup)), resolvedRequest->flags);
 }
 
 std::vector<PackageInfo> Executer::search(const Request& request) const {
@@ -226,14 +237,7 @@ std::vector<PackageInfo> Executer::search(const Request& request) const {
 		prompt += resolvedRequest->packages[index];
 	}
 	std::vector<PackageInfo> results = plugin->search(this->buildPluginContext(plugin, taskGroup), prompt);
-	const SearchFilters filters = parse_search_filters(resolvedRequest->flags);
-	if (filters.architectures.empty() && filters.packageTypes.empty()) {
-		return results;
-	}
-	results.erase(std::remove_if(results.begin(), results.end(), [&](const PackageInfo& info) {
-		return !matches_search_filters(info, filters);
-	}), results.end());
-	return results;
+	return apply_package_result_filters(std::move(results), resolvedRequest->flags);
 }
 
 PackageInfo Executer::info(const Request& request) const {
