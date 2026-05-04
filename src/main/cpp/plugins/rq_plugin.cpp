@@ -50,6 +50,13 @@ std::optional<ptree> parse_json_tree(const std::string& json) {
     }
 }
 
+ArchiveExtractionOptions archive_options_from_config(const ReqPackConfig& config) {
+    return ArchiveExtractionOptions{
+        .password = resolve_archive_password(config),
+        .interactive = config.interaction.interactive,
+    };
+}
+
 std::size_t write_to_file(void* contents, std::size_t size, std::size_t nmemb, void* userp) {
     return std::fwrite(contents, size, nmemb, static_cast<FILE*>(userp));
 }
@@ -99,6 +106,10 @@ bool rq_package_installed(const std::filesystem::path& stateRoot, const Package&
 
 class RqRuntimeHost final : public IPluginRuntimeHost {
 public:
+    void setConfig(const ReqPackConfig* config) {
+        config_ = config;
+    }
+
     void logDebug(const std::string& pluginId, const std::string& message) override {
         Logger::instance().emit(OutputAction::LOG, OutputContext{.level = spdlog::level::debug, .message = message, .source = "plugin", .scope = pluginId});
     }
@@ -199,7 +210,8 @@ public:
         const std::filesystem::path targetPath(destinationPath);
         auto finalize = [&](const std::filesystem::path& path) -> DownloadResult {
             try {
-                (void)extract_archive_in_place(path);
+                const ArchiveExtractionOptions options = config_ != nullptr ? archive_options_from_config(*config_) : ArchiveExtractionOptions{};
+                (void)extract_archive_in_place(path, options);
             } catch (...) {
                 return {};
             }
@@ -267,6 +279,7 @@ public:
     }
 
 private:
+    const ReqPackConfig* config_{nullptr};
     std::vector<std::filesystem::path> tempDirectories_{};
     std::vector<std::string> artifactPayloads_{};
 };
@@ -338,7 +351,9 @@ std::string shell_quote(const std::string& value) {
 
 }  // namespace
 
-RqPlugin::RqPlugin(const ReqPackConfig& config) : config_(config) {}
+RqPlugin::RqPlugin(const ReqPackConfig& config) : config_(config) {
+    RQ_RUNTIME_HOST.setConfig(&config_);
+}
 
 bool RqPlugin::init() {
     initialized_ = true;
@@ -1065,7 +1080,7 @@ std::filesystem::path RqPlugin::localPathForUrl(const std::string& url) {
 
 std::filesystem::path RqPlugin::downloadPackageArtifact(const PluginCallContext& context, const std::string& url) {
     const std::filesystem::path localPath = localPathForUrl(url);
-    if (localPath != std::filesystem::path(url) && !is_generic_archive_path(localPath)) {
+    if (localPath != std::filesystem::path(url) && !is_generic_archive_path(localPath) && !is_archive_wrapper_path(localPath)) {
         return localPath;
     }
 
@@ -1075,7 +1090,14 @@ std::filesystem::path RqPlugin::downloadPackageArtifact(const PluginCallContext&
     }
     const std::filesystem::path sourcePath = (localPath != std::filesystem::path(url)) ? localPath : std::filesystem::path(url);
     const std::string suffix = generic_archive_suffix(sourcePath);
-    const std::string extension = suffix.empty() ? sourcePath.extension().string() : suffix;
+    const std::string wrapper = archive_wrapper_suffix(sourcePath);
+    std::string extension;
+    if (!wrapper.empty()) {
+        const std::string innerSuffix = generic_archive_suffix(sourcePath.stem());
+        extension = innerSuffix.empty() ? wrapper : innerSuffix + wrapper;
+    } else {
+        extension = suffix.empty() ? sourcePath.extension().string() : suffix;
+    }
     const std::filesystem::path targetPath = std::filesystem::path(tempDirectory) / (extension.empty() ? "download.rqp" : "download" + extension);
     const DownloadResult download = context.downloadFile(url, targetPath.string());
     if (!download.success) {

@@ -27,6 +27,13 @@ std::string to_lower_copy(const std::string& value) {
 
 constexpr const char* SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
 
+ArchiveExtractionOptions archive_options_from_config(const ReqPackConfig& config) {
+    return ArchiveExtractionOptions{
+        .password = resolve_archive_password(config),
+        .interactive = config.interaction.interactive,
+    };
+}
+
 ActionType action_from_lua_object(const sol::object& object) {
     if (!object.valid()) {
         return ActionType::UNKNOWN;
@@ -1233,8 +1240,16 @@ DownloadResult LuaBridge::downloadToPath(const std::string& url, const std::stri
         return std::filesystem::path(url);
     }();
     const std::string suffix = generic_archive_suffix(sourcePath);
-    const std::filesystem::path targetPath = suffix.empty() ? std::filesystem::path(destinationPath)
-                                                             : std::filesystem::path(destinationPath + suffix);
+    const std::string wrapper = archive_wrapper_suffix(sourcePath);
+    std::string extension;
+    if (!wrapper.empty()) {
+        const std::string innerSuffix = generic_archive_suffix(sourcePath.stem());
+        extension = innerSuffix.empty() ? wrapper : innerSuffix + wrapper;
+    } else {
+        extension = suffix;
+    }
+    const std::filesystem::path targetPath = extension.empty() ? std::filesystem::path(destinationPath)
+                                                                : std::filesystem::path(destinationPath + extension);
     if (!downloader.download(url, targetPath.string())) {
         return {};
     }
@@ -1244,7 +1259,7 @@ DownloadResult LuaBridge::downloadToPath(const std::string& url, const std::stri
     result.resolvedPath = destinationPath;
 
     try {
-        if (extract_archive_in_place(targetPath)) {
+        if (extract_archive_in_place(targetPath, archive_options_from_config(m_config))) {
             if (targetPath != std::filesystem::path(destinationPath)) {
                 std::error_code error;
                 std::filesystem::remove_all(destinationPath, error);

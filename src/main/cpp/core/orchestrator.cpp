@@ -139,9 +139,22 @@ void append_cleanup_paths(std::vector<std::filesystem::path>& tempFiles, const s
     tempFiles.insert(tempFiles.end(), cleanupPaths.begin(), cleanupPaths.end());
 }
 
-bool resolve_local_target(Request& request, Registry* registry, std::vector<std::filesystem::path>& tempFiles, std::string* errorMessage) {
+ArchiveExtractionOptions archive_options_from_config(const ReqPackConfig& config) {
+    return ArchiveExtractionOptions{
+        .password = resolve_archive_password(config),
+        .interactive = config.interaction.interactive,
+    };
+}
+
+bool resolve_local_target(
+    Request& request,
+    Registry* registry,
+    const ReqPackConfig& config,
+    std::vector<std::filesystem::path>& tempFiles,
+    std::string* errorMessage
+) {
     try {
-        const ArchiveResolution resolution = extract_archive_to_temp_directory(request.localPath);
+        const ArchiveResolution resolution = extract_archive_to_temp_directory(request.localPath, archive_options_from_config(config));
         if (resolution.changed) {
             append_cleanup_paths(tempFiles, resolution.cleanupPaths);
             request.localPath = resolution.installPath.string();
@@ -334,7 +347,7 @@ int Orchestrator::run() {
 
 		if (!is_url(request.localPath)) {
 			std::string errorMessage;
-			if (!resolve_local_target(request, this->registry, tempFiles, &errorMessage)) {
+			if (!resolve_local_target(request, this->registry, this->config, tempFiles, &errorMessage)) {
 				Logger::instance().err(errorMessage);
 				cleanupTempFiles(tempFiles);
 				return 1;
@@ -360,7 +373,7 @@ int Orchestrator::run() {
 		tempFiles.push_back(tempFile);
 		request.localPath = tempFile.string();
 		std::string errorMessage;
-		if (!resolve_local_target(request, this->registry, tempFiles, &errorMessage)) {
+		if (!resolve_local_target(request, this->registry, this->config, tempFiles, &errorMessage)) {
 			Logger::instance().err(errorMessage);
 			cleanupTempFiles(tempFiles);
 			return 1;

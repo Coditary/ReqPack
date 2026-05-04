@@ -12,6 +12,8 @@
 
 namespace {
 
+constexpr const char* ARCHIVE_PASSWORD_ENV = "REQPACK_ARCHIVE_PASSWORD";
+
 std::string to_lower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
@@ -745,6 +747,19 @@ ReqPackConfig default_reqpack_config() {
     return ReqPackConfig{};
 }
 
+std::string resolve_archive_password(const ReqPackConfig& config) {
+    if (!config.archives.password.empty()) {
+        return config.archives.password;
+    }
+
+    const char* envPassword = std::getenv(ARCHIVE_PASSWORD_ENV);
+    if (envPassword != nullptr && envPassword[0] != '\0') {
+        return envPassword;
+    }
+
+    return {};
+}
+
 std::filesystem::path reqpack_config_directory() {
     return xdg_directory("XDG_CONFIG_HOME", invoking_user_home_directory() / ".config");
 }
@@ -1100,6 +1115,13 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
     }
     config.registry.pluginDirectory = expand_user_path(config.registry.pluginDirectory).string();
 
+    const sol::optional<sol::table> archives = root["archives"];
+    if (archives.has_value()) {
+        if (const sol::optional<std::string> password = archives.value()["password"]; password.has_value()) {
+            config.archives.password = expand_env_reference(password.value());
+        }
+    }
+
     const sol::optional<sol::table> interaction = root["interaction"];
     if (interaction.has_value()) {
         assign_if_present(interaction.value(), "interactive", config.interaction.interactive);
@@ -1228,6 +1250,7 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.autoLoadPlugins.has_value()) config.registry.autoLoadPlugins = overrides.autoLoadPlugins.value();
 
     if (overrides.interactive.has_value()) config.interaction.interactive = overrides.interactive.value();
+    if (overrides.archivePassword.has_value()) config.archives.password = overrides.archivePassword.value();
 
     if (overrides.sbomDefaultFormat.has_value()) config.sbom.defaultFormat = overrides.sbomDefaultFormat.value();
     if (overrides.sbomDefaultOutputPath.has_value()) config.sbom.defaultOutputPath = expand_user_path(overrides.sbomDefaultOutputPath.value()).string();
@@ -1459,6 +1482,14 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
     if (argument == "--non-interactive") {
         overrides.interactive = false;
+        return true;
+    }
+    if (argument == "--archive-password") {
+        if (require_value(value)) overrides.archivePassword = value;
+        return true;
+    }
+    if (const std::optional<std::string> archivePassword = inline_value("--archive-password=")) {
+        overrides.archivePassword = archivePassword.value();
         return true;
     }
     if (argument == "--sbom-format") {

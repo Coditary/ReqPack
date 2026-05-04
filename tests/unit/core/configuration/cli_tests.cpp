@@ -49,6 +49,7 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.pluginDirectory = "~/plugins";
     overrides.autoLoadPlugins = false;
     overrides.interactive = false;
+    overrides.archivePassword = "secret-archive-password";
     overrides.sbomDefaultFormat = SbomOutputFormat::JSON;
     overrides.sbomDefaultOutputPath = "~/exports/sbom.json";
     overrides.sbomPrettyPrint = false;
@@ -86,6 +87,7 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(std::filesystem::path(config.registry.pluginDirectory) == home / "plugins");
     CHECK_FALSE(config.registry.autoLoadPlugins);
     CHECK_FALSE(config.interaction.interactive);
+    CHECK(config.archives.password == "secret-archive-password");
     CHECK(config.sbom.defaultFormat == SbomOutputFormat::JSON);
     CHECK(std::filesystem::path(config.sbom.defaultOutputPath) == home / "exports/sbom.json");
     CHECK_FALSE(config.sbom.prettyPrint);
@@ -139,6 +141,16 @@ TEST_CASE("configuration consumes CLI flags with positional and inline values", 
             REQUIRE(consume_cli_config_flag(arguments, index, overrides));
             REQUIRE(overrides.registryPath.has_value());
             CHECK(overrides.registryPath.value() == "/tmp/reqpack-registry");
+        }
+
+        {
+            const std::vector<std::string> arguments{"--archive-password=secret"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.archivePassword.has_value());
+            CHECK(overrides.archivePassword.value() == "secret");
         }
     }
 
@@ -225,6 +237,8 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
         "--sbom-skip-missing-packages",
         "--report-format",
         "json",
+        "--archive-password",
+        "secret",
     };
     std::vector<char*> argv;
     argv.reserve(arguments.size());
@@ -254,6 +268,8 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
     CHECK(overrides.sbomSkipMissingPackages.value());
     REQUIRE(overrides.reportFormat.has_value());
     CHECK(overrides.reportFormat.value() == ReportFormat::JSON);
+    REQUIRE(overrides.archivePassword.has_value());
+    CHECK(overrides.archivePassword.value() == "secret");
 }
 
 TEST_CASE("cli parses token vectors and defaults list and outdated to all systems", "[unit][cli][parse]") {

@@ -252,6 +252,7 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     TempDir tempDir{"reqpack-config-load"};
     const std::filesystem::path configPath = tempDir.path() / "config.lua";
     const std::filesystem::path home = reqpack_user_home();
+    ScopedEnvVar archivePassword{"REQPACK_TEST_ARCHIVE_PASSWORD", "archive-secret"};
 
     write_file(configPath, R"(
         return {
@@ -328,6 +329,9 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
             interaction = {
                 interactive = false,
             },
+            archives = {
+                password = "$REQPACK_TEST_ARCHIVE_PASSWORD",
+            },
             sbom = {
                 defaultFormat = "cyclonedx-json",
                 defaultOutputPath = "~/sbom-out.json",
@@ -393,6 +397,7 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     REQUIRE(config.registry.sources.contains("dnf"));
     CHECK(config.registry.sources.at("dnf").source == "https://example.test/dnf.lua");
     CHECK_FALSE(config.interaction.interactive);
+    CHECK(config.archives.password == "archive-secret");
     CHECK(config.sbom.defaultFormat == SbomOutputFormat::CYCLONEDX_JSON);
     CHECK(std::filesystem::path(config.sbom.defaultOutputPath) == home / "sbom-out.json");
     CHECK_FALSE(config.sbom.prettyPrint);
@@ -431,6 +436,17 @@ TEST_CASE("configuration falls back for missing or invalid lua config files", "[
     )");
     const ReqPackConfig globalConfig = load_config_from_lua(globalConfigPath, fallback);
     CHECK_FALSE(globalConfig.interaction.interactive);
+}
+
+TEST_CASE("archive password resolution prefers config then environment fallback", "[unit][configuration][load]") {
+    ReqPackConfig config;
+    ScopedEnvVar password{"REQPACK_ARCHIVE_PASSWORD", "from-env"};
+
+    config.archives.password = "from-config";
+    CHECK(resolve_archive_password(config) == "from-config");
+
+    config.archives.password.clear();
+    CHECK(resolve_archive_password(config) == "from-env");
 }
 
 TEST_CASE("configuration parses structured repositories and preserves flat extras", "[unit][configuration][load]") {

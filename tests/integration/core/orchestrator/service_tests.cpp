@@ -337,6 +337,74 @@ std::filesystem::path build_zip_archive(
     return archivePath;
 }
 
+std::filesystem::path build_encrypted_zip_archive(
+    const std::filesystem::path& root,
+    const std::string& archiveName,
+    const std::string& password,
+    const std::vector<std::pair<std::string, std::string>>& files
+) {
+    const std::filesystem::path sourceRoot = root / (archiveName + "-src");
+    std::filesystem::create_directories(sourceRoot);
+    for (const auto& [relativePath, content] : files) {
+        write_file(sourceRoot / relativePath, content);
+    }
+
+    const std::filesystem::path archivePath = root / archiveName;
+    const std::string zipCommand = "cd " + escape_shell_arg(sourceRoot.string()) + " && zip -q -r -P " +
+        escape_shell_arg(password) + " " + escape_shell_arg(archivePath.string()) + " .";
+    REQUIRE(std::system(zipCommand.c_str()) == 0);
+    return archivePath;
+}
+
+std::filesystem::path build_encrypted_seven_zip_archive(
+    const std::filesystem::path& root,
+    const std::string& archiveName,
+    const std::string& password,
+    const std::vector<std::pair<std::string, std::string>>& files
+) {
+    const std::filesystem::path sourceRoot = root / (archiveName + "-src");
+    std::filesystem::create_directories(sourceRoot);
+    for (const auto& [relativePath, content] : files) {
+        write_file(sourceRoot / relativePath, content);
+    }
+
+    const std::filesystem::path archivePath = root / archiveName;
+    const std::string sevenZipCommand = "cd " + escape_shell_arg(sourceRoot.string()) + " && 7z a -y -p" +
+        escape_shell_arg(password) + " -mhe=on " + escape_shell_arg(archivePath.string()) + " .";
+    REQUIRE(std::system(sevenZipCommand.c_str()) == 0);
+    return archivePath;
+}
+
+std::filesystem::path build_tar_gz_archive(
+    const std::filesystem::path& root,
+    const std::string& archiveName,
+    const std::vector<std::pair<std::string, std::string>>& files
+) {
+    const std::filesystem::path sourceRoot = root / (archiveName + "-src");
+    std::filesystem::create_directories(sourceRoot);
+    for (const auto& [relativePath, content] : files) {
+        write_file(sourceRoot / relativePath, content);
+    }
+
+    const std::filesystem::path archivePath = root / archiveName;
+    const std::string tarCommand = "tar -C " + escape_shell_arg(sourceRoot.string()) + " -czf " + escape_shell_arg(archivePath.string()) + " .";
+    REQUIRE(std::system(tarCommand.c_str()) == 0);
+    return archivePath;
+}
+
+std::filesystem::path wrap_archive_with_gpg(
+    const std::filesystem::path& root,
+    const std::filesystem::path& sourcePath,
+    const std::string& wrapperName,
+    const std::string& password
+) {
+    const std::filesystem::path wrapperPath = root / wrapperName;
+    const std::string gpgCommand = "gpg --batch --yes --pinentry-mode loopback --passphrase " + escape_shell_arg(password) +
+        " -o " + escape_shell_arg(wrapperPath.string()) + " -c " + escape_shell_arg(sourcePath.string());
+    REQUIRE(std::system(gpgCommand.c_str()) == 0);
+    return wrapperPath;
+}
+
 std::string sha256_file_hex(const std::filesystem::path& path) {
     const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(path.string()));
     const std::size_t pos = hashOutput.rfind(' ');
@@ -751,6 +819,28 @@ function plugin.info(context, package)
     description = "info from " .. context.plugin.id,
   }
 end
+function plugin.shutdown() return true end
+)";
+
+const char* ORCHESTRATOR_ARCHIVE_COPY_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path)
+  local state = context.plugin.dir .. "/state"
+  context.exec.run("mkdir -p '" .. state .. "'")
+  return context.exec.run("test -d '" .. path .. "' && cp '" .. path .. "/artifact.txt' '" .. state .. "/artifact.txt'").success
+end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
 function plugin.shutdown() return true end
 )";
 
@@ -1532,6 +1622,334 @@ function plugin.shutdown() return true end
     INFO(output);
     CHECK(output.find("INSTALL: apply:local") != std::string::npos);
     CHECK(output.find("1 ok") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install encrypted local archive accepts CLI password", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-encrypted-archive-cli"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path)
+  local state = context.plugin.dir .. "/state"
+  context.exec.run("mkdir -p '" .. state .. "'")
+  local copy = context.exec.run("test -d '" .. path .. "' && cp '" .. path .. "/artifact.txt' '" .. state .. "/artifact.txt'")
+  return copy.success
+end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)");
+
+    const std::filesystem::path archivePath = build_encrypted_zip_archive(
+        tempDir.path(),
+        "artifact-encrypted-cli.zip",
+        "secret123",
+        {{"artifact.txt", "hello-encrypted-cli"}}
+    );
+
+    const std::string output = run_reqpack(
+        tempDir.path(),
+        configPath,
+        {"--archive-password", "secret123", "install", "apply", archivePath.string()}
+    );
+    INFO(output);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.txt") == "hello-encrypted-cli");
+}
+
+TEST_CASE("orchestrator install encrypted local archive accepts config password", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-encrypted-archive-config"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+
+    add_plugin_script(pluginDirectory, "apply", R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path)
+  local state = context.plugin.dir .. "/state"
+  context.exec.run("mkdir -p '" .. state .. "'")
+  return context.exec.run("test -d '" .. path .. "' && cp '" .. path .. "/artifact.txt' '" .. state .. "/artifact.txt'").success
+end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)");
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  archives = {\n"
+        "    password = 'secret456',\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (tempDir.path() / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    const std::filesystem::path archivePath = build_encrypted_zip_archive(
+        tempDir.path(),
+        "artifact-encrypted-config.zip",
+        "secret456",
+        {{"artifact.txt", "hello-encrypted-config"}}
+    );
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", "apply", archivePath.string()});
+    INFO(output);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.txt") == "hello-encrypted-config");
+}
+
+TEST_CASE("orchestrator install encrypted local archive accepts env password fallback", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-encrypted-archive-env"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    int status = 0;
+
+    add_plugin_script(pluginDirectory, "apply", R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path)
+  local state = context.plugin.dir .. "/state"
+  context.exec.run("mkdir -p '" .. state .. "'")
+  return context.exec.run("test -d '" .. path .. "' && cp '" .. path .. "/artifact.txt' '" .. state .. "/artifact.txt'").success
+end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)");
+
+    const std::filesystem::path archivePath = build_encrypted_zip_archive(
+        tempDir.path(),
+        "artifact-encrypted-env.zip",
+        "secret789",
+        {{"artifact.txt", "hello-encrypted-env"}}
+    );
+
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {{"REQPACK_ARCHIVE_PASSWORD", "secret789"}},
+        {"install", "apply", archivePath.string()},
+        status
+    );
+    INFO(output);
+    CHECK(status == 0);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.txt") == "hello-encrypted-env");
+}
+
+TEST_CASE("orchestrator install encrypted local archive fails without password in non-interactive mode", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-encrypted-archive-missing-password"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    int status = 0;
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    const std::filesystem::path archivePath = build_encrypted_zip_archive(
+        tempDir.path(),
+        "artifact-encrypted-missing.zip",
+        "secret000",
+        {{"artifact.txt", "hello-encrypted-missing"}}
+    );
+
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {},
+        {"install", "apply", archivePath.string()},
+        status
+    );
+    INFO(output);
+    CHECK(status != 0);
+    CHECK(output.find("archive password required: " + archivePath.string()) != std::string::npos);
+}
+
+TEST_CASE("orchestrator install encrypted local archive fails on invalid password", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-encrypted-archive-invalid-password"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    int status = 0;
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    const std::filesystem::path archivePath = build_encrypted_zip_archive(
+        tempDir.path(),
+        "artifact-encrypted-invalid.zip",
+        "secret111",
+        {{"artifact.txt", "hello-encrypted-invalid"}}
+    );
+
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {},
+        {"--archive-password", "wrong", "install", "apply", archivePath.string()},
+        status
+    );
+    INFO(output);
+    CHECK(status != 0);
+    CHECK(output.find("invalid archive password: " + archivePath.string()) != std::string::npos);
+}
+
+TEST_CASE("orchestrator install encrypted seven zip archive accepts CLI password", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-encrypted-7z-cli"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    const std::filesystem::path localPackage = build_rqp_package(
+        tempDir.path(),
+        "seven-zip-artifact",
+        "local out = context.paths.stateDir .. '/installed.txt'\ncontext.fs.mkdir(context.paths.stateDir)\ncontext.fs.copy(context.paths.payloadDir .. '/payload.txt', out)\nreturn true\n",
+        std::make_pair(std::string("payload.txt"), std::string("hello-encrypted-7z"))
+    );
+
+    const std::filesystem::path archivePath = build_encrypted_seven_zip_archive(
+        tempDir.path(),
+        "artifact-encrypted.7z",
+        "secret7z",
+        {{localPackage.filename().string(), read_file(localPackage)}}
+    );
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"--archive-password", "secret7z", "install", "rqp", archivePath.string()});
+    const std::filesystem::path stateDir = tempDir.path() / "rqp-state" / "seven-zip-artifact" / "seven-zip-artifact@1.0.0-1+r0";
+    INFO(output);
+    CHECK(std::filesystem::exists(stateDir / "installed.txt"));
+    CHECK(read_file(stateDir / "installed.txt") == "hello-encrypted-7z");
+}
+
+TEST_CASE("orchestrator install gpg wrapped zip archive accepts CLI password", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-zip-gpg-cli"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_ARCHIVE_COPY_PLUGIN);
+
+    const std::filesystem::path innerArchivePath = build_zip_archive(
+        tempDir.path(),
+        "artifact-inner.zip",
+        {{"artifact.txt", "hello-zip-gpg"}}
+    );
+    const std::filesystem::path archivePath = wrap_archive_with_gpg(tempDir.path(), innerArchivePath, "artifact.zip.gpg", "secretgpg");
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"--archive-password", "secretgpg", "install", "apply", archivePath.string()});
+    INFO(output);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.txt") == "hello-zip-gpg");
+}
+
+TEST_CASE("orchestrator install gpg wrapped tar gz archive accepts CLI password", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-targz-gpg-cli"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_ARCHIVE_COPY_PLUGIN);
+
+    const std::filesystem::path innerArchivePath = build_tar_gz_archive(
+        tempDir.path(),
+        "artifact-inner.tar.gz",
+        {{"artifact.txt", "hello-targz-gpg"}}
+    );
+    const std::filesystem::path archivePath = wrap_archive_with_gpg(tempDir.path(), innerArchivePath, "artifact.tar.gz.gpg", "secret-targz");
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"--archive-password", "secret-targz", "install", "apply", archivePath.string()});
+    INFO(output);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.txt") == "hello-targz-gpg");
+}
+
+TEST_CASE("orchestrator install gpg wrapped seven zip archive accepts CLI password", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-7z-gpg-cli"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_ARCHIVE_COPY_PLUGIN);
+
+    const std::filesystem::path innerArchivePath = build_encrypted_seven_zip_archive(
+        tempDir.path(),
+        "artifact-inner.7z",
+        "shared7zpass",
+        {{"artifact.txt", "hello-7z-gpg"}}
+    );
+    const std::filesystem::path archivePath = wrap_archive_with_gpg(tempDir.path(), innerArchivePath, "artifact.7z.gpg", "shared7zpass");
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"--archive-password", "shared7zpass", "install", "apply", archivePath.string()});
+    INFO(output);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.txt") == "hello-7z-gpg");
+}
+
+TEST_CASE("orchestrator install gpg wrapped archive fails on invalid password", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-gpg-invalid-password"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    int status = 0;
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    const std::filesystem::path innerArchivePath = build_zip_archive(
+        tempDir.path(),
+        "artifact-invalid-inner.zip",
+        {{"artifact.txt", "hello-invalid-gpg"}}
+    );
+    const std::filesystem::path archivePath = wrap_archive_with_gpg(tempDir.path(), innerArchivePath, "artifact-invalid.zip.gpg", "rightpass");
+
+    const std::string output = run_reqpack_with_home_env_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {},
+        {"--archive-password", "wrongpass", "install", "apply", archivePath.string()},
+        status
+    );
+    INFO(output);
+    CHECK(status != 0);
+    CHECK(output.find("invalid archive password: " + archivePath.string()) != std::string::npos);
 }
 
 TEST_CASE("orchestrator install named rqp package resolves from repository index", "[integration][orchestrator][service]") {

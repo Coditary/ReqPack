@@ -210,6 +210,10 @@ struct RqpConfig {
     std::string statePath{};
 };
 
+struct ArchiveConfig {
+    std::string password{};
+};
+
 struct RepositoryAuthConfig {
     RepositoryAuthType type{RepositoryAuthType::NONE};
     std::string username{};
@@ -297,6 +301,7 @@ struct ReqPackConfig {
     RemoteConfig remote{};
     SbomConfig sbom{};
     RqpConfig rqp{};
+    ArchiveConfig archives{};
     std::map<std::string, std::vector<RepositoryEntry>> repositories{};
     HistoryConfig history{};
     DisplayConfig display{};
@@ -351,6 +356,7 @@ struct ReqPackConfigOverrides {
     std::optional<bool> autoLoadPlugins;
 
     std::optional<bool> interactive;
+    std::optional<std::string> archivePassword;
 
     std::optional<SbomOutputFormat> sbomDefaultFormat;
     std::optional<std::string> sbomDefaultOutputPath;
@@ -397,6 +403,8 @@ ReqPackConfig load_config_from_lua(
 );
 
 ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackConfigOverrides& overrides);
+
+std::string resolve_archive_password(const ReqPackConfig& config);
 
 bool consume_cli_config_flag(
     const std::vector<std::string>& arguments,
