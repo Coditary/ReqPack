@@ -179,6 +179,16 @@ TEST_CASE("configuration loads and normalizes registry source entries from lua",
                 DNF = {
                     source = "~/plugins/dnf.lua",
                     description = "DNF source",
+                    ecosystemScopes = { "demo-osv", "Rubygems" },
+                    writeScopes = {
+                        { kind = "Temp" },
+                        { kind = "user-home-subpath", value = ".cache/demo" },
+                    },
+                    networkScopes = {
+                        { host = "API.OSV.DEV", scheme = "HTTPS", pathPrefix = "/v1" },
+                    },
+                    scriptSha256 = string.rep("A", 64),
+                    bootstrapSha256 = string.rep("B", 64),
                 },
                 Maven = {
                     alias = true,
@@ -203,6 +213,18 @@ TEST_CASE("configuration loads and normalizes registry source entries from lua",
     CHECK(std::filesystem::path(sources.at("dnf").source) == home / "plugins/dnf.lua");
     CHECK_FALSE(sources.at("dnf").alias);
     CHECK(sources.at("dnf").description == "DNF source");
+    CHECK(sources.at("dnf").ecosystemScopes == std::vector<std::string>{"demo-osv", "rubygems"});
+    REQUIRE(sources.at("dnf").writeScopes.size() == 2);
+    CHECK(sources.at("dnf").writeScopes[0].kind == "temp");
+    CHECK(sources.at("dnf").writeScopes[0].value.empty());
+    CHECK(sources.at("dnf").writeScopes[1].kind == "user-home-subpath");
+    CHECK(sources.at("dnf").writeScopes[1].value == ".cache/demo");
+    REQUIRE(sources.at("dnf").networkScopes.size() == 1);
+    CHECK(sources.at("dnf").networkScopes[0].host == "api.osv.dev");
+    CHECK(sources.at("dnf").networkScopes[0].scheme == "https");
+    CHECK(sources.at("dnf").networkScopes[0].pathPrefix == "/v1");
+    CHECK(sources.at("dnf").scriptSha256 == std::string(64, 'a'));
+    CHECK(sources.at("dnf").bootstrapSha256 == std::string(64, 'b'));
 
     CHECK(sources.at("maven").alias);
     CHECK(sources.at("maven").source == "central");
@@ -270,6 +292,7 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
             },
             security = {
                 autoFetch = true,
+                requireThinLayer = true,
                 defaultGateway = "security",
                 cachePath = "~/security-cache",
                 indexPath = "~/security-index",
@@ -374,6 +397,7 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(config.security.severityThreshold == SeverityLevel::HIGH);
     CHECK(config.security.onUnsafe == UnsafeAction::PROMPT);
     CHECK(config.security.autoFetch);
+    CHECK(config.security.requireThinLayer);
     CHECK(config.security.defaultGateway == "security");
     CHECK(std::filesystem::path(config.security.cachePath) == home / "security-cache");
     CHECK(std::filesystem::path(config.security.indexPath) == home / "security-index");

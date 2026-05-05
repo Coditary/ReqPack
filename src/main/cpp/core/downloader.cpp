@@ -1,5 +1,6 @@
 #include "core/downloader.h"
 #include "core/downloader_core.h"
+#include "core/registry_database_core.h"
 
 #include <curl/curl.h>
 
@@ -131,9 +132,17 @@ bool Downloader::downloadPlugin(const std::string& system) const {
         return false;
     }
 
+    if (!registry_record_passes_thin_layer_trust(this->config, record.value())) {
+        return false;
+    }
+
     const std::filesystem::path targetPath = this->plugin_target_path(resolvedSystem);
 
     if (!record->script.empty()) {
+        if (!registry_record_matches_expected_hashes(record.value())) {
+            return false;
+        }
+
         if (record->bundleSource && !record->bundlePath.empty() && std::filesystem::exists(record->bundlePath)) {
             remove_directory_contents(targetPath.parent_path());
             copy_directory_contents(record->bundlePath, targetPath.parent_path());
@@ -161,6 +170,17 @@ bool Downloader::downloadPlugin(const std::string& system) const {
     const std::filesystem::path downloadedPath = this->plugin_target_path(resolvedSystem);
     const std::string script = read_file(downloadedPath);
     if (!downloader_is_valid_plugin_script(script)) {
+        std::error_code removeError;
+        std::filesystem::remove(downloadedPath, removeError);
+        return false;
+    }
+
+    RegistryRecord downloadedRecord = record.value();
+    downloadedRecord.script = script;
+    downloadedRecord.bootstrapScript.clear();
+    downloadedRecord.bundleSource = false;
+    downloadedRecord.bundlePath.clear();
+    if (!registry_record_matches_expected_hashes(downloadedRecord)) {
         std::error_code removeError;
         std::filesystem::remove(downloadedPath, removeError);
         return false;

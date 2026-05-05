@@ -110,6 +110,10 @@ bool has_flag(const std::vector<std::string>& flags, const std::string& name) {
 	return std::find(flags.begin(), flags.end(), name) != flags.end();
 }
 
+bool is_removed_security_backend_flag(const std::string& argument) {
+    return argument == "--snyk" || argument == "--owasp";
+}
+
 }  // namespace
 
 Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package Manager Interface")) {
@@ -264,6 +268,13 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
     if (action == ActionType::UNKNOWN) {
         lastParseFailed_ = true;
         return requests;
+    }
+
+    if (std::any_of(requestArguments.begin(), requestArguments.end(), [](const std::string& argument) {
+            return is_removed_security_backend_flag(argument);
+        })) {
+        lastParseFailed_ = true;
+        return {};
     }
 
     if (action == ActionType::REMOTE) {
@@ -709,8 +720,6 @@ void Cli::print_command_help(ActionType action) {
                 "  -h,--help               Displays this help\n"
                 "  --stdin                 Read install commands from stdin until EOF\n"
                 "  --dry-run               Show planned actions without executing them\n"
-                "  --snyk                  Run Snyk vulnerability scan before install\n"
-                "  --owasp                 Run OWASP/OSV vulnerability scan before install\n"
                 "  --prompt-on-unsafe      Prompt before installing vulnerable packages\n"
                 "  --abort-on-unsafe       Abort if vulnerable packages are found\n"
                 "  --severity-threshold    Minimum severity to flag (low/medium/high/critical)\n"
@@ -776,8 +785,6 @@ void Cli::print_command_help(ActionType action) {
                 "  -h,--help               Displays this help\n"
                 "  --dry-run               Show planned actions without executing them\n"
                 "  --all                   Update all packages for system, or all plugin wrappers without a system\n"
-                "  --snyk                  Run Snyk vulnerability scan after update\n"
-                "  --owasp                 Run OWASP/OSV vulnerability scan after update\n"
                 "  --prompt-on-unsafe      Prompt before applying vulnerable updates\n"
                 "  --abort-on-unsafe       Abort if vulnerable packages are found\n"
                 "  --severity-threshold    Minimum severity to flag (low/medium/high/critical)\n"

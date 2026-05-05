@@ -179,6 +179,7 @@ add_executable(core_unit_tests
     tests/unit/core/rq_repository/core_tests.cpp
     tests/unit/core/rqp_state_store/core_tests.cpp
     tests/unit/core/osv/core_tests.cpp
+    tests/unit/core/security_gateway_service/core_tests.cpp
     tests/unit/core/audit/export_tests.cpp
     tests/unit/core/sbom/export_tests.cpp
     tests/unit/core/transaction_database/serialization_tests.cpp
@@ -191,6 +192,7 @@ add_executable(core_unit_tests
     src/main/cpp/cli/cli.cpp
     src/main/cpp/core/archive_resolver.cpp
     src/main/cpp/core/manifest_loader.cpp
+    src/main/cpp/core/downloader.cpp
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner_core.cpp

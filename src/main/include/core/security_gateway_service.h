@@ -16,6 +16,7 @@ class SecurityGatewayService {
     ReqPackConfig config;
 
     std::string normalizeGatewayName(const std::string& gateway) const;
+    std::set<std::string> discoverSecurityProviders() const;
     std::set<std::string> resolveGatewayBackends(const std::string& gateway) const;
     std::optional<std::string> resolveCanonicalEcosystem(const std::string& target) const;
 

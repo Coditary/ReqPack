@@ -387,6 +387,10 @@ std::optional<RegistryRecord> refreshed_record_payload(
         return record;
     }
 
+    if (!registry_record_passes_thin_layer_trust(config, record)) {
+        return std::nullopt;
+    }
+
     std::string sourceForPayload = record.source;
     if (preferLatestTag && registry_database_is_git_source(record.source)) {
         if (const std::optional<std::string> latestTag = latest_git_tag_for_source(record.source)) {
@@ -403,6 +407,9 @@ std::optional<RegistryRecord> refreshed_record_payload(
         } else {
             record.bundleSource = false;
             record.bundlePath.clear();
+        }
+        if (!registry_record_matches_expected_hashes(record)) {
+            return std::nullopt;
         }
         return record;
     }
@@ -704,6 +711,9 @@ bool RegistryDatabase::cacheScript(const std::string& name, const std::string& s
     }
 
     record->script = script;
+    if (!registry_record_matches_expected_hashes(record.value())) {
+        return false;
+    }
     return this->put_record(record.value());
 }
 
@@ -737,6 +747,14 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
         record.source = entry.source;
         record.alias = entry.alias;
         record.description = entry.description;
+        record.role = entry.role;
+        record.capabilities = entry.capabilities;
+        record.ecosystemScopes = entry.ecosystemScopes;
+        record.writeScopes = entry.writeScopes;
+        record.networkScopes = entry.networkScopes;
+        record.privilegeLevel = entry.privilegeLevel;
+        record.scriptSha256 = entry.scriptSha256;
+        record.bootstrapSha256 = entry.bootstrapSha256;
         record.bundleSource = false;
         record.bundlePath.clear();
 
@@ -753,8 +771,40 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
             if (record.description.empty()) {
                 record.description = existing->description;
             }
+            if (record.role.empty()) {
+                record.role = existing->role;
+            }
+            if (record.capabilities.empty()) {
+                record.capabilities = existing->capabilities;
+            }
+            if (record.ecosystemScopes.empty()) {
+                record.ecosystemScopes = existing->ecosystemScopes;
+            }
+            if (record.writeScopes.empty()) {
+                record.writeScopes = existing->writeScopes;
+            }
+            if (record.networkScopes.empty()) {
+                record.networkScopes = existing->networkScopes;
+            }
+            if (record.privilegeLevel.empty()) {
+                record.privilegeLevel = existing->privilegeLevel;
+            }
+            if (record.scriptSha256.empty()) {
+                record.scriptSha256 = existing->scriptSha256;
+            }
+            if (record.bootstrapSha256.empty()) {
+                record.bootstrapSha256 = existing->bootstrapSha256;
+            }
 
             const bool descriptionChanged = existing->description != record.description;
+            const bool roleChanged = existing->role != record.role;
+            const bool capabilitiesChanged = existing->capabilities != record.capabilities;
+            const bool ecosystemScopesChanged = existing->ecosystemScopes != record.ecosystemScopes;
+            const bool writeScopesChanged = existing->writeScopes != record.writeScopes;
+            const bool networkScopesChanged = existing->networkScopes != record.networkScopes;
+            const bool privilegeChanged = existing->privilegeLevel != record.privilegeLevel;
+            const bool scriptHashChanged = existing->scriptSha256 != record.scriptSha256;
+            const bool bootstrapHashChanged = existing->bootstrapSha256 != record.bootstrapSha256;
 
             if (!record.alias && !record.bundleSource) {
                 if (const auto bundlePath = resolve_bundle_path(this->config, record.source, record.name)) {
@@ -763,14 +813,32 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
                 }
             }
 
-            needsPayloadRefresh = !record.alias && (sourceChanged || record.script.empty());
+            const bool payloadMatchesExpectedHashes = registry_record_matches_expected_hashes(record);
+            needsPayloadRefresh = !record.alias && (sourceChanged || record.script.empty() ||
+                                                   ((scriptHashChanged || bootstrapHashChanged) && !payloadMatchesExpectedHashes));
             needsWrite = sourceChanged || descriptionChanged || needsPayloadRefresh ||
+                         roleChanged || capabilitiesChanged || ecosystemScopesChanged ||
+                         writeScopesChanged || networkScopesChanged || privilegeChanged ||
+                         scriptHashChanged || bootstrapHashChanged ||
                          record.bundleSource != existing->bundleSource || record.bundlePath != existing->bundlePath;
 
             if (!needsWrite) {
                 continue;
             }
         }
+
+        if (!record.alias && !registry_record_passes_thin_layer_trust(this->config, record)) {
+            const bool payloadCleared = !record.script.empty() || !record.bootstrapScript.empty() ||
+                                        record.bundleSource || !record.bundlePath.empty();
+            record.script.clear();
+            record.bootstrapScript.clear();
+            record.bundleSource = false;
+            record.bundlePath.clear();
+            needsPayloadRefresh = false;
+            needsWrite = needsWrite || payloadCleared;
+        }
+
+        bool clearStalePayload = !record.alias && !registry_record_matches_expected_hashes(record);
 
         if (!record.alias && needsPayloadRefresh) {
             if (const auto fetchedPayload = fetch_plugin_payload(this->config, record.source, record.name)) {
@@ -783,8 +851,22 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
                     record.bundleSource = false;
                     record.bundlePath.clear();
                 }
-                needsWrite = true;
+                clearStalePayload = !registry_record_matches_expected_hashes(record);
+                if (!clearStalePayload) {
+                    needsWrite = true;
+                }
             }
+        }
+
+        if (clearStalePayload) {
+            const bool payloadCleared = !record.script.empty() || !record.bootstrapScript.empty() ||
+                                        record.bundleSource || !record.bundlePath.empty();
+            record.script.clear();
+            record.bootstrapScript.clear();
+            record.bundleSource = false;
+            record.bundlePath.clear();
+            needsPayloadRefresh = false;
+            needsWrite = needsWrite || payloadCleared;
         }
 
         if (needsWrite) {

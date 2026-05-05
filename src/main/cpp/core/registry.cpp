@@ -1,4 +1,5 @@
 #include "core/registry.h"
+#include "core/registry_database_core.h"
 #include "plugins/rq_plugin.h"
 #include "plugins/lua_bridge.h"
 
@@ -105,6 +106,18 @@ std::string resolve_system_for_file_path(const Registry& registry, const std::fi
     return {};
 }
 
+bool contains_write_scope(const std::vector<PluginWriteScope>& scopes, const RegistryWriteScope& expected) {
+    return std::find_if(scopes.begin(), scopes.end(), [&](const PluginWriteScope& scope) {
+        return scope.kind == expected.kind && scope.value == expected.value;
+    }) != scopes.end();
+}
+
+bool contains_network_scope(const std::vector<PluginNetworkScope>& scopes, const RegistryNetworkScope& expected) {
+    return std::find_if(scopes.begin(), scopes.end(), [&](const PluginNetworkScope& scope) {
+        return scope.host == expected.host && scope.scheme == expected.scheme && scope.pathPrefix == expected.pathPrefix;
+    }) != scopes.end();
+}
+
 }  // namespace
 
 Registry::Registry(const ReqPackConfig& config) : config(config), database(config) {
@@ -120,6 +133,60 @@ void Registry::registerBuiltInPlugins() {
     }
 }
 
+bool Registry::passesThinLayerTrust(const RegistryRecord& record) const {
+    if (record.name == BUILTIN_RQ_PLUGIN_ID) {
+        return true;
+    }
+
+    return registry_record_passes_thin_layer_trust(this->config, record);
+}
+
+bool Registry::runtimeMetadataMatchesTrustRecord(const std::string& name, const RegistryRecord& record) const {
+    if (!this->config.security.requireThinLayer || record.alias || record.name == BUILTIN_RQ_PLUGIN_ID) {
+        return true;
+    }
+
+    const auto pluginIt = m_plugins.find(name);
+    if (pluginIt == m_plugins.end() || pluginIt->second == nullptr) {
+        return false;
+    }
+
+    const std::optional<PluginSecurityMetadata> metadata = pluginIt->second->getSecurityMetadata();
+    if (!metadata.has_value()) {
+        return false;
+    }
+
+    if (metadata->role != record.role || metadata->privilegeLevel != record.privilegeLevel) {
+        return false;
+    }
+
+    for (const std::string& capability : record.capabilities) {
+        if (std::find(metadata->capabilities.begin(), metadata->capabilities.end(), capability) == metadata->capabilities.end()) {
+            return false;
+        }
+    }
+
+    for (const std::string& ecosystem : record.ecosystemScopes) {
+        if (std::find(metadata->ecosystemScopes.begin(), metadata->ecosystemScopes.end(), ecosystem) == metadata->ecosystemScopes.end()) {
+            return false;
+        }
+    }
+
+    for (const RegistryWriteScope& scope : record.writeScopes) {
+        if (!contains_write_scope(metadata->writeScopes, scope)) {
+            return false;
+        }
+    }
+
+    for (const RegistryNetworkScope& scope : record.networkScopes) {
+        if (!contains_network_scope(metadata->networkScopes, scope)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool Registry::ensurePluginConstructed(const std::string& name) {
     const std::string resolvedName = this->resolvePluginName(name);
     if (m_plugins.find(resolvedName) != m_plugins.end()) {
@@ -132,6 +199,13 @@ bool Registry::ensurePluginConstructed(const std::string& name) {
     }
 
     m_plugins[resolvedName] = std::make_unique<LuaBridge>(pathIt->second, this->config);
+    if (const std::optional<RegistryRecord> record = this->database.resolveRecord(resolvedName)) {
+        if (!this->runtimeMetadataMatchesTrustRecord(resolvedName, record.value())) {
+            m_plugins.erase(resolvedName);
+            m_states[resolvedName] = PluginState::FAILED;
+            return false;
+        }
+    }
     if (m_states.find(resolvedName) == m_states.end()) {
         m_states[resolvedName] = PluginState::REGISTERED;
     }
@@ -174,6 +248,14 @@ std::optional<PluginSecurityMetadata> Registry::getPluginSecurityMetadata(const 
     const std::string resolvedName = this->resolvePluginName(name);
     if (m_pluginPaths.find(resolvedName) == m_pluginPaths.end()) {
         if (const std::optional<RegistryRecord> record = this->database.resolveRecord(resolvedName)) {
+            if (!this->passesThinLayerTrust(record.value())) {
+                m_states[resolvedName] = PluginState::FAILED;
+                return std::nullopt;
+            }
+            if (!registry_record_matches_expected_hashes(record.value())) {
+                m_states[resolvedName] = PluginState::FAILED;
+                return std::nullopt;
+            }
             this->materializePluginScript(record.value());
             this->scanDirectory(this->config.registry.pluginDirectory);
         }
@@ -208,6 +290,15 @@ bool Registry::refreshPlugin(const std::string& name, bool preferLatestTag) {
 
     const std::optional<RegistryRecord> refreshed = this->database.refreshRecord(resolvedName, preferLatestTag);
     if (!refreshed.has_value()) {
+        return false;
+    }
+
+    if (!this->passesThinLayerTrust(refreshed.value())) {
+        m_states[resolvedName] = PluginState::FAILED;
+        return false;
+    }
+    if (!registry_record_matches_expected_hashes(refreshed.value())) {
+        m_states[resolvedName] = PluginState::FAILED;
         return false;
     }
 
@@ -312,6 +403,14 @@ bool Registry::loadPlugin(const std::string& name) {
 
     if (m_pluginPaths.find(resolvedName) == m_pluginPaths.end()) {
         if (const std::optional<RegistryRecord> record = this->database.resolveRecord(resolvedName)) {
+            if (!this->passesThinLayerTrust(record.value())) {
+                m_states[resolvedName] = PluginState::FAILED;
+                return false;
+            }
+            if (!registry_record_matches_expected_hashes(record.value())) {
+                m_states[resolvedName] = PluginState::FAILED;
+                return false;
+            }
             this->materializePluginScript(record.value());
             this->scanDirectory(this->config.registry.pluginDirectory);
         }

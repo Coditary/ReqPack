@@ -27,6 +27,8 @@ private:
     std::map<std::string, std::unique_ptr<IPlugin>> m_plugins;
     std::map<std::string, PluginState> m_states;
 
+    bool passesThinLayerTrust(const RegistryRecord& record) const;
+    bool runtimeMetadataMatchesTrustRecord(const std::string& name, const RegistryRecord& record) const;
     void materializePluginScript(const RegistryRecord& record) const;
     void registerBuiltInPlugins();
     bool ensurePluginConstructed(const std::string& name);

@@ -55,12 +55,61 @@ TEST_CASE("registry database cache path derivation is stable for source and plug
     CHECK(first.filename() != differentSource.filename());
 }
 
+TEST_CASE("registry database thin-layer trust requires metadata and pinned git refs", "[unit][registry_database][trust]") {
+    ReqPackConfig config;
+    config.security.requireThinLayer = true;
+
+    RegistryRecord record;
+    record.name = "dnf";
+    record.source = "git+https://github.com/org/repo.git";
+    record.role = "package-manager";
+    record.privilegeLevel = "none";
+
+    CHECK_FALSE(registry_record_passes_thin_layer_trust(config, record));
+
+    record.source = "git+https://github.com/org/repo.git?ref=v1.2.3";
+    record.scriptSha256 = std::string(64, 'a');
+    CHECK(registry_record_passes_thin_layer_trust(config, record));
+
+    record.role.clear();
+    CHECK_FALSE(registry_record_passes_thin_layer_trust(config, record));
+
+    config.security.requireThinLayer = false;
+    CHECK(registry_record_passes_thin_layer_trust(config, record));
+}
+
+TEST_CASE("registry database verifies expected script and bootstrap hashes", "[unit][registry_database][trust]") {
+    RegistryRecord record;
+    record.name = "dnf";
+    record.script = "return { getName = function() return 'dnf' end }\n";
+    record.bootstrapScript = "print('boot')\n";
+    record.scriptSha256 = registry_database_sha256_hex(record.script);
+    record.bootstrapSha256 = registry_database_sha256_hex(record.bootstrapScript);
+
+    CHECK(registry_record_matches_expected_hashes(record));
+
+    record.scriptSha256 = std::string(64, '0');
+    CHECK_FALSE(registry_record_matches_expected_hashes(record));
+
+    record.scriptSha256 = registry_database_sha256_hex(record.script);
+    record.bootstrapSha256 = std::string(64, '1');
+    CHECK_FALSE(registry_record_matches_expected_hashes(record));
+}
+
 TEST_CASE("registry database record serialization round-trips escaped fields", "[unit][registry_database][serialization]") {
     RegistryRecord record;
     record.name = "dnf";
     record.source = "https://example.test/plugin.lua";
     record.alias = false;
     record.description = "line1\nline2";
+    record.role = "package-manager";
+    record.capabilities = {"exec", "network"};
+    record.ecosystemScopes = {"demo-osv", "rubygems"};
+    record.writeScopes = {{.kind = "temp", .value = {}}, {.kind = "user-home-subpath", .value = ".cache/demo"}};
+    record.networkScopes = {{.host = "api.osv.dev", .scheme = "https", .pathPrefix = "/v1"}};
+    record.privilegeLevel = "sudo";
+    record.scriptSha256 = std::string(64, 'a');
+    record.bootstrapSha256 = std::string(64, 'b');
     record.script = "return {}\n";
     record.bootstrapScript = "print('boot\\strap')\n";
     record.bundleSource = true;
@@ -74,6 +123,21 @@ TEST_CASE("registry database record serialization round-trips escaped fields", "
     CHECK(parsed->source == record.source);
     CHECK_FALSE(parsed->alias);
     CHECK(parsed->description == record.description);
+    CHECK(parsed->role == record.role);
+    CHECK(parsed->capabilities == record.capabilities);
+    CHECK(parsed->ecosystemScopes == record.ecosystemScopes);
+    CHECK(parsed->writeScopes.size() == record.writeScopes.size());
+    CHECK(parsed->writeScopes[0].kind == record.writeScopes[0].kind);
+    CHECK(parsed->writeScopes[0].value == record.writeScopes[0].value);
+    CHECK(parsed->writeScopes[1].kind == record.writeScopes[1].kind);
+    CHECK(parsed->writeScopes[1].value == record.writeScopes[1].value);
+    CHECK(parsed->networkScopes.size() == record.networkScopes.size());
+    CHECK(parsed->networkScopes[0].host == record.networkScopes[0].host);
+    CHECK(parsed->networkScopes[0].scheme == record.networkScopes[0].scheme);
+    CHECK(parsed->networkScopes[0].pathPrefix == record.networkScopes[0].pathPrefix);
+    CHECK(parsed->privilegeLevel == record.privilegeLevel);
+    CHECK(parsed->scriptSha256 == record.scriptSha256);
+    CHECK(parsed->bootstrapSha256 == record.bootstrapSha256);
     CHECK(parsed->script == record.script);
     CHECK(parsed->bootstrapScript == record.bootstrapScript);
     CHECK(parsed->bundleSource);

@@ -1,9 +1,14 @@
 #include "core/registry_database_core.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
+#include <openssl/sha.h>
+#include <sstream>
 #include <sstream>
 #include <string_view>
 
@@ -15,6 +20,17 @@ bool starts_with(const std::string& value, std::string_view prefix) {
     return value.rfind(prefix, 0) == 0;
 }
 
+std::string read_text_file(const std::filesystem::path& path) {
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        return {};
+    }
+
+    std::ostringstream buffer;
+    buffer << stream.rdbuf();
+    return buffer.str();
+}
+
 std::uint64_t fnv1a_hash(std::string_view value) {
     std::uint64_t hash = 14695981039346656037ull;
     for (unsigned char c : value) {
@@ -22,6 +38,83 @@ std::uint64_t fnv1a_hash(std::string_view value) {
         hash *= 1099511628211ull;
     }
     return hash;
+}
+
+std::vector<std::string> split_lines(const std::string& value) {
+    std::vector<std::string> items;
+    std::istringstream stream(value);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty()) {
+            items.push_back(line);
+        }
+    }
+    return items;
+}
+
+std::string join_lines(const std::vector<std::string>& values) {
+    std::ostringstream stream;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index > 0) {
+            stream << '\n';
+        }
+        stream << values[index];
+    }
+    return stream.str();
+}
+
+std::string escape_scope_component(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char c : value) {
+        if (c == '\\' || c == '|' || c == '\n') {
+            escaped.push_back('\\');
+            escaped.push_back(c == '\n' ? 'n' : c);
+            continue;
+        }
+        escaped.push_back(c);
+    }
+    return escaped;
+}
+
+std::vector<std::string> split_escaped_fields(const std::string& value) {
+    std::vector<std::string> fields;
+    std::string current;
+    bool escaped = false;
+    for (char c : value) {
+        if (!escaped && c == '\\') {
+            escaped = true;
+            current.push_back(c);
+            continue;
+        }
+        if (!escaped && c == '|') {
+            fields.push_back(current);
+            current.clear();
+            continue;
+        }
+        current.push_back(c);
+        escaped = false;
+    }
+    fields.push_back(current);
+    return fields;
+}
+
+bool registry_record_requires_script_hash(const RegistryRecord& record) {
+    return registry_database_is_git_source(record.source) || record.source.find("://") != std::string::npos;
+}
+
+std::pair<std::string, std::string> registry_record_payload_files(const RegistryRecord& record) {
+    if (record.bundleSource && !record.bundlePath.empty() && std::filesystem::exists(record.bundlePath)) {
+        const std::filesystem::path bundlePath(record.bundlePath);
+        const std::filesystem::path scriptPath = bundlePath / (record.name + ".lua");
+        const std::filesystem::path bootstrapPath = bundlePath / "bootstrap.lua";
+        return {
+            read_text_file(scriptPath),
+            std::filesystem::exists(bootstrapPath) ? read_text_file(bootstrapPath) : std::string{}
+        };
+    }
+
+    return {record.script, record.bootstrapScript};
 }
 
 }  // namespace
@@ -55,6 +148,94 @@ bool registry_database_looks_like_html_document(const std::string& value) {
 
 bool registry_database_is_valid_plugin_script(const std::string& script) {
     return registry_database_has_non_whitespace(script) && !registry_database_looks_like_html_document(script);
+}
+
+bool registry_database_is_valid_sha256(const std::string& value) {
+    return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char ch) {
+        return std::isxdigit(ch) != 0;
+    });
+}
+
+std::string registry_database_sha256_hex(const std::string& value) {
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    SHA256(reinterpret_cast<const unsigned char*>(value.data()), value.size(), digest.data());
+
+    std::ostringstream stream;
+    stream << std::hex << std::setfill('0');
+    for (unsigned char byte : digest) {
+        stream << std::setw(2) << static_cast<int>(byte);
+    }
+    return stream.str();
+}
+
+std::string registry_database_serialize_write_scopes(const std::vector<RegistryWriteScope>& values) {
+    std::ostringstream stream;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index > 0) {
+            stream << '\n';
+        }
+        stream << escape_scope_component(values[index].kind) << '|' << escape_scope_component(values[index].value);
+    }
+    return stream.str();
+}
+
+std::vector<RegistryWriteScope> registry_database_deserialize_write_scopes(const std::string& value) {
+    std::vector<RegistryWriteScope> scopes;
+    std::istringstream stream(value);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        const std::vector<std::string> fields = split_escaped_fields(line);
+        if (fields.empty()) {
+            continue;
+        }
+        RegistryWriteScope scope;
+        scope.kind = registry_database_unescape_field(fields[0]);
+        if (fields.size() > 1) {
+            scope.value = registry_database_unescape_field(fields[1]);
+        }
+        scopes.push_back(std::move(scope));
+    }
+    return scopes;
+}
+
+std::string registry_database_serialize_network_scopes(const std::vector<RegistryNetworkScope>& values) {
+    std::ostringstream stream;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index > 0) {
+            stream << '\n';
+        }
+        stream << escape_scope_component(values[index].host) << '|'
+               << escape_scope_component(values[index].scheme) << '|'
+               << escape_scope_component(values[index].pathPrefix);
+    }
+    return stream.str();
+}
+
+std::vector<RegistryNetworkScope> registry_database_deserialize_network_scopes(const std::string& value) {
+    std::vector<RegistryNetworkScope> scopes;
+    std::istringstream stream(value);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        const std::vector<std::string> fields = split_escaped_fields(line);
+        RegistryNetworkScope scope;
+        if (!fields.empty()) {
+            scope.host = registry_database_unescape_field(fields[0]);
+        }
+        if (fields.size() > 1) {
+            scope.scheme = registry_database_unescape_field(fields[1]);
+        }
+        if (fields.size() > 2) {
+            scope.pathPrefix = registry_database_unescape_field(fields[2]);
+        }
+        scopes.push_back(std::move(scope));
+    }
+    return scopes;
 }
 
 bool registry_database_is_git_source(const std::string& source) {
@@ -166,11 +347,74 @@ std::string registry_database_unescape_field(const std::string& value) {
     return unescaped;
 }
 
+bool registry_record_passes_thin_layer_trust(const ReqPackConfig& config, const RegistryRecord& record) {
+    if (!config.security.requireThinLayer || record.alias) {
+        return true;
+    }
+
+    if (record.source.empty() || record.role.empty() || record.privilegeLevel.empty()) {
+        return false;
+    }
+
+    if (registry_record_requires_script_hash(record) && !registry_database_is_valid_sha256(record.scriptSha256)) {
+        return false;
+    }
+
+    if (!record.bootstrapSha256.empty() && !registry_database_is_valid_sha256(record.bootstrapSha256)) {
+        return false;
+    }
+
+    if (registry_database_is_git_source(record.source) && registry_database_git_source_ref(record.source).empty()) {
+        return false;
+    }
+
+    return true;
+}
+
+bool registry_record_matches_expected_hashes(const RegistryRecord& record) {
+    if (record.alias) {
+        return true;
+    }
+
+    if (record.scriptSha256.empty() && record.bootstrapSha256.empty()) {
+        return true;
+    }
+
+    const auto [script, bootstrapScript] = registry_record_payload_files(record);
+    if (!record.scriptSha256.empty()) {
+        if (!registry_database_is_valid_sha256(record.scriptSha256) || script.empty()) {
+            return false;
+        }
+        if (registry_database_sha256_hex(script) != registry_database_to_lower_copy(record.scriptSha256)) {
+            return false;
+        }
+    }
+
+    if (!record.bootstrapSha256.empty()) {
+        if (!registry_database_is_valid_sha256(record.bootstrapSha256) || bootstrapScript.empty()) {
+            return false;
+        }
+        if (registry_database_sha256_hex(bootstrapScript) != registry_database_to_lower_copy(record.bootstrapSha256)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 std::string registry_database_serialize_record(const RegistryRecord& record) {
     std::ostringstream stream;
     stream << "source=" << registry_database_escape_field(record.source) << '\n';
     stream << "alias=" << (record.alias ? "1" : "0") << '\n';
     stream << "description=" << registry_database_escape_field(record.description) << '\n';
+    stream << "role=" << registry_database_escape_field(record.role) << '\n';
+    stream << "capabilities=" << registry_database_escape_field(join_lines(record.capabilities)) << '\n';
+    stream << "ecosystemScopes=" << registry_database_escape_field(join_lines(record.ecosystemScopes)) << '\n';
+    stream << "writeScopes=" << registry_database_escape_field(registry_database_serialize_write_scopes(record.writeScopes)) << '\n';
+    stream << "networkScopes=" << registry_database_escape_field(registry_database_serialize_network_scopes(record.networkScopes)) << '\n';
+    stream << "privilegeLevel=" << registry_database_escape_field(record.privilegeLevel) << '\n';
+    stream << "scriptSha256=" << registry_database_escape_field(record.scriptSha256) << '\n';
+    stream << "bootstrapSha256=" << registry_database_escape_field(record.bootstrapSha256) << '\n';
     stream << "bundleSource=" << (record.bundleSource ? "1" : "0") << '\n';
     stream << "bundlePath=" << registry_database_escape_field(record.bundlePath) << '\n';
     stream << "bootstrap=" << registry_database_escape_field(record.bootstrapScript) << '\n';
@@ -211,6 +455,22 @@ std::optional<RegistryRecord> registry_database_deserialize_record(const std::st
             }
         } else if (key == "description") {
             record.description = value;
+        } else if (key == "role") {
+            record.role = value;
+        } else if (key == "capabilities") {
+            record.capabilities = split_lines(value);
+        } else if (key == "ecosystemScopes") {
+            record.ecosystemScopes = split_lines(value);
+        } else if (key == "writeScopes") {
+            record.writeScopes = registry_database_deserialize_write_scopes(value);
+        } else if (key == "networkScopes") {
+            record.networkScopes = registry_database_deserialize_network_scopes(value);
+        } else if (key == "privilegeLevel") {
+            record.privilegeLevel = value;
+        } else if (key == "scriptSha256") {
+            record.scriptSha256 = value;
+        } else if (key == "bootstrapSha256") {
+            record.bootstrapSha256 = value;
         } else if (key == "bundleSource") {
             if (value == "1") {
                 record.bundleSource = true;

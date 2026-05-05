@@ -6,7 +6,9 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
+#include <sstream>
 #include <system_error>
 #include <vector>
 
@@ -109,6 +111,33 @@ protected:
     }
 };
 
+class PromptingValidator : public Validator {
+public:
+    using Validator::Validator;
+
+    std::vector<ValidationFinding> findings;
+
+protected:
+    std::vector<ValidationFinding> scanGraph(const Graph& graph) const override {
+        (void)graph;
+        return findings;
+    }
+};
+
+class StreamBufferGuard {
+public:
+    StreamBufferGuard(std::ios& stream, std::streambuf* replacement)
+        : stream_(stream), previous_(stream.rdbuf(replacement)) {}
+
+    ~StreamBufferGuard() {
+        stream_.rdbuf(previous_);
+    }
+
+private:
+    std::ios& stream_;
+    std::streambuf* previous_;
+};
+
 class StaticMetadataProvider final : public PluginMetadataProvider {
 public:
     std::map<std::string, PluginSecurityMetadata> metadata;
@@ -206,6 +235,42 @@ TEST_CASE("validator aborts when user declines prompted run", "[unit][validator]
     Graph graph = make_graph();
     CHECK(validator.validate(&graph) == nullptr);
     CHECK(validator.promptCalls == 1);
+}
+
+TEST_CASE("validator accepts interactive confirmation from stdin", "[unit][validator][validate]") {
+    ReqPackConfig config;
+    config.security.promptOnUnsafe = true;
+    config.security.severityThreshold = SeverityLevel::CRITICAL;
+
+    PromptingValidator validator(nullptr, config);
+    validator.findings = {make_finding("low")};
+
+    Graph graph = make_graph();
+    std::istringstream input("y\n");
+    std::ostringstream errorOutput;
+    StreamBufferGuard inputGuard(std::cin, input.rdbuf());
+    StreamBufferGuard errorGuard(std::cerr, errorOutput.rdbuf());
+
+    CHECK(validator.validate(&graph) == &graph);
+    CHECK(errorOutput.str().find("unsafe findings require confirmation") != std::string::npos);
+    CHECK(errorOutput.str().find("Continue? [y/N]") != std::string::npos);
+}
+
+TEST_CASE("validator denies prompted run when interactive mode is disabled", "[unit][validator][validate]") {
+    ReqPackConfig config;
+    config.security.promptOnUnsafe = true;
+    config.security.severityThreshold = SeverityLevel::CRITICAL;
+    config.interaction.interactive = false;
+
+    PromptingValidator validator(nullptr, config);
+    validator.findings = {make_finding("low")};
+
+    Graph graph = make_graph();
+    std::ostringstream errorOutput;
+    StreamBufferGuard errorGuard(std::cerr, errorOutput.rdbuf());
+
+    CHECK(validator.validate(&graph) == nullptr);
+    CHECK(errorOutput.str().find("interactive mode is disabled") != std::string::npos);
 }
 
 TEST_CASE("validator returns input graph and generates report for safe findings", "[unit][validator][validate]") {
@@ -560,6 +625,56 @@ TEST_CASE("validator auto-fetches only required gateway ecosystem into per-ecosy
     const std::vector<std::string> debianIds = debianDatabase.advisoryIdsForPackage("Debian", "ripgrep");
     REQUIRE(debianIds.size() == 1);
     CHECK(debianIds[0] == "CVE-2026-debian");
+
+    const std::filesystem::path rubyIndexPath = tempDir.path() / "security-index" / "RubyGems";
+    CHECK_FALSE(std::filesystem::exists(rubyIndexPath));
+}
+
+TEST_CASE("validator auto-fetches required ecosystem through default gateway", "[unit][validator][validate]") {
+    TempDir tempDir{"reqpack-validator-default-gateway-auto-fetch"};
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-default-gateway",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "ripgrep issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "Debian", "name": "ripgrep"},
+                "versions": ["14.1"]
+            }]
+        },
+        {
+            "id": "CVE-2026-unused-ecosystem",
+            "modified": "2026-01-02T00:00:00Z",
+            "affected": [{
+                "package": {"ecosystem": "RubyGems", "name": "rails"},
+                "versions": ["7.0.0"]
+            }]
+        }
+    ])");
+
+    ReqPackConfig config;
+    config.security.autoFetch = true;
+    config.security.indexPath = (tempDir.path() / "security-index").string();
+    config.security.osvFeedUrl = feedPath.string();
+    config.security.osvRefreshMode = OsvRefreshMode::MANUAL;
+
+    StaticMetadataProvider metadataProvider;
+    metadataProvider.metadata["dnf"].osvEcosystem = "Debian";
+
+    Validator validator(&metadataProvider, config);
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "dnf", .name = "ripgrep", .version = "14.1"}, graph);
+    CHECK(validator.validate(&graph) == nullptr);
+
+    ReqPackConfig debianConfig = config;
+    debianConfig.security.osvDatabasePath = (tempDir.path() / "security-index" / "Debian").string();
+    VulnerabilityDatabase debianDatabase(debianConfig);
+    REQUIRE(debianDatabase.ensureReady());
+    const std::vector<std::string> debianIds = debianDatabase.advisoryIdsForPackage("Debian", "ripgrep");
+    REQUIRE(debianIds.size() == 1);
+    CHECK(debianIds[0] == "CVE-2026-default-gateway");
 
     const std::filesystem::path rubyIndexPath = tempDir.path() / "security-index" / "RubyGems";
     CHECK_FALSE(std::filesystem::exists(rubyIndexPath));

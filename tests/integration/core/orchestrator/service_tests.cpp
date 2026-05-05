@@ -3152,6 +3152,71 @@ TEST_CASE("reqpack install returns non-zero when security validation blocks exec
     CHECK_FALSE(std::filesystem::exists(pluginDirectory / "apply" / "state" / "install.txt"));
 }
 
+TEST_CASE("reqpack install refuses prompted unsafe run in non-interactive mode", "[integration][orchestrator][security]") {
+    TempDir tempDir{"reqpack-orchestrator-security-prompt-non-interactive"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-demo",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "critical demo package issue",
+            "severity": [{"type": "CVSS_V3", "score": "9.8"}],
+            "affected": [{
+                "package": {"ecosystem": "demo-osv", "name": "sample"},
+                "versions": ["1.0.0"]
+            }]
+        }
+    ])");
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    osvFeedUrl = '" + feedPath.string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'always',\n"
+        "    severityThreshold = 'critical',\n"
+        "    onUnsafe = 'prompt',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {"install", "apply", "sample@1.0.0"},
+        status
+    );
+
+    REQUIRE(status != 0);
+    CHECK(output.find("interactive mode is disabled; refusing to continue.") != std::string::npos);
+    CHECK(output.find("execution blocked by security policy") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(pluginDirectory / "apply" / "state" / "install.txt"));
+}
+
 TEST_CASE("reqpack serve remote text mode supports token auth", "[integration][orchestrator][remote]") {
     TempDir tempDir{"reqpack-orchestrator-remote-text"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";

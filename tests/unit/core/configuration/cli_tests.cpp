@@ -28,7 +28,6 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.fileOutput = true;
     overrides.enableBacktrace = true;
     overrides.backtraceSize = 64;
-    overrides.runSnykScan = true;
     overrides.severityThreshold = SeverityLevel::MEDIUM;
     overrides.osvDatabasePath = "~/osv-db";
     overrides.osvRefreshMode = OsvRefreshMode::ALWAYS;
@@ -65,7 +64,6 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(std::filesystem::path(config.logging.filePath) == home / "logs/reqpack.log");
     CHECK(config.logging.enableBacktrace);
     CHECK(config.logging.backtraceSize == 64);
-    CHECK(config.security.runSnykScan);
     CHECK(config.security.severityThreshold == SeverityLevel::MEDIUM);
     CHECK(std::filesystem::path(config.security.osvDatabasePath) == home / "osv-db");
     CHECK(config.security.osvRefreshMode == OsvRefreshMode::ALWAYS);
@@ -166,6 +164,14 @@ TEST_CASE("configuration consumes CLI flags with positional and inline values", 
         const std::vector<std::string> unknown{"--not-a-real-flag"};
         index = 0;
         CHECK_FALSE(consume_cli_config_flag(unknown, index, overrides));
+
+        const std::vector<std::string> removedSnyk{"--snyk"};
+        index = 0;
+        CHECK_FALSE(consume_cli_config_flag(removedSnyk, index, overrides));
+
+        const std::vector<std::string> removedOwasp{"--owasp"};
+        index = 0;
+        CHECK_FALSE(consume_cli_config_flag(removedOwasp, index, overrides));
     }
 
     SECTION("define flag maps proxy default target override") {
@@ -461,6 +467,14 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"sbom", "dnf", "curl", "--sbom-skip-missing-packages"}, config);
         REQUIRE(requests.size() == 1);
         CHECK(requests.front().flags.empty());
+    }
+
+    SECTION("install rejects removed provider-specific security flags") {
+        CHECK(cli.parse(std::vector<std::string>{"install", "dnf", "curl", "--snyk"}, config).empty());
+        CHECK(cli.parseFailed());
+
+        CHECK(cli.parse(std::vector<std::string>{"install", "dnf", "curl", "--owasp"}, config).empty());
+        CHECK(cli.parseFailed());
     }
 
     SECTION("audit rejects invalid format") {

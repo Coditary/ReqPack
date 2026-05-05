@@ -38,6 +38,10 @@ private:
 	PackageInfo packageInfoFromObject(const sol::object& value) const;
 	std::string serializeLuaPayload(const sol::object& value) const;
 	bool hasSilentRuntimeFlag(const std::vector<std::string>& flags) const;
+	bool shouldEnforceExecutionPolicy() const;
+	ExecResult denyExecution(const std::string& message) const;
+	ExecResult executeCommandWithPolicy(const std::string& sourceId, const std::string& command, bool silent) const;
+	ExecResult executeCommandWithPolicy(const std::string& sourceId, const std::string& command, const sol::object& rules, bool silent) const;
 	ExecResult runCommand(const std::string& command) const;
 	ExecResult runCommand(const std::string& command, bool silent) const;
 	DownloadResult downloadToPath(const std::string& url, const std::string& destinationPath);

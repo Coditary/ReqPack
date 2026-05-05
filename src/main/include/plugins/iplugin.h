@@ -25,7 +25,16 @@ struct DownloadResult {
 	std::string resolvedPath;
 };
 
+using PluginWriteScope = RegistryWriteScope;
+using PluginNetworkScope = RegistryNetworkScope;
+
 struct PluginSecurityMetadata {
+	std::string role{"package-manager"};
+	std::vector<std::string> capabilities{};
+	std::vector<std::string> ecosystemScopes{};
+	std::vector<PluginWriteScope> writeScopes{};
+	std::vector<PluginNetworkScope> networkScopes{};
+	std::string privilegeLevel{"none"};
 	std::string osvEcosystem{};
 	std::string purlType{};
 	VersionComparatorSpec versionComparator{};

@@ -15,6 +15,14 @@ struct RegistryRecord {
     std::string source;
     bool alias{false};
     std::string description;
+    std::string role;
+    std::vector<std::string> capabilities;
+    std::vector<std::string> ecosystemScopes;
+    std::vector<RegistryWriteScope> writeScopes;
+    std::vector<RegistryNetworkScope> networkScopes;
+    std::string privilegeLevel;
+    std::string scriptSha256;
+    std::string bootstrapSha256;
     std::string script;
     std::string bootstrapScript;
     std::string bundlePath;

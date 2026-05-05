@@ -23,6 +23,7 @@ class Validator {
 	std::vector<ValidationFinding> lastFindings;
 
 	std::vector<Package> collectPackages(const Graph& graph) const;
+	std::vector<ValidationFinding> prepareSecurityData(const Graph& graph) const;
 	std::vector<OsvAdvisory> loadAdvisories() const;
 
 protected:

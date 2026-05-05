@@ -6,6 +6,7 @@
 #include <catch2/catch.hpp>
 
 #include "core/registry.h"
+#include "core/registry_database_core.h"
 
 namespace {
 
@@ -57,6 +58,20 @@ plugin = {}
 
 function plugin.getName() return "valid-plugin" end
 function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    role = "package-manager",
+    capabilities = { "exec" },
+    ecosystemScopes = { "demo-osv" },
+    writeScopes = {
+      { kind = "temp" },
+    },
+    networkScopes = {
+      { host = "api.osv.dev", scheme = "https", pathPrefix = "/v1" },
+    },
+    privilegeLevel = "none",
+  }
+end
 function plugin.getRequirements() return {} end
 function plugin.getCategories() return { "pkg", "test" } end
 function plugin.getMissingPackages(packages) return packages end
@@ -74,6 +89,38 @@ const char* INVALID_PLUGIN = R"(
 plugin = {}
 
 function plugin.getVersion() return "1.0.0" end
+)";
+
+const char* MISMATCHED_METADATA_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return "mismatch-plugin" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    role = "package-manager",
+    capabilities = { "exec" },
+    ecosystemScopes = { "wrong-ecosystem" },
+    writeScopes = {
+      { kind = "plugin-data", value = "state" },
+    },
+    networkScopes = {
+      { host = "mirror.example.test", scheme = "https", pathPrefix = "/plugins" },
+    },
+    privilegeLevel = "none",
+  }
+end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "test" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1", description = "ok" } end
+function plugin.shutdown() return true end
 )";
 
 }  // namespace
@@ -178,6 +225,13 @@ TEST_CASE("registry materializes database-backed plugin script on load", "[integ
         .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
         .alias = false,
         .description = "cached plugin",
+        .role = "package-manager",
+        .capabilities = {"exec"},
+        .ecosystemScopes = {"demo-osv"},
+        .writeScopes = {{.kind = "temp", .value = {}}},
+        .networkScopes = {{.host = "api.osv.dev", .scheme = "https", .pathPrefix = "/v1"}},
+        .privilegeLevel = "none",
+        .scriptSha256 = registry_database_sha256_hex(VALID_PLUGIN),
     };
 
     write_file(tempDir.path() / "remote-source" / "cached.lua", VALID_PLUGIN);
@@ -192,6 +246,127 @@ TEST_CASE("registry materializes database-backed plugin script on load", "[integ
     CHECK(std::filesystem::exists(materializedPath));
     CHECK(registry.getState("cached") == PluginState::ACTIVE);
     CHECK(registry.getPlugin("cached") != nullptr);
+}
+
+TEST_CASE("registry blocks database-backed plugin load when thin-layer metadata is required but missing", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-thin-layer-block"};
+    ReqPackConfig config = make_registry_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["cached"] = RegistrySourceEntry{
+        .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
+        .alias = false,
+        .description = "cached plugin",
+    };
+
+    write_file(tempDir.path() / "remote-source" / "cached.lua", VALID_PLUGIN);
+
+    Registry registry(config);
+    REQUIRE(registry.getDatabase()->ensureReady());
+
+    CHECK_FALSE(registry.loadPlugin("cached"));
+    CHECK(registry.getState("cached") == PluginState::FAILED);
+    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "cached.lua"));
+}
+
+TEST_CASE("registry allows database-backed plugin load when thin-layer metadata is present", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-thin-layer-pass"};
+    ReqPackConfig config = make_registry_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["cached"] = RegistrySourceEntry{
+        .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
+        .alias = false,
+        .description = "cached plugin",
+        .role = "package-manager",
+        .capabilities = {"exec"},
+        .ecosystemScopes = {"demo-osv"},
+        .writeScopes = {{.kind = "temp", .value = {}}},
+        .networkScopes = {{.host = "api.osv.dev", .scheme = "https", .pathPrefix = "/v1"}},
+        .privilegeLevel = "none",
+        .scriptSha256 = registry_database_sha256_hex(VALID_PLUGIN),
+    };
+
+    write_file(tempDir.path() / "remote-source" / "cached.lua", VALID_PLUGIN);
+
+    Registry registry(config);
+    REQUIRE(registry.getDatabase()->ensureReady());
+
+    REQUIRE(registry.loadPlugin("cached"));
+    CHECK(registry.getState("cached") == PluginState::ACTIVE);
+    CHECK(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "cached.lua"));
+}
+
+TEST_CASE("registry blocks unpinned git-backed plugin load when thin-layer trust is required", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-thin-layer-git-ref-block"};
+    ReqPackConfig config = make_registry_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["cached"] = RegistrySourceEntry{
+        .source = "git+https://example.test/plugins/cached.git",
+        .alias = false,
+        .description = "cached plugin",
+        .role = "package-manager",
+        .capabilities = {"exec"},
+        .privilegeLevel = "none",
+    };
+
+    Registry registry(config);
+    REQUIRE(registry.getDatabase()->ensureReady());
+
+    CHECK_FALSE(registry.loadPlugin("cached"));
+    CHECK(registry.getState("cached") == PluginState::FAILED);
+    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "cached.lua"));
+}
+
+TEST_CASE("registry blocks database-backed plugin load when thin-layer script hash mismatches", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-thin-layer-hash-block"};
+    ReqPackConfig config = make_registry_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["cached"] = RegistrySourceEntry{
+        .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
+        .alias = false,
+        .description = "cached plugin",
+        .role = "package-manager",
+        .capabilities = {"exec"},
+        .ecosystemScopes = {"demo-osv"},
+        .writeScopes = {{.kind = "temp", .value = {}}},
+        .networkScopes = {{.host = "api.osv.dev", .scheme = "https", .pathPrefix = "/v1"}},
+        .privilegeLevel = "none",
+        .scriptSha256 = std::string(64, '0'),
+    };
+
+    write_file(tempDir.path() / "remote-source" / "cached.lua", VALID_PLUGIN);
+
+    Registry registry(config);
+    REQUIRE(registry.getDatabase()->ensureReady());
+
+    CHECK_FALSE(registry.loadPlugin("cached"));
+    CHECK(registry.getState("cached") == PluginState::FAILED);
+    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "cached.lua"));
+}
+
+TEST_CASE("registry blocks database-backed plugin load when runtime metadata mismatches trust record", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-thin-layer-runtime-mismatch"};
+    ReqPackConfig config = make_registry_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["cached"] = RegistrySourceEntry{
+        .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
+        .alias = false,
+        .description = "cached plugin",
+        .role = "package-manager",
+        .capabilities = {"exec"},
+        .ecosystemScopes = {"demo-osv"},
+        .writeScopes = {{.kind = "temp", .value = {}}},
+        .networkScopes = {{.host = "api.osv.dev", .scheme = "https", .pathPrefix = "/v1"}},
+        .privilegeLevel = "none",
+        .scriptSha256 = registry_database_sha256_hex(MISMATCHED_METADATA_PLUGIN),
+    };
+
+    write_file(tempDir.path() / "remote-source" / "cached.lua", MISMATCHED_METADATA_PLUGIN);
+
+    Registry registry(config);
+    REQUIRE(registry.getDatabase()->ensureReady());
+
+    CHECK_FALSE(registry.loadPlugin("cached"));
+    CHECK(registry.getState("cached") == PluginState::FAILED);
 }
 
 TEST_CASE("registry bootstrap scripts may use io library", "[integration][registry][service]") {

@@ -99,8 +99,7 @@ struct SecurityBackendConfig {
 struct SecurityConfig {
     bool enabled{true};
     bool autoFetch{true};
-    bool runSnykScan{false};
-    bool runOwaspScan{false};
+    bool requireThinLayer{false};
     SeverityLevel severityThreshold{SeverityLevel::CRITICAL};
     double scoreThreshold{0.0};
     UnsafeAction onUnsafe{UnsafeAction::CONTINUE};
@@ -167,10 +166,33 @@ struct DownloaderConfig {
     std::map<std::string, std::string> pluginSources{};
 };
 
+struct RegistryWriteScope {
+    std::string kind{};
+    std::string value{};
+
+    bool operator==(const RegistryWriteScope& other) const = default;
+};
+
+struct RegistryNetworkScope {
+    std::string host{};
+    std::string scheme{};
+    std::string pathPrefix{};
+
+    bool operator==(const RegistryNetworkScope& other) const = default;
+};
+
 struct RegistrySourceEntry {
     std::string source{};
     bool alias{false};
     std::string description{};
+    std::string role{};
+    std::vector<std::string> capabilities{};
+    std::vector<std::string> ecosystemScopes{};
+    std::vector<RegistryWriteScope> writeScopes{};
+    std::vector<RegistryNetworkScope> networkScopes{};
+    std::string privilegeLevel{};
+    std::string scriptSha256{};
+    std::string bootstrapSha256{};
 };
 
 using RegistrySourceMap = std::map<std::string, RegistrySourceEntry>;
@@ -333,8 +355,6 @@ struct ReqPackConfigOverrides {
     std::optional<bool> enableBacktrace;
     std::optional<std::size_t> backtraceSize;
 
-    std::optional<bool> runSnykScan;
-    std::optional<bool> runOwaspScan;
     std::optional<SeverityLevel> severityThreshold;
     std::optional<double> scoreThreshold;
     std::optional<UnsafeAction> onUnsafe;

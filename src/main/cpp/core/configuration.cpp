@@ -177,6 +177,10 @@ std::string expand_env_reference(const std::string& value) {
     return resolved != nullptr ? std::string(resolved) : std::string{};
 }
 
+std::vector<std::string> load_string_array(const sol::object& object);
+std::vector<RegistryWriteScope> load_registry_write_scopes(const sol::object& object);
+std::vector<RegistryNetworkScope> load_registry_network_scopes(const sol::object& object);
+
 RegistrySourceMap load_registry_sources_from_table(const sol::table& table) {
     RegistrySourceMap sources;
 
@@ -206,6 +210,35 @@ RegistrySourceMap load_registry_sources_from_table(const sol::table& table) {
             }
             if (const sol::optional<std::string> description = entryTable["description"]; description.has_value()) {
                 entry.description = description.value();
+            }
+            if (const sol::optional<std::string> role = entryTable["role"]; role.has_value()) {
+                entry.role = to_lower(role.value());
+            }
+            const sol::object capabilitiesObject = entryTable["capabilities"];
+            if (capabilitiesObject.valid() && capabilitiesObject.get_type() == sol::type::table) {
+                for (const auto& [_, capability] : capabilitiesObject.as<sol::table>()) {
+                    if (capability.get_type() == sol::type::string) {
+                        const std::string normalized = to_lower(capability.as<std::string>());
+                        if (!normalized.empty()) {
+                            entry.capabilities.push_back(normalized);
+                        }
+                    }
+                }
+            }
+            entry.ecosystemScopes = load_string_array(entryTable["ecosystemScopes"]);
+            for (std::string& ecosystem : entry.ecosystemScopes) {
+                ecosystem = to_lower(ecosystem);
+            }
+            entry.writeScopes = load_registry_write_scopes(entryTable["writeScopes"]);
+            entry.networkScopes = load_registry_network_scopes(entryTable["networkScopes"]);
+            if (const sol::optional<std::string> privilegeLevel = entryTable["privilegeLevel"]; privilegeLevel.has_value()) {
+                entry.privilegeLevel = to_lower(privilegeLevel.value());
+            }
+            if (const sol::optional<std::string> scriptSha256 = entryTable["scriptSha256"]; scriptSha256.has_value()) {
+                entry.scriptSha256 = to_lower(scriptSha256.value());
+            }
+            if (const sol::optional<std::string> bootstrapSha256 = entryTable["bootstrapSha256"]; bootstrapSha256.has_value()) {
+                entry.bootstrapSha256 = to_lower(bootstrapSha256.value());
             }
         } else {
             continue;
@@ -237,6 +270,65 @@ std::vector<std::string> load_string_array(const sol::object& object) {
         if (value.get_type() == sol::type::string) {
             values.push_back(value.as<std::string>());
         }
+    }
+
+    return values;
+}
+
+std::vector<RegistryWriteScope> load_registry_write_scopes(const sol::object& object) {
+    std::vector<RegistryWriteScope> values;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return values;
+    }
+
+    for (const auto& [_, value] : object.as<sol::table>()) {
+        if (value.get_type() != sol::type::table) {
+            continue;
+        }
+
+        const sol::table scopeTable = value.as<sol::table>();
+        const sol::optional<std::string> kind = scopeTable["kind"];
+        if (!kind.has_value()) {
+            continue;
+        }
+
+        RegistryWriteScope scope;
+        scope.kind = to_lower(kind.value());
+        if (const sol::optional<std::string> rawValue = scopeTable["value"]; rawValue.has_value()) {
+            scope.value = rawValue.value();
+        }
+        values.push_back(std::move(scope));
+    }
+
+    return values;
+}
+
+std::vector<RegistryNetworkScope> load_registry_network_scopes(const sol::object& object) {
+    std::vector<RegistryNetworkScope> values;
+    if (!object.valid() || object.get_type() != sol::type::table) {
+        return values;
+    }
+
+    for (const auto& [_, value] : object.as<sol::table>()) {
+        if (value.get_type() != sol::type::table) {
+            continue;
+        }
+
+        const sol::table scopeTable = value.as<sol::table>();
+        RegistryNetworkScope scope;
+        if (const sol::optional<std::string> host = scopeTable["host"]; host.has_value()) {
+            scope.host = to_lower(host.value());
+        }
+        if (const sol::optional<std::string> scheme = scopeTable["scheme"]; scheme.has_value()) {
+            scope.scheme = to_lower(scheme.value());
+        }
+        if (const sol::optional<std::string> pathPrefix = scopeTable["pathPrefix"]; pathPrefix.has_value()) {
+            scope.pathPrefix = pathPrefix.value();
+        }
+        if (scope.host.empty() && scope.scheme.empty() && scope.pathPrefix.empty()) {
+            continue;
+        }
+        values.push_back(std::move(scope));
     }
 
     return values;
@@ -968,8 +1060,7 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
     if (security.has_value()) {
         assign_if_present(security.value(), "enabled", config.security.enabled);
         assign_if_present(security.value(), "autoFetch", config.security.autoFetch);
-        assign_if_present(security.value(), "runSnykScan", config.security.runSnykScan);
-        assign_if_present(security.value(), "runOwaspScan", config.security.runOwaspScan);
+        assign_if_present(security.value(), "requireThinLayer", config.security.requireThinLayer);
         assign_if_present(security.value(), "scoreThreshold", config.security.scoreThreshold);
         assign_if_present(security.value(), "promptOnUnsafe", config.security.promptOnUnsafe);
         assign_if_present(security.value(), "allowUnassigned", config.security.allowUnassigned);
@@ -1255,8 +1346,6 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.enableBacktrace.has_value()) config.logging.enableBacktrace = overrides.enableBacktrace.value();
     if (overrides.backtraceSize.has_value()) config.logging.backtraceSize = overrides.backtraceSize.value();
 
-    if (overrides.runSnykScan.has_value()) config.security.runSnykScan = overrides.runSnykScan.value();
-    if (overrides.runOwaspScan.has_value()) config.security.runOwaspScan = overrides.runOwaspScan.value();
     if (overrides.severityThreshold.has_value()) config.security.severityThreshold = overrides.severityThreshold.value();
     if (overrides.scoreThreshold.has_value()) config.security.scoreThreshold = overrides.scoreThreshold.value();
     if (overrides.onUnsafe.has_value()) config.security.onUnsafe = overrides.onUnsafe.value();
@@ -1399,14 +1488,6 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
     if (argument == "--dry-run") {
         overrides.dryRun = true;
-        return true;
-    }
-    if (argument == "--snyk") {
-        overrides.runSnykScan = true;
-        return true;
-    }
-    if (argument == "--owasp") {
-        overrides.runOwaspScan = true;
         return true;
     }
     if (argument == "--prompt-on-unsafe") {

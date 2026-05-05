@@ -5,6 +5,9 @@
 #include <fstream>
 #include <system_error>
 
+#include "core/downloader.h"
+#include "core/registry_database.h"
+#include "core/registry_database_core.h"
 #include "core/downloader_core.h"
 
 namespace {
@@ -55,6 +58,14 @@ void write_file(const std::filesystem::path& path, const std::string& content) {
     output << content;
 }
 
+ReqPackConfig make_downloader_test_config(const std::filesystem::path& root) {
+    ReqPackConfig config;
+    config.registry.pluginDirectory = (root / "plugins").string();
+    config.registry.databasePath = (root / "registry-db").string();
+    config.downloader.enabled = true;
+    return config;
+}
+
 }  // namespace
 
 TEST_CASE("downloader validates plugin payload and rejects HTML or empty content", "[unit][downloader][payload]") {
@@ -96,5 +107,103 @@ TEST_CASE("downloader local copy branch fails for missing file", "[unit][downloa
     const std::filesystem::path target = tempDir.path() / "plugins/dnf/dnf.lua";
 
     CHECK_FALSE(copy_local_source_to_target(missing.string(), target));
+    CHECK_FALSE(std::filesystem::exists(target));
+}
+
+TEST_CASE("downloader materializes cached registry plugin when thin-layer metadata passes", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-trust-pass"};
+    const std::filesystem::path source = tempDir.path() / "remote-source" / "dnf.lua";
+    const std::filesystem::path target = tempDir.path() / "plugins" / "dnf" / "dnf.lua";
+    write_file(source, "return { getName = function() return 'dnf' end }\n");
+
+    ReqPackConfig config = make_downloader_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["dnf"] = RegistrySourceEntry{
+        .source = source.string(),
+        .alias = false,
+        .description = "dnf plugin",
+        .role = "package-manager",
+        .capabilities = {"exec"},
+        .privilegeLevel = "none",
+        .scriptSha256 = registry_database_sha256_hex("return { getName = function() return 'dnf' end }\n"),
+    };
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    Downloader downloader(&database, config);
+    REQUIRE(downloader.downloadPlugin("dnf"));
+    CHECK(std::filesystem::exists(target));
+    CHECK(read_file(target) == "return { getName = function() return 'dnf' end }\n");
+}
+
+TEST_CASE("downloader blocks registry plugin materialization when thin-layer metadata is missing", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-trust-block"};
+    const std::filesystem::path source = tempDir.path() / "remote-source" / "dnf.lua";
+    const std::filesystem::path target = tempDir.path() / "plugins" / "dnf" / "dnf.lua";
+    write_file(source, "return { getName = function() return 'dnf' end }\n");
+
+    ReqPackConfig config = make_downloader_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["dnf"] = RegistrySourceEntry{
+        .source = source.string(),
+        .alias = false,
+        .description = "dnf plugin",
+    };
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    Downloader downloader(&database, config);
+    CHECK_FALSE(downloader.downloadPlugin("dnf"));
+    CHECK_FALSE(std::filesystem::exists(target));
+}
+
+TEST_CASE("downloader blocks registry plugin materialization when script hash mismatches", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-hash-block"};
+    const std::filesystem::path source = tempDir.path() / "remote-source" / "dnf.lua";
+    const std::filesystem::path target = tempDir.path() / "plugins" / "dnf" / "dnf.lua";
+    write_file(source, "return { getName = function() return 'dnf' end }\n");
+
+    ReqPackConfig config = make_downloader_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["dnf"] = RegistrySourceEntry{
+        .source = source.string(),
+        .alias = false,
+        .description = "dnf plugin",
+        .role = "package-manager",
+        .capabilities = {"exec"},
+        .privilegeLevel = "none",
+        .scriptSha256 = std::string(64, '0'),
+    };
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    Downloader downloader(&database, config);
+    CHECK_FALSE(downloader.downloadPlugin("dnf"));
+    CHECK_FALSE(std::filesystem::exists(target));
+}
+
+TEST_CASE("downloader blocks unpinned git registry plugin when thin-layer trust is required", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-git-unpinned-block"};
+    const std::filesystem::path target = tempDir.path() / "plugins" / "dnf" / "dnf.lua";
+
+    ReqPackConfig config = make_downloader_test_config(tempDir.path());
+    config.security.requireThinLayer = true;
+    config.registry.sources["dnf"] = RegistrySourceEntry{
+        .source = "git+https://example.test/plugins/dnf.git",
+        .alias = false,
+        .description = "dnf plugin",
+        .role = "package-manager",
+        .capabilities = {"exec"},
+        .privilegeLevel = "none",
+    };
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    Downloader downloader(&database, config);
+    CHECK_FALSE(downloader.downloadPlugin("dnf"));
     CHECK_FALSE(std::filesystem::exists(target));
 }

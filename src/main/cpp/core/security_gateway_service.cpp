@@ -38,6 +38,26 @@ std::string SecurityGatewayService::normalizeGatewayName(const std::string& gate
     return to_lower_copy(gateway);
 }
 
+std::set<std::string> SecurityGatewayService::discoverSecurityProviders() const {
+    std::set<std::string> providers;
+    if (this->metadataProvider == nullptr) {
+        return providers;
+    }
+
+    for (const std::string& name : this->metadataProvider->getKnownPluginNames()) {
+        const auto metadata = this->metadataProvider->getPluginSecurityMetadata(name);
+        if (!metadata.has_value()) {
+            continue;
+        }
+        if (this->normalizeGatewayName(metadata->role) != "security-provider") {
+            continue;
+        }
+        providers.insert(this->normalizeGatewayName(name));
+    }
+
+    return providers;
+}
+
 std::set<std::string> SecurityGatewayService::configuredGatewayNames() const {
     std::set<std::string> names;
     if (this->config.security.gateways.empty()) {
@@ -58,13 +78,20 @@ bool SecurityGatewayService::isGatewaySystem(const std::string& system) const {
 
 std::set<std::string> SecurityGatewayService::resolveGatewayBackends(const std::string& gateway) const {
     const std::string normalizedGateway = this->normalizeGatewayName(gateway);
+    std::set<std::string> discoveredProviders = this->discoverSecurityProviders();
     if (this->config.security.gateways.empty()) {
-        return {"osv"};
+	    if (discoveredProviders.empty()) {
+	        return {"osv"};
+	    }
+	    return discoveredProviders;
     }
     const auto it = this->config.security.gateways.find(normalizedGateway);
     if (it == this->config.security.gateways.end()) {
         if (normalizedGateway == this->normalizeGatewayName(this->config.security.defaultGateway)) {
-            return {"osv"};
+	        if (discoveredProviders.empty()) {
+	            return {"osv"};
+	        }
+	        return discoveredProviders;
         }
         return {};
     }
@@ -78,6 +105,10 @@ std::set<std::string> SecurityGatewayService::resolveGatewayBackends(const std::
             backends.insert(to_lower_copy(backend));
         }
     }
+	backends.insert(discoveredProviders.begin(), discoveredProviders.end());
+	if (backends.empty()) {
+		backends.insert("osv");
+	}
     return backends;
 }
 
