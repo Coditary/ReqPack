@@ -8,6 +8,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
 FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
@@ -21,6 +25,15 @@ find_package(Boost REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+
+if(APPLE)
+    add_compile_options(-Wno-unknown-warning-option)
+endif()
+
+set(REQPACK_PLATFORM_LIBS)
+if(UNIX AND NOT APPLE)
+    list(APPEND REQPACK_PLATFORM_LIBS util)
+endif()
 
 FetchContent_Declare(
     lmdb
@@ -264,7 +277,7 @@ target_link_libraries(ReqPack PRIVATE
 	CURL::libcurl
 	lmdb
 	OpenSSL::Crypto
-	util
+	${REQPACK_PLATFORM_LIBS}
 	zstd
 	${LUA_LIBRARIES}
 	Boost::boost
@@ -292,7 +305,7 @@ target_link_libraries(core_unit_tests PRIVATE
     CURL::libcurl
     lmdb
     OpenSSL::Crypto
-    util
+	${REQPACK_PLATFORM_LIBS}
     zstd
     ${LUA_LIBRARIES}
     Boost::boost
@@ -305,7 +318,7 @@ target_link_libraries(core_integration_tests PRIVATE
     CURL::libcurl
     lmdb
     OpenSSL::Crypto
-    util
+	${REQPACK_PLATFORM_LIBS}
     zstd
     ${LUA_LIBRARIES}
     Boost::boost

@@ -195,7 +195,7 @@ ExecRuleAction parse_action(const sol::object& object, std::size_t ruleIndex, st
             continue;
         }
 
-        if (!value.valid() || value.get_type() == sol::type::nil) {
+        if (!value.valid() || value.is<sol::lua_nil_t>()) {
             continue;
         }
 

@@ -117,7 +117,11 @@ jobs:
           ccache --zero-stats
 
       - name: Install sol2 headers
-        run: sudo ./.github/scripts/setup-sol2.sh /usr/local/include
+        run: |
+          sudo env \
+            SOL2_VERSION="${SOL2_VERSION}" \
+            SOL2_CACHE_DIR="${XDG_CACHE_HOME}/reqpack/sol2/${SOL2_VERSION}" \
+            ./.github/scripts/setup-sol2.sh /usr/local/include
 
       - name: Build and test Linux targets
         if: matrix.family == 'linux'

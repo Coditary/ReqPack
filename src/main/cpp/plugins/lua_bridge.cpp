@@ -916,12 +916,13 @@ sol::table make_repository_entry_table(sol::state& lua, const RepositoryEntry& r
     entry["scope"] = scope;
 
     for (const auto& [key, value] : repository.extras) {
+        const std::string extraKey = key;
         std::visit([&](const auto& item) {
             using ValueType = std::decay_t<decltype(item)>;
             if constexpr (std::is_same_v<ValueType, std::vector<std::string>>) {
-                entry[key] = make_string_array_table(lua, item);
+                entry[extraKey] = make_string_array_table(lua, item);
             } else {
-                entry[key] = item;
+                entry[extraKey] = item;
             }
         }, value);
     }
