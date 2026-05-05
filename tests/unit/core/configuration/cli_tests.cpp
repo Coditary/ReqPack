@@ -386,6 +386,32 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         }
     }
 
+    SECTION("update all discovers configured sources even before plugin materialization") {
+        const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "reqpack-cli-update-all-config-sources";
+        std::error_code error;
+        std::filesystem::remove_all(tempRoot, error);
+        std::filesystem::create_directories(tempRoot / "plugins");
+        config.registry.pluginDirectory = (tempRoot / "plugins").string();
+        config.registry.databasePath = (tempRoot / "registry-db").string();
+        config.registry.sources = {
+            {"pip", RegistrySourceEntry{.source = "https://example.test/pip.lua"}},
+            {"npm", RegistrySourceEntry{.source = "https://example.test/npm.lua"}},
+        };
+
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "--all"}, config);
+        REQUIRE(requests.size() == 2);
+        CHECK(requests[0].system == "npm");
+        CHECK(requests[1].system == "pip");
+        for (const Request& request : requests) {
+            CHECK(request.action == ActionType::UPDATE);
+            CHECK(request.packages.empty());
+            CHECK(std::find(request.flags.begin(), request.flags.end(), "all") != request.flags.end());
+            CHECK(std::find(request.flags.begin(), request.flags.end(), "__reqpack-internal-plugin-refresh-all") != request.flags.end());
+        }
+
+        std::filesystem::remove_all(tempRoot, error);
+    }
+
     SECTION("update with explicit system remains normal orchestrator request") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "pip"}, config);
         REQUIRE(requests.size() == 1);

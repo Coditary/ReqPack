@@ -507,7 +507,7 @@ sol::table make_repository_entry_table(sol::state& lua, const RepositoryEntry& r
 
 LuaBridge::LuaBridge(const std::string& scriptPath, const ReqPackConfig& config)
     : m_scriptPath(scriptPath), m_logger(Logger::instance()), m_config(config) {
-    m_lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math);
+    m_lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math, sol::lib::io);
     register_types(m_lua);
     register_context_types();
     register_reqpack_namespace();

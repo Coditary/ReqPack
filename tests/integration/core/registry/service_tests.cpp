@@ -193,3 +193,25 @@ TEST_CASE("registry materializes database-backed plugin script on load", "[integ
     CHECK(registry.getState("cached") == PluginState::ACTIVE);
     CHECK(registry.getPlugin("cached") != nullptr);
 }
+
+TEST_CASE("registry bootstrap scripts may use io library", "[integration][registry][service]") {
+    TempDir tempDir{"reqpack-registry-bootstrap-io"};
+    ReqPackConfig config = make_registry_test_config(tempDir.path());
+
+    add_plugin_script(tempDir.path() / "plugins", "valid", VALID_PLUGIN);
+    write_file(tempDir.path() / "plugins" / "valid" / "bootstrap.lua",
+        "function bootstrap()\n"
+        "  local marker = io.open(REQPACK_PLUGIN_DIR .. '/bootstrapped.txt', 'w')\n"
+        "  if marker ~= nil then\n"
+        "    marker:write('ok\\n')\n"
+        "    marker:close()\n"
+        "  end\n"
+        "  return true\n"
+        "end\n");
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+
+    REQUIRE(registry.loadPlugin("valid"));
+    CHECK(std::filesystem::exists(tempDir.path() / "plugins" / "valid" / "bootstrapped.txt"));
+}

@@ -2533,6 +2533,62 @@ TEST_CASE("update --all refreshes all known plugin wrappers", "[integration][orc
     CHECK(refreshedNpmScript.find("2.1.0") != std::string::npos);
 }
 
+TEST_CASE("update --all refreshes configured sources before plugins exist locally", "[integration][orchestrator][service][plugin-update]") {
+    TempDir tempDir{"reqpack-plugin-wrapper-update-all-config-sources"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path pipRepoPath = tempDir.path() / "pip-origin";
+    const std::filesystem::path npmRepoPath = tempDir.path() / "npm-origin";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+
+    init_git_repository(pipRepoPath);
+    commit_plugin_source_version(pipRepoPath, "pip", "v1", "1.0.0", "v1.0.0");
+    commit_plugin_source_version(pipRepoPath, "pip", "v2", "1.2.0", "v1.2.0");
+    commit_plugin_source_version(pipRepoPath, "pip", "head", "9.9.9-dev");
+
+    init_git_repository(npmRepoPath);
+    commit_plugin_source_version(npmRepoPath, "npm", "v1", "2.0.0", "v2.0.0");
+    commit_plugin_source_version(npmRepoPath, "npm", "v2", "2.1.0", "v2.1.0");
+    commit_plugin_source_version(npmRepoPath, "npm", "head", "9.9.9-dev");
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    sources = {\n"
+        "      pip = { source = 'git+" + pipRepoPath.string() + "' },\n"
+        "      npm = { source = 'git+" + npmRepoPath.string() + "' },\n"
+        "    },\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "}\n");
+
+    REQUIRE_FALSE(std::filesystem::exists(pluginDirectory / "pip" / "pip.lua"));
+    REQUIRE_FALSE(std::filesystem::exists(pluginDirectory / "npm" / "npm.lua"));
+
+    const std::string output = run_reqpack(workspace, configPath, {"update", "--all"});
+    INFO(output);
+    CHECK(output.find("UPDATE:") != std::string::npos);
+    CHECK(output.find("UPDATE done:  2 ok") != std::string::npos);
+    CHECK(read_file(pluginDirectory / "pip" / "pip.lua").find("1.2.0") != std::string::npos);
+    CHECK(read_file(pluginDirectory / "npm" / "npm.lua").find("2.1.0") != std::string::npos);
+}
+
 TEST_CASE("orchestrator sbom command exports planned graph without executing plugin install", "[integration][orchestrator][service]") {
     TempDir tempDir{"reqpack-orchestrator-sbom"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";

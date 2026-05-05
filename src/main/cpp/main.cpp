@@ -880,6 +880,7 @@ int main(int argc, char* argv[]) {
     ReqPackConfig config = apply_config_overrides(fileConfig, configOverrides);
     const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";
     if (!configOverrides.pluginDirectory.has_value() &&
+        !configOverrides.configPath.has_value() &&
         config.registry.pluginDirectory == defaults.registry.pluginDirectory &&
         std::filesystem::exists(workspacePluginDirectory)) {
         config.registry.pluginDirectory = workspacePluginDirectory.string();

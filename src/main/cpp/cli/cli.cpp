@@ -1161,7 +1161,14 @@ std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config)
 std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& config) {
 	std::set<std::string> systems;
 	const std::filesystem::path directory = config.registry.pluginDirectory;
+	const RegistrySourceMap configuredSources = collect_registry_sources(config);
 	RegistryDatabase registryDatabase(config);
+
+	for (const auto& [name, entry] : configuredSources) {
+		if (!entry.alias && !name.empty() && to_lower(name) != "rqp") {
+			systems.insert(to_lower(name));
+		}
+	}
 
 	if (registryDatabase.ensureReady()) {
 		for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
@@ -1182,7 +1189,7 @@ std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& con
 			}
 
 			const std::string name = to_lower(entry.path().stem().string());
-			if (name != "rqp") {
+			if (name != "rqp" && configuredSources.contains(name)) {
 				systems.insert(name);
 			}
 		}
