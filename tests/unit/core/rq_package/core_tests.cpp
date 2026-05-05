@@ -60,7 +60,7 @@ std::filesystem::path build_rqp_package(
         const std::string payloadTarZst = (controlRoot / "payload" / "payload.tar.zst").string();
         REQUIRE(std::system(("tar -C " + escape_shell_arg(payloadRoot.string()) + " -cf " + escape_shell_arg(payloadTar) + " .").c_str()) == 0);
         REQUIRE(std::system(("zstd -q -f " + escape_shell_arg(payloadTar) + " -o " + escape_shell_arg(payloadTarZst)).c_str()) == 0);
-        std::string hash = overrideHash.value_or({});
+        std::string hash = overrideHash.value_or("");
         if (!overrideHash.has_value()) {
             const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(payloadTarZst));
             const std::size_t pos = hashOutput.rfind(' ');

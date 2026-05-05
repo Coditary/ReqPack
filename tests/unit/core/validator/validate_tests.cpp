@@ -525,7 +525,7 @@ TEST_CASE("sync imports only advisories inside active ecosystem scope", "[unit][
     REQUIRE(debianIds.size() == 1);
     CHECK(debianIds[0] == "CVE-2026-debian");
     CHECK(database.advisoryIdsForPackage("RubyGems", "rails").empty());
-    CHECK(database.getSyncState("ecosystem_scope").value_or({}) == "Debian");
+    CHECK(database.getSyncState("ecosystem_scope").value_or("") == "Debian");
 }
 
 TEST_CASE("scope change forces full resync with new ecosystem subset", "[unit][validator][validate]") {
@@ -576,7 +576,7 @@ TEST_CASE("scope change forces full resync with new ecosystem subset", "[unit][v
     const std::vector<std::string> rubygemsIds = database.advisoryIdsForPackage("RubyGems", "rails");
     REQUIRE(rubygemsIds.size() == 1);
     CHECK(rubygemsIds[0] == "CVE-2026-rubygems");
-    CHECK(database.getSyncState("ecosystem_scope").value_or({}) == "Debian\nRubyGems");
+    CHECK(database.getSyncState("ecosystem_scope").value_or("") == "Debian\nRubyGems");
 }
 
 TEST_CASE("validator auto-fetches only required gateway ecosystem into per-ecosystem index", "[unit][validator][validate]") {

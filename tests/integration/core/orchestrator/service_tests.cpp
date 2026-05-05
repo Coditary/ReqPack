@@ -263,7 +263,7 @@ std::filesystem::path build_rqp_package(
         REQUIRE(std::system(tarCommand.c_str()) == 0);
         const std::string zstdCommand = "zstd -q -f " + escape_shell_arg(payloadTar) + " -o " + escape_shell_arg(payloadTarZst);
         REQUIRE(std::system(zstdCommand.c_str()) == 0);
-        std::string hash = overrideHash.value_or({});
+        std::string hash = overrideHash.value_or("");
         if (!overrideHash.has_value()) {
             const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(payloadTarZst));
             const std::size_t pos = hashOutput.rfind(' ');
