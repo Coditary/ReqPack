@@ -1,8 +1,36 @@
 #include <catch2/catch.hpp>
 
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 
+#include "core/registry_database.h"
 #include "core/registry_database_core.h"
+
+namespace {
+
+class TempDir {
+public:
+    explicit TempDir(const std::string& prefix)
+        : path_(std::filesystem::temp_directory_path() /
+            (prefix + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+        std::filesystem::create_directories(path_);
+    }
+
+    ~TempDir() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    const std::filesystem::path& path() const {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+}  // namespace
 
 TEST_CASE("registry database validates plugin script payloads", "[unit][registry_database][payload]") {
     CHECK(registry_database_is_valid_plugin_script("return { getName = function() return 'x' end }") );
@@ -16,6 +44,8 @@ TEST_CASE("registry database identifies git and non-git sources", "[unit][regist
     CHECK(registry_database_is_git_source("git@github.com:org/repo.git"));
     CHECK(registry_database_is_git_source("ssh://git@github.com/org/repo.git"));
     CHECK(registry_database_is_git_source("https://github.com/org/repo.git?ref=main"));
+    CHECK(registry_database_is_git_source("https://github.com/org/repo"));
+    CHECK(registry_database_is_git_source("https://github.com/org/repo?ref=main"));
     CHECK_FALSE(registry_database_is_git_source("https://example.test/plugin.lua"));
     CHECK_FALSE(registry_database_is_git_source("/tmp/plugin.lua"));
 }
@@ -23,10 +53,13 @@ TEST_CASE("registry database identifies git and non-git sources", "[unit][regist
 TEST_CASE("registry database normalizes git source url and strips query fragments", "[unit][registry_database][source]") {
     CHECK(registry_database_git_source_url("git+https://github.com/org/repo.git") == "https://github.com/org/repo.git");
     CHECK(registry_database_git_source_url("https://github.com/org/repo.git") == "https://github.com/org/repo.git");
+    CHECK(registry_database_git_source_url("https://github.com/org/repo?ref=main") == "https://github.com/org/repo");
     CHECK(registry_database_strip_query_fragment("https://github.com/org/repo.git?ref=main#frag") == "https://github.com/org/repo.git");
     CHECK(registry_database_git_source_ref("git+https://github.com/org/repo.git?ref=v1.2.3") == "v1.2.3");
     CHECK(registry_database_git_source_ref("https://github.com/org/repo.git#v2.0.0") == "v2.0.0");
+    CHECK(registry_database_git_source_ref("https://github.com/org/repo?ref=v1.2.3") == "v1.2.3");
     CHECK(registry_database_git_source_with_ref("git+https://github.com/org/repo.git", "v1.2.3") == "git+https://github.com/org/repo.git?ref=v1.2.3");
+    CHECK(registry_database_git_source_with_ref("https://github.com/org/repo", "v1.2.3") == "https://github.com/org/repo?ref=v1.2.3");
 }
 
 TEST_CASE("registry database extracts git tags from ls-remote output", "[unit][registry_database][source]") {
@@ -101,6 +134,7 @@ TEST_CASE("registry database record serialization round-trips escaped fields", "
     record.name = "dnf";
     record.source = "https://example.test/plugin.lua";
     record.alias = false;
+    record.originPath = "registry/d/dnf.json";
     record.description = "line1\nline2";
     record.role = "package-manager";
     record.capabilities = {"exec", "network"};
@@ -122,6 +156,7 @@ TEST_CASE("registry database record serialization round-trips escaped fields", "
     CHECK(parsed->name == "dnf");
     CHECK(parsed->source == record.source);
     CHECK_FALSE(parsed->alias);
+    CHECK(parsed->originPath == record.originPath);
     CHECK(parsed->description == record.description);
     CHECK(parsed->role == record.role);
     CHECK(parsed->capabilities == record.capabilities);
@@ -181,4 +216,36 @@ TEST_CASE("registry database alias records may omit script payload", "[unit][reg
     CHECK(parsed->alias);
     CHECK(parsed->source == "apt");
     CHECK(parsed->script.empty());
+}
+
+TEST_CASE("registry database stores sync metadata in dedicated meta db", "[unit][registry_database][meta]") {
+    TempDir tempDir{"reqpack-registry-meta"};
+    ReqPackConfig config;
+    config.registry.databasePath = (tempDir.path() / "registry-db").string();
+    config.registry.sources["yum"] = RegistrySourceEntry{
+        .source = "dnf",
+        .alias = true,
+        .description = "Alias",
+    };
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+    CHECK_FALSE(database.getMetaValue("lastCommit").has_value());
+    REQUIRE(database.putMetaValue("lastCommit", "abc123"));
+    REQUIRE(database.putMetaValue("branch", "main"));
+
+    REQUIRE(database.getRecord("yum").has_value());
+    CHECK(database.getRecord("yum")->source == "dnf");
+    REQUIRE(database.getMetaValue("lastCommit").has_value());
+    CHECK(database.getMetaValue("lastCommit").value() == "abc123");
+    REQUIRE(database.getMetaValue("branch").has_value());
+    CHECK(database.getMetaValue("branch").value() == "main");
+
+    RegistryDatabase reopened(config);
+    REQUIRE(reopened.ensureReady());
+    REQUIRE(reopened.getRecord("yum").has_value());
+    REQUIRE(reopened.getMetaValue("lastCommit").has_value());
+    CHECK(reopened.getMetaValue("lastCommit").value() == "abc123");
+    REQUIRE(reopened.getMetaValue("branch").has_value());
+    CHECK(reopened.getMetaValue("branch").value() == "main");
 }

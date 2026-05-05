@@ -27,6 +27,8 @@ extern char** environ;
 
 namespace {
 
+constexpr const char* DEFAULT_MAIN_REGISTRY_URL = "https://github.com/Coditary/rqp-registry.git";
+
 struct StdinCommand {
     std::size_t lineNumber{0};
     std::string text;
@@ -875,7 +877,8 @@ int main(int argc, char* argv[]) {
     Cli cli;
     const ReqPackConfigOverrides configOverrides = cli.parseConfigOverrides(argc, argv);
     const std::filesystem::path configPath = configOverrides.configPath.value_or(default_reqpack_config_path());
-    const ReqPackConfig defaults = default_reqpack_config();
+    ReqPackConfig defaults = default_reqpack_config();
+    defaults.registry.remoteUrl = DEFAULT_MAIN_REGISTRY_URL;
     const ReqPackConfig fileConfig = load_config_from_lua(configPath, defaults);
     ReqPackConfig config = apply_config_overrides(fileConfig, configOverrides);
     const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";

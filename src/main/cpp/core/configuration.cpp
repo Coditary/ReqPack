@@ -979,7 +979,7 @@ RegistrySourceMap load_registry_sources_from_lua(const std::filesystem::path& so
     return load_registry_sources_from_table(sources.has_value() ? sources.value() : root);
 }
 
-RegistrySourceMap collect_registry_sources(const ReqPackConfig& config) {
+RegistrySourceMap collect_explicit_registry_sources(const ReqPackConfig& config) {
     RegistrySourceMap sources;
 
     for (const auto& [name, source] : config.downloader.pluginSources) {
@@ -987,6 +987,11 @@ RegistrySourceMap collect_registry_sources(const ReqPackConfig& config) {
     }
 
     merge_registry_sources(sources, config.registry.sources);
+    return sources;
+}
+
+RegistrySourceMap collect_registry_sources(const ReqPackConfig& config) {
+    RegistrySourceMap sources = collect_explicit_registry_sources(config);
     merge_registry_sources(sources, load_registry_sources_from_lua(registry_source_file_path(config.registry.databasePath)));
 
     if (!config.registry.overlayPath.empty()) {
@@ -1212,6 +1217,8 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
     if (registry.has_value()) {
         assign_if_present(registry.value(), "databasePath", config.registry.databasePath);
         assign_if_present(registry.value(), "remoteUrl", config.registry.remoteUrl);
+        assign_if_present(registry.value(), "remoteBranch", config.registry.remoteBranch);
+        assign_if_present(registry.value(), "remotePluginsPath", config.registry.remotePluginsPath);
         assign_if_present(registry.value(), "overlayPath", config.registry.overlayPath);
         assign_if_present(registry.value(), "pluginDirectory", config.registry.pluginDirectory);
         assign_if_present(registry.value(), "autoLoadPlugins", config.registry.autoLoadPlugins);

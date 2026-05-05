@@ -21,7 +21,6 @@ public:
 
 private:
     bool download_to_path(const std::string& source, const std::filesystem::path& targetPath) const;
-    bool ensure_registry_source_file() const;
     std::string resolve_plugin_name(const std::string& system) const;
     std::optional<RegistryRecord> plugin_record_for(const std::string& system) const;
     std::filesystem::path plugin_target_path(const std::string& system) const;

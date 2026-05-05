@@ -200,6 +200,8 @@ using RegistrySourceMap = std::map<std::string, RegistrySourceEntry>;
 struct RegistryConfig {
     std::string databasePath{};
     std::string remoteUrl{};
+    std::string remoteBranch{"main"};
+    std::string remotePluginsPath{"registry"};
     std::string overlayPath{};
     RegistrySourceMap sources{};
     std::string pluginDirectory{};
@@ -427,6 +429,7 @@ std::filesystem::path registry_database_directory(const std::filesystem::path& r
 std::filesystem::path registry_source_file_path(const std::filesystem::path& registryPath);
 
 RegistrySourceMap load_registry_sources_from_lua(const std::filesystem::path& sourcePath);
+RegistrySourceMap collect_explicit_registry_sources(const ReqPackConfig& config);
 RegistrySourceMap collect_registry_sources(const ReqPackConfig& config);
 std::vector<RepositoryEntry> repositories_for_ecosystem(const ReqPackConfig& config, const std::string& ecosystem);
 std::optional<ProxyConfig> proxy_config_for_system(const ReqPackConfig& config, const std::string& system);

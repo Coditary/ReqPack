@@ -76,6 +76,18 @@ local function package_has_update(name)
     return command_exit_code("dnf check-update --quiet " .. shell_quote(name) .. " >/dev/null 2>&1") == 100
 end
 
+local function installed_package_version(name)
+    return command_stdout("rpm -q --qf '%{VERSION}-%{RELEASE}' " .. shell_quote(name) .. " 2>/dev/null")
+end
+
+local function split_name_arch(value)
+    local name, arch = tostring(value or ""):match("^(.-)%.([^.]+)$")
+    if name == nil then
+        return trim(value), ""
+    end
+    return name, arch
+end
+
 function plugin.getName()
     return "Fedora DNF Manager"
 end
@@ -223,12 +235,28 @@ function plugin.update(context, packages)
 end
 
 function plugin.list(context)
-    local result = context.exec.run("dnf repoquery --installed --qf $'%{name}\\t%{version}-%{release}\\n'")
+    local result = context.exec.run("dnf repoquery --installed --qf $'%{name}.%{arch}\\t%{version}-%{release}\\n'")
+    local summaryResult = context.exec.run("dnf repoquery --installed --qf $'%{name}.%{arch}\\t%{summary}\\n'")
+    local summaries = {}
+    for line in (summaryResult.stdout or ""):gmatch("[^\r\n]+") do
+        local qualifiedName, summary = line:match("^(.-)\t(.+)$")
+        if qualifiedName and summary then
+            summaries[trim(qualifiedName)] = trim(summary)
+        end
+    end
+
     local items = {}
     for line in (result.stdout or ""):gmatch("[^\r\n]+") do
-        local name, ver = line:match("^(.-)\t(.+)$")
-        if name and ver then
-            table.insert(items, { name = name, version = ver, description = "Installed RPM" })
+        local qualifiedName, ver = line:match("^(.-)\t(.+)$")
+        if qualifiedName and ver then
+            local name, arch = split_name_arch(trim(qualifiedName))
+            table.insert(items, {
+                name = name,
+                version = trim(ver),
+                type = "package",
+                architecture = arch,
+                summary = summaries[trim(qualifiedName)] or "DNF package"
+            })
         end
     end
     context.events.listed(items)
@@ -236,26 +264,44 @@ function plugin.list(context)
 end
 
 function plugin.outdated(context)
-    -- dnf check-update exits 100 when updates available, 0 when none, non-zero on error
-    local result = context.exec.run("dnf check-update --quiet 2>/dev/null; echo \"EXIT:$?\"")
+    local result = context.exec.run("dnf check-update --quiet 2>/dev/null")
     local stdout = result.stdout or ""
-    local exit_code = tonumber(stdout:match("EXIT:(%d+)$")) or 1
+    local exit_code = result.exitCode or 1
     if exit_code ~= 0 and exit_code ~= 100 then
         context.log.warn("dnf check-update failed with exit code " .. tostring(exit_code))
         return {}
     end
+
+    local installed = {}
+    for _, item in ipairs(plugin.list(context)) do
+        local key = item.name
+        if item.architecture ~= nil and item.architecture ~= "" then
+            key = key .. "." .. item.architecture
+        end
+        installed[key] = item
+    end
+
     local items = {}
     for line in stdout:gmatch("[^\r\n]+") do
-        if line:match("^EXIT:") then break end
-        -- output format: "name.arch    new-version    repo"
         local name, ver = line:match("^(%S+)%s+(%S+)%s")
         if name and ver then
-            -- strip architecture suffix (e.g. ".x86_64", ".noarch")
-            local baseName = name:match("^(.-)%.[^.]+$") or name
+            local qualifiedName = trim(name)
+            local baseName, arch = split_name_arch(qualifiedName)
+            local installedItem = installed[qualifiedName] or installed[baseName] or {}
+            local installedVersion = installed_package_version(qualifiedName)
+            if installedVersion == "" and qualifiedName ~= baseName then
+                installedVersion = installed_package_version(baseName)
+            end
+            if installedVersion == "" then
+                installedVersion = installedItem.version or ""
+            end
             table.insert(items, {
                 name = baseName,
-                version = ver,
-                description = "Update available"
+                version = installedVersion,
+                latestVersion = ver,
+                type = installedItem.type or "package",
+                architecture = arch,
+                summary = installedItem.summary or installedItem.description or "DNF package"
             })
         end
     end
@@ -265,14 +311,26 @@ end
 
 function plugin.search(context, prompt)
     local result = context.exec.run("dnf search " .. shell_quote(prompt) .. " --quiet")
+    local versionResult = context.exec.run("dnf repoquery --qf $'%{name}.%{arch}\\t%{version}-%{release}\\n' " .. shell_quote(prompt) .. " 2>/dev/null")
+    local versions = {}
+    for line in (versionResult.stdout or ""):gmatch("[^\r\n]+") do
+        local qualifiedName, version = line:match("^(.-)\t(.+)$")
+        if qualifiedName and version then
+            versions[trim(qualifiedName)] = trim(version)
+        end
+    end
+
     local items = {}
     for line in (result.stdout or ""):gmatch("[^\r\n]+") do
-        local name = line:match("^(%S+)")
+        local name, summary = line:match("^%s*(%S+)%s*\t%s*(.+)$")
         if name ~= nil and name ~= "Last" and name ~= "Matched" then
+            local baseName, arch = split_name_arch(name)
             table.insert(items, {
-                name = name,
-                version = "repo",
-                description = trim(line)
+                name = baseName,
+                version = versions[trim(name)] or "repo",
+                type = "package",
+                architecture = arch,
+                summary = trim(summary or line)
             })
         end
     end

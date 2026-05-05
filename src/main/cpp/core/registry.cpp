@@ -252,11 +252,22 @@ std::optional<PluginSecurityMetadata> Registry::getPluginSecurityMetadata(const 
                 m_states[resolvedName] = PluginState::FAILED;
                 return std::nullopt;
             }
-            if (!registry_record_matches_expected_hashes(record.value())) {
+
+            RegistryRecord materializedRecord = record.value();
+            if (materializedRecord.script.empty() && !materializedRecord.alias) {
+                const std::optional<RegistryRecord> refreshed = this->database.refreshRecord(resolvedName);
+                if (!refreshed.has_value()) {
+                    m_states[resolvedName] = PluginState::FAILED;
+                    return std::nullopt;
+                }
+                materializedRecord = refreshed.value();
+            }
+
+            if (!registry_record_matches_expected_hashes(materializedRecord)) {
                 m_states[resolvedName] = PluginState::FAILED;
                 return std::nullopt;
             }
-            this->materializePluginScript(record.value());
+            this->materializePluginScript(materializedRecord);
             this->scanDirectory(this->config.registry.pluginDirectory);
         }
     }
@@ -407,11 +418,22 @@ bool Registry::loadPlugin(const std::string& name) {
                 m_states[resolvedName] = PluginState::FAILED;
                 return false;
             }
-            if (!registry_record_matches_expected_hashes(record.value())) {
+
+            RegistryRecord materializedRecord = record.value();
+            if (materializedRecord.script.empty() && !materializedRecord.alias) {
+                const std::optional<RegistryRecord> refreshed = this->database.refreshRecord(resolvedName);
+                if (!refreshed.has_value()) {
+                    m_states[resolvedName] = PluginState::FAILED;
+                    return false;
+                }
+                materializedRecord = refreshed.value();
+            }
+
+            if (!registry_record_matches_expected_hashes(materializedRecord)) {
                 m_states[resolvedName] = PluginState::FAILED;
                 return false;
             }
-            this->materializePluginScript(record.value());
+            this->materializePluginScript(materializedRecord);
             this->scanDirectory(this->config.registry.pluginDirectory);
         }
     }

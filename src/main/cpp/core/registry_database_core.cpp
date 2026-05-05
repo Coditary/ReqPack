@@ -20,6 +20,29 @@ bool starts_with(const std::string& value, std::string_view prefix) {
     return value.rfind(prefix, 0) == 0;
 }
 
+bool is_github_repository_https_url(const std::string& normalized) {
+    if (!starts_with(normalized, "https://github.com/")) {
+        return false;
+    }
+
+    const std::string path = normalized.substr(std::string{"https://github.com/"}.size());
+    if (path.empty()) {
+        return false;
+    }
+
+    std::size_t slashCount = 0;
+    bool hasSegment = false;
+    for (char character : path) {
+        if (character == '/') {
+            ++slashCount;
+            continue;
+        }
+        hasSegment = true;
+    }
+
+    return hasSegment && slashCount == 1 && path.front() != '/' && path.back() != '/';
+}
+
 std::string read_text_file(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
@@ -244,7 +267,8 @@ bool registry_database_is_git_source(const std::string& source) {
            starts_with(normalized, "git@") ||
            starts_with(normalized, "git://") ||
            starts_with(normalized, "ssh://") ||
-           normalized.ends_with(".git");
+           normalized.ends_with(".git") ||
+           is_github_repository_https_url(normalized);
 }
 
 std::string registry_database_git_source_url(const std::string& source) {
@@ -406,6 +430,7 @@ std::string registry_database_serialize_record(const RegistryRecord& record) {
     std::ostringstream stream;
     stream << "source=" << registry_database_escape_field(record.source) << '\n';
     stream << "alias=" << (record.alias ? "1" : "0") << '\n';
+    stream << "originPath=" << registry_database_escape_field(record.originPath) << '\n';
     stream << "description=" << registry_database_escape_field(record.description) << '\n';
     stream << "role=" << registry_database_escape_field(record.role) << '\n';
     stream << "capabilities=" << registry_database_escape_field(join_lines(record.capabilities)) << '\n';
@@ -453,6 +478,8 @@ std::optional<RegistryRecord> registry_database_deserialize_record(const std::st
             } else {
                 return std::nullopt;
             }
+        } else if (key == "originPath") {
+            record.originPath = value;
         } else if (key == "description") {
             record.description = value;
         } else if (key == "role") {

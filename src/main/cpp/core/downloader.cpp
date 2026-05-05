@@ -117,16 +117,6 @@ bool Downloader::downloadPlugin(const std::string& system) const {
     if (!record.has_value() && resolvedSystem != system) {
         record = this->plugin_record_for(resolvedSystem);
     }
-    if (!record.has_value() && !this->ensure_registry_source_file()) {
-        return false;
-    }
-
-    if (!record.has_value()) {
-        record = this->plugin_record_for(system);
-        if (!record.has_value() && resolvedSystem != system) {
-            record = this->plugin_record_for(resolvedSystem);
-        }
-    }
 
     if (!record.has_value() || record->source.empty()) {
         return false;
@@ -134,6 +124,14 @@ bool Downloader::downloadPlugin(const std::string& system) const {
 
     if (!registry_record_passes_thin_layer_trust(this->config, record.value())) {
         return false;
+    }
+
+    if (record->script.empty() && !record->alias) {
+        const std::optional<RegistryRecord> refreshed = this->database->refreshRecord(resolvedSystem);
+        if (!refreshed.has_value()) {
+            return false;
+        }
+        record = refreshed;
     }
 
     const std::filesystem::path targetPath = this->plugin_target_path(resolvedSystem);
@@ -248,19 +246,6 @@ bool Downloader::download_to_path(const std::string& source, const std::filesyst
     }
 
     return true;
-}
-
-bool Downloader::ensure_registry_source_file() const {
-    const std::filesystem::path registrySourcePath = registry_source_file_path(this->config.registry.databasePath);
-    if (std::filesystem::exists(registrySourcePath)) {
-        return true;
-    }
-
-    if (this->config.registry.remoteUrl.empty()) {
-        return true;
-    }
-
-    return this->download_to_path(this->config.registry.remoteUrl, registrySourcePath);
 }
 
 std::string Downloader::resolve_plugin_name(const std::string& system) const {

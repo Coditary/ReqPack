@@ -74,6 +74,7 @@ set(SOURCES
     src/main/cpp/core/downloader_core.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/registry_json_parser.cpp
     src/main/cpp/core/rq_package.cpp
     src/main/cpp/core/rq_repository.cpp
     src/main/cpp/core/rqp_state_store.cpp
@@ -157,6 +158,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/transaction_database_core.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/registry_json_parser.cpp
     src/main/cpp/core/history_manager.cpp
     src/main/cpp/core/version_compare.cpp
     src/main/cpp/core/vulnerability_database.cpp
@@ -175,6 +177,7 @@ add_executable(core_unit_tests
     tests/unit/core/manifest_loader/core_tests.cpp
     tests/unit/core/planner/core_tests.cpp
     tests/unit/core/registry_database/core_tests.cpp
+    tests/unit/core/registry_json_parser/core_tests.cpp
     tests/unit/core/rq_package/core_tests.cpp
     tests/unit/core/rq_repository/core_tests.cpp
     tests/unit/core/rqp_state_store/core_tests.cpp
@@ -201,6 +204,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/rqp_state_store.cpp
     src/main/cpp/core/registry_database.cpp
     src/main/cpp/core/registry_database_core.cpp
+    src/main/cpp/core/registry_json_parser.cpp
     src/main/cpp/core/security_gateway_service.cpp
     src/main/cpp/core/audit_exporter.cpp
     src/main/cpp/core/sbom_exporter.cpp

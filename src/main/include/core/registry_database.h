@@ -14,6 +14,7 @@ struct RegistryRecord {
     std::string name;
     std::string source;
     bool alias{false};
+    std::string originPath;
     std::string description;
     std::string role;
     std::vector<std::string> capabilities;
@@ -34,6 +35,7 @@ class RegistryDatabase {
     mutable std::mutex mutex;
     mutable MDB_env* env{nullptr};
     mutable MDB_dbi dbi{0};
+    mutable MDB_dbi metaDbi{0};
     mutable bool initialized{false};
     mutable bool bootstrapped{false};
 
@@ -50,11 +52,22 @@ public:
     std::optional<RegistryRecord> refreshRecord(const std::string& name, bool preferLatestTag = false) const;
     std::vector<RegistryRecord> getAllRecords() const;
     bool cacheScript(const std::string& name, const std::string& script) const;
+    std::optional<std::string> getMetaValue(const std::string& key) const;
+    bool putMetaValue(const std::string& key, const std::string& value) const;
 
 private:
     bool initStorage() const;
     bool bootstrap_registry() const;
+    bool sync_records(
+        const std::vector<RegistryRecord>& records,
+        bool fetchPayloads,
+        bool replaceMissing,
+        const std::map<std::string, std::string>& metaValues = {},
+        const std::vector<std::string>& originPathsToDelete = {}
+    ) const;
     bool write_records(const RegistrySourceMap& sources) const;
+    std::vector<RegistryRecord> load_all_records() const;
+    std::optional<std::string> load_meta_value(const std::string& key) const;
     std::optional<RegistryRecord> load_record(const std::string& name) const;
     bool put_record(const RegistryRecord& record) const;
 };

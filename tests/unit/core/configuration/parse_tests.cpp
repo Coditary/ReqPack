@@ -108,6 +108,9 @@ TEST_CASE("configuration honors explicit XDG directories", "[unit][configuration
     CHECK(reqpack_cache_directory() == tempDir.path() / "cache" / "reqpack");
     CHECK(std::filesystem::path(config.registry.databasePath) == tempDir.path() / "data" / "reqpack" / "registry");
     CHECK(std::filesystem::path(config.registry.pluginDirectory) == tempDir.path() / "data" / "reqpack" / "plugins");
+    CHECK(config.registry.remoteUrl.empty());
+    CHECK(config.registry.remoteBranch == "main");
+    CHECK(config.registry.remotePluginsPath == "registry");
     CHECK(std::filesystem::path(config.history.historyPath) == tempDir.path() / "data" / "reqpack" / "history");
     CHECK(std::filesystem::path(config.rqp.statePath) == tempDir.path() / "data" / "reqpack" / "rqp" / "state");
     CHECK(std::filesystem::path(config.selfUpdate.repoPath) == tempDir.path() / "data" / "reqpack" / "self" / "repo");
@@ -352,6 +355,9 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
             },
             registry = {
                 databasePath = "~/registry-db",
+                remoteUrl = "https://github.com/example/reqpack-plugin-registry.git",
+                remoteBranch = "stable",
+                remotePluginsPath = "main-plugins",
                 pluginDirectory = "~/plugins",
                 sources = {
                     DNF = "https://example.test/dnf.lua",
@@ -433,6 +439,9 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     REQUIRE(config.downloader.pluginSources.contains("maven"));
     CHECK(config.downloader.pluginSources.at("maven") == "https://example.test/maven.lua");
     CHECK(std::filesystem::path(config.registry.databasePath) == home / "registry-db");
+    CHECK(config.registry.remoteUrl == "https://github.com/example/reqpack-plugin-registry.git");
+    CHECK(config.registry.remoteBranch == "stable");
+    CHECK(config.registry.remotePluginsPath == "main-plugins");
     CHECK(std::filesystem::path(config.registry.pluginDirectory) == home / "plugins");
     REQUIRE(config.registry.sources.contains("dnf"));
     CHECK(config.registry.sources.at("dnf").source == "https://example.test/dnf.lua");

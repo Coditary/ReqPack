@@ -669,6 +669,7 @@ std::vector<PackageInfo> RqPlugin::list(const PluginCallContext& context) {
     std::map<std::string, std::string> installedVersions;
     std::map<std::string, RegistryRecord> recordsByName;
     std::vector<RegistryRecord> aliasRecords;
+    RqpStateStore stateStore(config_);
 
     RegistryDatabase registryDatabase(config_);
     if (registryDatabase.ensureReady()) {
@@ -707,6 +708,10 @@ std::vector<PackageInfo> RqPlugin::list(const PluginCallContext& context) {
         "builtin",
         this->getName()
     ));
+
+    for (const RqpInstalledPackage& installed : stateStore.listInstalled()) {
+        appendPackage(packageInfoFromInstalled(installed));
+    }
 
     for (const auto& [pluginId, scriptPath] : installed_plugin_script_paths(config_)) {
         const RegistryRecord* record = nullptr;

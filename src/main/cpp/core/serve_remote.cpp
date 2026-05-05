@@ -504,7 +504,8 @@ void set_session_protocol(RemoteServerState& state, int sessionId, ConnectionPro
 
 bool reload_remote_state(RemoteServerState& state, Logger& logger, std::string& error) {
     try {
-        const ReqPackConfig defaults = default_reqpack_config();
+        ReqPackConfig defaults = default_reqpack_config();
+        defaults.registry.remoteUrl = "https://github.com/Coditary/rqp-registry.git";
         ReqPackConfig config = load_config_from_lua(state.configPath, defaults);
         config = apply_config_overrides(config, state.configOverrides);
         const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";

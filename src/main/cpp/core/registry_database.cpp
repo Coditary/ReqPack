@@ -1,5 +1,6 @@
 #include "core/registry_database.h"
 #include "core/registry_database_core.h"
+#include "core/registry_json_parser.h"
 #include "core/version_compare.h"
 
 #include <curl/curl.h>
@@ -13,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <optional>
+#include <set>
 #include <spawn.h>
 #include <sstream>
 #include <string_view>
@@ -25,8 +27,14 @@ extern char** environ;
 namespace {
 
 constexpr std::string_view META_SEPARATOR = "\n---\n";
-constexpr unsigned int LMDB_MAX_DATABASES = 1;
+constexpr unsigned int LMDB_MAX_DATABASES = 4;
 constexpr std::size_t LMDB_MAP_SIZE = 32 * 1024 * 1024;
+constexpr const char* REGISTRY_META_DATABASE_NAME = "meta";
+constexpr const char* REGISTRY_META_KEY_REPO_URL = "repoUrl";
+constexpr const char* REGISTRY_META_KEY_BRANCH = "branch";
+constexpr const char* REGISTRY_META_KEY_PLUGINS_PATH = "remotePluginsPath";
+constexpr const char* REGISTRY_META_KEY_SCHEMA_VERSION = "schemaVersion";
+constexpr const char* REGISTRY_META_KEY_LAST_COMMIT = "lastCommit";
 
 std::string read_text_file(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
@@ -41,6 +49,162 @@ std::string read_text_file(const std::filesystem::path& path) {
 
 bool starts_with(const std::string& value, std::string_view prefix) {
     return value.rfind(prefix, 0) == 0;
+}
+
+bool run_process_quiet(const std::vector<std::string>& arguments);
+std::optional<std::string> run_process_capture_stdout(const std::vector<std::string>& arguments);
+std::string trim_copy(const std::string& value);
+
+bool is_json_registry_remote(const ReqPackConfig& config) {
+    return registry_database_is_git_source(config.registry.remoteUrl) && !config.registry.remotePluginsPath.empty();
+}
+
+std::vector<std::filesystem::path> collect_registry_json_files(const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> files;
+    std::error_code error;
+    if (!std::filesystem::exists(root, error) || error) {
+        return files;
+    }
+
+    for (auto it = std::filesystem::recursive_directory_iterator(root, error);
+         it != std::filesystem::recursive_directory_iterator();
+         it.increment(error)) {
+        if (error) {
+            return {};
+        }
+        if (!it->is_regular_file() || it->path().extension() != ".json") {
+            continue;
+        }
+        files.push_back(it->path());
+    }
+
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+std::string path_to_generic_string(const std::filesystem::path& path) {
+    return path.lexically_normal().generic_string();
+}
+
+bool path_has_json_extension(const std::string& path) {
+    return std::filesystem::path(path).extension() == ".json";
+}
+
+std::optional<std::string> git_repository_head_commit(const std::filesystem::path& repositoryPath) {
+    const std::optional<std::string> output = run_process_capture_stdout({
+        "git", "-C", repositoryPath.string(), "rev-parse", "--verify", "HEAD"
+    });
+    if (!output.has_value()) {
+        return std::nullopt;
+    }
+    return trim_copy(output.value());
+}
+
+bool git_commit_exists(const std::filesystem::path& repositoryPath, const std::string& commit) {
+    if (commit.empty()) {
+        return false;
+    }
+    return run_process_quiet({
+        "git", "-C", repositoryPath.string(), "rev-parse", "--verify", "--quiet", commit + "^{commit}"
+    });
+}
+
+struct RegistryDiffEntry {
+    char status{'?'};
+    std::string path;
+};
+
+std::optional<std::vector<RegistryDiffEntry>> git_registry_diff(
+    const std::filesystem::path& repositoryPath,
+    const std::string& oldCommit,
+    const std::string& newCommit,
+    const std::string& pluginsPath
+) {
+    const std::optional<std::string> output = run_process_capture_stdout({
+        "git",
+        "-C",
+        repositoryPath.string(),
+        "diff",
+        "--name-status",
+        oldCommit + ".." + newCommit,
+        "--",
+        pluginsPath
+    });
+    if (!output.has_value()) {
+        return std::nullopt;
+    }
+
+    std::vector<RegistryDiffEntry> entries;
+    std::istringstream stream(output.value());
+    std::string line;
+    while (std::getline(stream, line)) {
+        line = trim_copy(line);
+        if (line.empty()) {
+            continue;
+        }
+
+        std::istringstream lineStream(line);
+        std::string status;
+        std::string path;
+        if (!(lineStream >> status)) {
+            return std::nullopt;
+        }
+        if (status.empty()) {
+            return std::nullopt;
+        }
+
+        if (status[0] == 'R' || status[0] == 'C') {
+            std::string oldPath;
+            std::string newPath;
+            if (!(lineStream >> oldPath >> newPath)) {
+                return std::nullopt;
+            }
+            path = newPath;
+            entries.push_back({status[0], oldPath});
+            entries.push_back({'A', newPath});
+            continue;
+        }
+
+        if (!(lineStream >> path)) {
+            return std::nullopt;
+        }
+        entries.push_back({status[0], path});
+    }
+
+    return entries;
+}
+
+std::vector<RegistryRecord> registry_records_for_origin(
+    const std::vector<RegistryRecord>& records,
+    const std::string& originPath
+) {
+    std::vector<RegistryRecord> matches;
+    for (const RegistryRecord& record : records) {
+        if (record.originPath == originPath) {
+            matches.push_back(record);
+        }
+    }
+    return matches;
+}
+
+bool registry_records_equal(const RegistryRecord& left, const RegistryRecord& right) {
+    return left.name == right.name &&
+           left.source == right.source &&
+           left.alias == right.alias &&
+           left.originPath == right.originPath &&
+           left.description == right.description &&
+           left.role == right.role &&
+           left.capabilities == right.capabilities &&
+           left.ecosystemScopes == right.ecosystemScopes &&
+           left.writeScopes == right.writeScopes &&
+           left.networkScopes == right.networkScopes &&
+           left.privilegeLevel == right.privilegeLevel &&
+           left.scriptSha256 == right.scriptSha256 &&
+           left.bootstrapSha256 == right.bootstrapSha256 &&
+           left.script == right.script &&
+           left.bootstrapScript == right.bootstrapScript &&
+           left.bundlePath == right.bundlePath &&
+           left.bundleSource == right.bundleSource;
 }
 
 std::optional<std::pair<std::string, std::string>> fetch_plugin_payload(
@@ -306,8 +470,13 @@ bool sync_git_repository(const ReqPackConfig& config, const std::string& source,
             }
         } else {
             const bool fetched = run_process_quiet({"git", "-C", repositoryPath.string(), "fetch", "--tags", "--quiet", "origin"});
-            const bool checkedOut = fetched && run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef});
+            const bool checkedOut = fetched &&
+                (run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef}) ||
+                 run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", "origin/" + requestedRef}));
             if (checkedOut) {
+                if (run_process_quiet({"git", "-C", repositoryPath.string(), "rev-parse", "--verify", "--quiet", "origin/" + requestedRef})) {
+                    (void)run_process_quiet({"git", "-C", repositoryPath.string(), "reset", "--hard", "origin/" + requestedRef});
+                }
                 return true;
             }
         }
@@ -331,9 +500,10 @@ bool sync_git_repository(const ReqPackConfig& config, const std::string& source,
         "--quiet",
         repositoryUrl,
         repositoryPath.string()
-    }) && (requestedRef.empty() || run_process_quiet({
-        "git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef
-    }));
+    }) && (requestedRef.empty() || (
+        run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef}) ||
+        run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", "origin/" + requestedRef})
+    ));
 }
 
 std::optional<std::pair<std::string, std::string>> read_plugin_repository(const std::filesystem::path& repositoryPath, const std::string& pluginName) {
@@ -518,6 +688,38 @@ bool put_record_into_transaction(MDB_txn* transaction, MDB_dbi database, const R
     return mdb_put(transaction, database, &key, &value, 0) == MDB_SUCCESS;
 }
 
+bool delete_record_from_transaction(MDB_txn* transaction, MDB_dbi database, const std::string& name) {
+    const std::string normalizedName = registry_database_to_lower_copy(name);
+    MDB_val key{normalizedName.size(), const_cast<char*>(normalizedName.data())};
+    const int result = mdb_del(transaction, database, &key, nullptr);
+    return result == MDB_SUCCESS || result == MDB_NOTFOUND;
+}
+
+std::optional<std::string> get_string_from_transaction(MDB_txn* transaction, MDB_dbi database, const std::string& key) {
+    MDB_val keyValue{key.size(), const_cast<char*>(key.data())};
+    MDB_val value;
+    if (mdb_get(transaction, database, &keyValue, &value) != MDB_SUCCESS) {
+        return std::nullopt;
+    }
+
+    return std::string(static_cast<const char*>(value.mv_data), value.mv_size);
+}
+
+bool put_string_into_transaction(MDB_txn* transaction, MDB_dbi database, const std::string& key, const std::string& value) {
+    MDB_val keyValue{key.size(), const_cast<char*>(key.data())};
+    MDB_val storedValue{value.size(), const_cast<char*>(value.data())};
+    return mdb_put(transaction, database, &keyValue, &storedValue, 0) == MDB_SUCCESS;
+}
+
+bool put_meta_values_into_transaction(MDB_txn* transaction, MDB_dbi database, const std::map<std::string, std::string>& values) {
+    for (const auto& [key, value] : values) {
+        if (!put_string_into_transaction(transaction, database, key, value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 RegistryDatabase::RegistryDatabase(const ReqPackConfig& config) : config(config) {}
@@ -525,7 +727,14 @@ RegistryDatabase::RegistryDatabase(const ReqPackConfig& config) : config(config)
 RegistryDatabase::~RegistryDatabase() {
     std::lock_guard<std::mutex> lock(this->mutex);
     if (this->initialized && this->env != nullptr) {
-        mdb_dbi_close(this->env, this->dbi);
+        if (this->metaDbi != 0) {
+            mdb_dbi_close(this->env, this->metaDbi);
+            this->metaDbi = 0;
+        }
+        if (this->dbi != 0) {
+            mdb_dbi_close(this->env, this->dbi);
+            this->dbi = 0;
+        }
         mdb_env_close(this->env);
         this->env = nullptr;
         this->initialized = false;
@@ -594,8 +803,22 @@ bool RegistryDatabase::initStorage() const {
         return false;
     }
 
+    if (mdb_dbi_open(transaction, REGISTRY_META_DATABASE_NAME, MDB_CREATE, &this->metaDbi) != MDB_SUCCESS) {
+        mdb_txn_abort(transaction);
+        mdb_env_close(this->env);
+        this->env = nullptr;
+        return false;
+    }
+
     if (mdb_txn_commit(transaction) != MDB_SUCCESS) {
-        mdb_dbi_close(this->env, this->dbi);
+        if (this->metaDbi != 0) {
+            mdb_dbi_close(this->env, this->metaDbi);
+            this->metaDbi = 0;
+        }
+        if (this->dbi != 0) {
+            mdb_dbi_close(this->env, this->dbi);
+            this->dbi = 0;
+        }
         mdb_env_close(this->env);
         this->env = nullptr;
         return false;
@@ -660,9 +883,9 @@ std::optional<RegistryRecord> RegistryDatabase::refreshRecord(const std::string&
     return refreshed;
 }
 
-std::vector<RegistryRecord> RegistryDatabase::getAllRecords() const {
+std::vector<RegistryRecord> RegistryDatabase::load_all_records() const {
     std::vector<RegistryRecord> records;
-    if (!this->ensureReady()) {
+    if (!this->initialized) {
         return records;
     }
 
@@ -696,6 +919,13 @@ std::vector<RegistryRecord> RegistryDatabase::getAllRecords() const {
     return records;
 }
 
+std::vector<RegistryRecord> RegistryDatabase::getAllRecords() const {
+    if (!this->ensureReady()) {
+        return {};
+    }
+    return this->load_all_records();
+}
+
 bool RegistryDatabase::cacheScript(const std::string& name, const std::string& script) const {
     if (!this->ensureReady()) {
         return false;
@@ -717,56 +947,66 @@ bool RegistryDatabase::cacheScript(const std::string& name, const std::string& s
     return this->put_record(record.value());
 }
 
-bool RegistryDatabase::bootstrap_registry() const {
-    const std::filesystem::path registrySourcePath = registry_source_file_path(this->config.registry.databasePath);
-    if (!std::filesystem::exists(registrySourcePath) && !this->config.registry.remoteUrl.empty()) {
-        const std::optional<std::string> remoteRegistry = fetch_text(this->config, this->config.registry.remoteUrl);
-        if (remoteRegistry.has_value()) {
-            std::filesystem::create_directories(registrySourcePath.parent_path());
-            std::ofstream stream(registrySourcePath, std::ios::binary | std::ios::trunc);
-            if (stream) {
-                stream << *remoteRegistry;
-            }
-        }
+std::optional<std::string> RegistryDatabase::load_meta_value(const std::string& key) const {
+    if (key.empty() || !this->initialized) {
+        return std::nullopt;
     }
 
-    return this->write_records(collect_registry_sources(this->config));
+    std::lock_guard<std::mutex> lock(this->mutex);
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(this->env, nullptr, MDB_RDONLY, &transaction) != MDB_SUCCESS) {
+        return std::nullopt;
+    }
+
+    const std::optional<std::string> value = get_string_from_transaction(transaction, this->metaDbi, key);
+    mdb_txn_abort(transaction);
+    return value;
 }
 
-bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
+std::optional<std::string> RegistryDatabase::getMetaValue(const std::string& key) const {
+    if (key.empty() || !this->ensureReady()) {
+        return std::nullopt;
+    }
+    return this->load_meta_value(key);
+}
+
+bool RegistryDatabase::putMetaValue(const std::string& key, const std::string& value) const {
+    if (key.empty() || !this->ensureReady()) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(this->mutex);
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(this->env, nullptr, 0, &transaction) != MDB_SUCCESS) {
+        return false;
+    }
+
+    if (!put_string_into_transaction(transaction, this->metaDbi, key, value)) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
+    return mdb_txn_commit(transaction) == MDB_SUCCESS;
+}
+
+bool RegistryDatabase::sync_records(
+    const std::vector<RegistryRecord>& records,
+    const bool fetchPayloads,
+    const bool replaceMissing,
+    const std::map<std::string, std::string>& metaValues,
+    const std::vector<std::string>& originPathsToDelete
+) const {
     if (!this->initialized) {
         return false;
     }
 
-    std::vector<RegistryRecord> recordsToWrite;
-    recordsToWrite.reserve(sources.size());
+    std::map<std::string, RegistryRecord> desiredRecords;
+    for (RegistryRecord record : records) {
+        record.name = registry_database_to_lower_copy(record.name);
 
-    for (const auto& [name, entry] : sources) {
-        RegistryRecord record;
-        record.name = registry_database_to_lower_copy(name);
-        record.source = entry.source;
-        record.alias = entry.alias;
-        record.description = entry.description;
-        record.role = entry.role;
-        record.capabilities = entry.capabilities;
-        record.ecosystemScopes = entry.ecosystemScopes;
-        record.writeScopes = entry.writeScopes;
-        record.networkScopes = entry.networkScopes;
-        record.privilegeLevel = entry.privilegeLevel;
-        record.scriptSha256 = entry.scriptSha256;
-        record.bootstrapSha256 = entry.bootstrapSha256;
-        record.bundleSource = false;
-        record.bundlePath.clear();
-
-        bool needsWrite = true;
-        bool needsPayloadRefresh = !record.alias;
         if (const std::optional<RegistryRecord> existing = this->load_record(record.name)) {
-            const bool sourceChanged = existing->source != record.source || existing->alias != record.alias;
-            if (!sourceChanged) {
-                record.script = existing->script;
-                record.bootstrapScript = existing->bootstrapScript;
-                record.bundleSource = existing->bundleSource;
-                record.bundlePath = existing->bundlePath;
+            if (record.originPath.empty()) {
+                record.originPath = existing->originPath;
             }
             if (record.description.empty()) {
                 record.description = existing->description;
@@ -796,51 +1036,32 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
                 record.bootstrapSha256 = existing->bootstrapSha256;
             }
 
-            const bool descriptionChanged = existing->description != record.description;
-            const bool roleChanged = existing->role != record.role;
-            const bool capabilitiesChanged = existing->capabilities != record.capabilities;
-            const bool ecosystemScopesChanged = existing->ecosystemScopes != record.ecosystemScopes;
-            const bool writeScopesChanged = existing->writeScopes != record.writeScopes;
-            const bool networkScopesChanged = existing->networkScopes != record.networkScopes;
-            const bool privilegeChanged = existing->privilegeLevel != record.privilegeLevel;
-            const bool scriptHashChanged = existing->scriptSha256 != record.scriptSha256;
-            const bool bootstrapHashChanged = existing->bootstrapSha256 != record.bootstrapSha256;
-
-            if (!record.alias && !record.bundleSource) {
-                if (const auto bundlePath = resolve_bundle_path(this->config, record.source, record.name)) {
-                    record.bundleSource = true;
-                    record.bundlePath = bundlePath->string();
-                }
+            const bool sourceChanged = existing->source != record.source || existing->alias != record.alias;
+            if (!sourceChanged) {
+                record.script = existing->script;
+                record.bootstrapScript = existing->bootstrapScript;
+                record.bundleSource = existing->bundleSource;
+                record.bundlePath = existing->bundlePath;
             }
+        }
 
-            const bool payloadMatchesExpectedHashes = registry_record_matches_expected_hashes(record);
-            needsPayloadRefresh = !record.alias && (sourceChanged || record.script.empty() ||
-                                                   ((scriptHashChanged || bootstrapHashChanged) && !payloadMatchesExpectedHashes));
-            needsWrite = sourceChanged || descriptionChanged || needsPayloadRefresh ||
-                         roleChanged || capabilitiesChanged || ecosystemScopesChanged ||
-                         writeScopesChanged || networkScopesChanged || privilegeChanged ||
-                         scriptHashChanged || bootstrapHashChanged ||
-                         record.bundleSource != existing->bundleSource || record.bundlePath != existing->bundlePath;
-
-            if (!needsWrite) {
-                continue;
+        if (!record.alias && !record.bundleSource) {
+            if (const auto bundlePath = resolve_bundle_path(this->config, record.source, record.name)) {
+                record.bundleSource = true;
+                record.bundlePath = bundlePath->string();
             }
         }
 
         if (!record.alias && !registry_record_passes_thin_layer_trust(this->config, record)) {
-            const bool payloadCleared = !record.script.empty() || !record.bootstrapScript.empty() ||
-                                        record.bundleSource || !record.bundlePath.empty();
             record.script.clear();
             record.bootstrapScript.clear();
             record.bundleSource = false;
             record.bundlePath.clear();
-            needsPayloadRefresh = false;
-            needsWrite = needsWrite || payloadCleared;
         }
 
-        bool clearStalePayload = !record.alias && !registry_record_matches_expected_hashes(record);
-
-        if (!record.alias && needsPayloadRefresh) {
+        const bool needsPayloadRefresh = fetchPayloads && !record.alias &&
+            (record.script.empty() || !registry_record_matches_expected_hashes(record));
+        if (needsPayloadRefresh) {
             if (const auto fetchedPayload = fetch_plugin_payload(this->config, record.source, record.name)) {
                 record.script = fetchedPayload->first;
                 record.bootstrapScript = fetchedPayload->second;
@@ -851,30 +1072,47 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
                     record.bundleSource = false;
                     record.bundlePath.clear();
                 }
-                clearStalePayload = !registry_record_matches_expected_hashes(record);
-                if (!clearStalePayload) {
-                    needsWrite = true;
-                }
             }
         }
 
-        if (clearStalePayload) {
-            const bool payloadCleared = !record.script.empty() || !record.bootstrapScript.empty() ||
-                                        record.bundleSource || !record.bundlePath.empty();
+        if (!record.alias && !record.script.empty() && !registry_record_matches_expected_hashes(record)) {
             record.script.clear();
             record.bootstrapScript.clear();
             record.bundleSource = false;
             record.bundlePath.clear();
-            needsPayloadRefresh = false;
-            needsWrite = needsWrite || payloadCleared;
         }
 
-        if (needsWrite) {
-            recordsToWrite.push_back(std::move(record));
+        desiredRecords[record.name] = std::move(record);
+    }
+
+    std::set<std::string> namesToDelete;
+    const bool needExistingRecords = replaceMissing || !originPathsToDelete.empty();
+    const std::vector<RegistryRecord> existingRecords = needExistingRecords ? this->load_all_records() : std::vector<RegistryRecord>{};
+    if (replaceMissing) {
+        for (const RegistryRecord& existing : existingRecords) {
+            if (!desiredRecords.contains(existing.name)) {
+                namesToDelete.insert(existing.name);
+            }
+        }
+    }
+    if (!originPathsToDelete.empty()) {
+        const std::set<std::string> originPathSet(originPathsToDelete.begin(), originPathsToDelete.end());
+        for (const RegistryRecord& existing : existingRecords) {
+            if (originPathSet.contains(existing.originPath)) {
+                namesToDelete.insert(existing.name);
+            }
         }
     }
 
-    if (recordsToWrite.empty()) {
+    bool hasChanges = !namesToDelete.empty() || !metaValues.empty();
+    for (const auto& [name, record] : desiredRecords) {
+        const std::optional<RegistryRecord> existing = this->load_record(name);
+        if (!existing.has_value() || !registry_records_equal(existing.value(), record)) {
+            hasChanges = true;
+            break;
+        }
+    }
+    if (!hasChanges) {
         return true;
     }
 
@@ -884,14 +1122,179 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
         return false;
     }
 
-    for (const RegistryRecord& record : recordsToWrite) {
+    for (const std::string& name : namesToDelete) {
+        if (!delete_record_from_transaction(transaction, this->dbi, name)) {
+            mdb_txn_abort(transaction);
+            return false;
+        }
+    }
+
+    for (const auto& [_, record] : desiredRecords) {
         if (!put_record_into_transaction(transaction, this->dbi, record)) {
             mdb_txn_abort(transaction);
             return false;
         }
     }
 
+    if (!put_meta_values_into_transaction(transaction, this->metaDbi, metaValues)) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
     return mdb_txn_commit(transaction) == MDB_SUCCESS;
+}
+
+bool RegistryDatabase::bootstrap_registry() const {
+    const RegistrySourceMap explicitSources = collect_explicit_registry_sources(this->config);
+    const auto seedExplicitSources = [&]() {
+        return explicitSources.empty() || this->write_records(explicitSources);
+    };
+
+    if (!is_json_registry_remote(this->config)) {
+        return seedExplicitSources();
+    }
+
+    const bool mainRegistryReady = [&]() {
+        const std::string source = registry_database_git_source_with_ref(
+            this->config.registry.remoteUrl,
+            this->config.registry.remoteBranch
+        );
+        if (!sync_git_repository(this->config, source, "main-registry")) {
+            return !this->load_all_records().empty();
+        }
+
+        const std::filesystem::path repositoryPath = registry_database_git_repository_cache_path(this->config, source, "main-registry");
+        const std::filesystem::path pluginsRoot = repositoryPath / this->config.registry.remotePluginsPath;
+        if (!std::filesystem::exists(pluginsRoot)) {
+            return !this->load_all_records().empty();
+        }
+
+        const std::optional<std::string> currentCommit = git_repository_head_commit(repositoryPath);
+        if (!currentCommit.has_value() || currentCommit->empty()) {
+            return !this->load_all_records().empty();
+        }
+
+        const std::map<std::string, std::string> baseMetaValues = {
+            {REGISTRY_META_KEY_REPO_URL, this->config.registry.remoteUrl},
+            {REGISTRY_META_KEY_BRANCH, this->config.registry.remoteBranch},
+            {REGISTRY_META_KEY_PLUGINS_PATH, this->config.registry.remotePluginsPath},
+            {REGISTRY_META_KEY_SCHEMA_VERSION, "1"},
+            {REGISTRY_META_KEY_LAST_COMMIT, *currentCommit},
+        };
+
+        const std::optional<std::string> previousCommit = this->load_meta_value(REGISTRY_META_KEY_LAST_COMMIT);
+        if (!previousCommit.has_value() || previousCommit->empty() || !git_commit_exists(repositoryPath, *previousCommit)) {
+            std::vector<RegistryRecord> records;
+            try {
+                for (const std::filesystem::path& file : collect_registry_json_files(pluginsRoot)) {
+                    const RegistryJsonParseResult parsed = parse_registry_json_file(file);
+                    records.insert(records.end(), parsed.records.begin(), parsed.records.end());
+                }
+            } catch (const std::exception&) {
+                return !this->load_all_records().empty();
+            }
+
+            const bool synced = this->sync_records(records, false, true, baseMetaValues);
+            return synced || !this->load_all_records().empty();
+        }
+
+        if (*previousCommit == *currentCommit) {
+            return this->sync_records({}, false, false, baseMetaValues);
+        }
+
+        const std::optional<std::vector<RegistryDiffEntry>> diffEntries = git_registry_diff(
+            repositoryPath,
+            *previousCommit,
+            *currentCommit,
+            this->config.registry.remotePluginsPath
+        );
+        if (!diffEntries.has_value()) {
+            std::vector<RegistryRecord> records;
+            try {
+                for (const std::filesystem::path& file : collect_registry_json_files(pluginsRoot)) {
+                    const RegistryJsonParseResult parsed = parse_registry_json_file(file);
+                    records.insert(records.end(), parsed.records.begin(), parsed.records.end());
+                }
+            } catch (const std::exception&) {
+                return !this->load_all_records().empty();
+            }
+
+            const bool synced = this->sync_records(records, false, true, baseMetaValues);
+            return synced || !this->load_all_records().empty();
+        }
+
+        std::set<std::string> originPathsToDelete;
+        std::set<std::string> parsePaths;
+        for (const RegistryDiffEntry& entry : *diffEntries) {
+            if (!path_has_json_extension(entry.path)) {
+                continue;
+            }
+
+            const std::filesystem::path absolutePath = repositoryPath / entry.path;
+            if (entry.status == 'D' || entry.status == 'R') {
+                originPathsToDelete.insert(path_to_generic_string(absolutePath));
+                continue;
+            }
+
+            if (!std::filesystem::exists(absolutePath)) {
+                originPathsToDelete.insert(path_to_generic_string(absolutePath));
+                continue;
+            }
+
+            originPathsToDelete.insert(path_to_generic_string(absolutePath));
+            parsePaths.insert(path_to_generic_string(absolutePath));
+        }
+
+        std::vector<RegistryRecord> records;
+        try {
+            for (const std::string& path : parsePaths) {
+                const RegistryJsonParseResult parsed = parse_registry_json_file(path);
+                records.insert(records.end(), parsed.records.begin(), parsed.records.end());
+            }
+        } catch (const std::exception&) {
+            return !this->load_all_records().empty();
+        }
+
+        const bool synced = this->sync_records(
+            records,
+            false,
+            false,
+            baseMetaValues,
+            std::vector<std::string>(originPathsToDelete.begin(), originPathsToDelete.end())
+        );
+        return synced || !this->load_all_records().empty();
+    }();
+
+    const bool explicitReady = seedExplicitSources();
+    return explicitReady && (mainRegistryReady || !explicitSources.empty());
+}
+
+bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
+    if (!this->initialized) {
+        return false;
+    }
+
+    std::vector<RegistryRecord> recordsToWrite;
+    recordsToWrite.reserve(sources.size());
+
+    for (const auto& [name, entry] : sources) {
+        RegistryRecord record;
+        record.name = registry_database_to_lower_copy(name);
+        record.source = entry.source;
+        record.alias = entry.alias;
+        record.description = entry.description;
+        record.role = entry.role;
+        record.capabilities = entry.capabilities;
+        record.ecosystemScopes = entry.ecosystemScopes;
+        record.writeScopes = entry.writeScopes;
+        record.networkScopes = entry.networkScopes;
+        record.privilegeLevel = entry.privilegeLevel;
+        record.scriptSha256 = entry.scriptSha256;
+        record.bootstrapSha256 = entry.bootstrapSha256;
+        recordsToWrite.push_back(std::move(record));
+    }
+
+    return this->sync_records(recordsToWrite, true, false);
 }
 
 std::optional<RegistryRecord> RegistryDatabase::load_record(const std::string& name) const {

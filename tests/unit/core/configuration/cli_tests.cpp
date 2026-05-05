@@ -291,6 +291,33 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().packages == std::vector<std::string>{"curl", "git"});
     }
 
+    SECTION("sys install keeps logical package names that match known systems") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "sys", "java", "maven"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::INSTALL);
+        CHECK(requests.front().system == "sys");
+        CHECK(requests.front().packages == std::vector<std::string>{"java", "maven"});
+    }
+
+    SECTION("sys install still allows explicit scoped system switches") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "sys", "java", "rqp:tool@1.2.3"}, config);
+        REQUIRE(requests.size() == 2);
+        CHECK(requests[0].action == ActionType::INSTALL);
+        CHECK(requests[0].system == "sys");
+        CHECK(requests[0].packages == std::vector<std::string>{"java"});
+        CHECK(requests[1].action == ActionType::INSTALL);
+        CHECK(requests[1].system == "rqp");
+        CHECK(requests[1].packages == std::vector<std::string>{"tool@1.2.3"});
+    }
+
+    SECTION("sys search keeps known system names as package prompt tokens") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"search", "sys", "java"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::SEARCH);
+        CHECK(requests.front().system == "sys");
+        CHECK(requests.front().packages == std::vector<std::string>{"java"});
+    }
+
     SECTION("token vector strips proxy define flags from request payload") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "java", "artifact", "-Dproxy.java.default=gradle"}, config);
         REQUIRE(requests.size() == 1);

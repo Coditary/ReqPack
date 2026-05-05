@@ -82,6 +82,9 @@ std::filesystem::path write_config(const std::filesystem::path& root, const std:
     const std::filesystem::path configPath = root / "config.lua";
     write_file(configPath,
         "return {\n"
+        "  security = {\n"
+        "    autoFetch = false,\n"
+        "  },\n"
         "  execution = {\n"
         "    useTransactionDb = false,\n"
         "    deleteCommittedTransactions = false,\n"
@@ -117,6 +120,9 @@ std::filesystem::path write_config_with_proxy(
     const std::filesystem::path configPath = root / "config.lua";
     write_file(configPath,
         "return {\n"
+        "  security = {\n"
+        "    autoFetch = false,\n"
+        "  },\n"
         "  execution = {\n"
         "    useTransactionDb = false,\n"
         "    deleteCommittedTransactions = false,\n"
@@ -161,6 +167,9 @@ std::filesystem::path write_config_with_rq_repositories(
     }
     write_file(configPath,
         "return {\n"
+        "  security = {\n"
+        "    autoFetch = false,\n"
+        "  },\n"
         "  execution = {\n"
         "    useTransactionDb = false,\n"
         "    deleteCommittedTransactions = false,\n"
@@ -197,6 +206,9 @@ std::filesystem::path write_config_with_maven_repositories(
     const std::filesystem::path configPath = root / "config.lua";
     write_file(configPath,
         "return {\n"
+        "  security = {\n"
+        "    autoFetch = false,\n"
+        "  },\n"
         "  execution = {\n"
         "    useTransactionDb = false,\n"
         "    deleteCommittedTransactions = false,\n"
@@ -2438,7 +2450,9 @@ TEST_CASE("update plugin refreshes git-backed wrapper to newest tagged version",
         "}\n");
 
     {
-        Registry registry(load_config_from_lua(configPath, default_reqpack_config()));
+        ReqPackConfig defaults = default_reqpack_config();
+        defaults.registry.remoteUrl.clear();
+        Registry registry(load_config_from_lua(configPath, defaults));
         REQUIRE(registry.getDatabase()->ensureReady());
         REQUIRE(registry.loadPlugin("pip"));
         REQUIRE(registry.getPlugin("pip") != nullptr);
@@ -2513,7 +2527,9 @@ TEST_CASE("update --all refreshes all known plugin wrappers", "[integration][orc
         "}\n");
 
     {
-        Registry registry(load_config_from_lua(configPath, default_reqpack_config()));
+        ReqPackConfig defaults = default_reqpack_config();
+        defaults.registry.remoteUrl.clear();
+        Registry registry(load_config_from_lua(configPath, defaults));
         REQUIRE(registry.getDatabase()->ensureReady());
         REQUIRE(registry.loadPlugin("pip"));
         REQUIRE(registry.loadPlugin("npm"));

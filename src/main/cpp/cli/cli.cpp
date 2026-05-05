@@ -114,6 +114,25 @@ bool is_removed_security_backend_flag(const std::string& argument) {
     return argument == "--snyk" || argument == "--owasp";
 }
 
+bool current_system_prefers_package_tokens(const std::string& currentSystem, ActionType action) {
+    if (to_lower(currentSystem) != "sys") {
+        return false;
+    }
+
+    switch (action) {
+        case ActionType::INSTALL:
+        case ActionType::REMOVE:
+        case ActionType::UPDATE:
+        case ActionType::SEARCH:
+        case ActionType::INFO:
+        case ActionType::SBOM:
+        case ActionType::AUDIT:
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace
 
 Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package Manager Interface")) {
@@ -520,7 +539,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
             continue;
         }
 
-        if (known_systems.contains(normalized_argument)) {
+        if (!current_system_prefers_package_tokens(current_system, action) && known_systems.contains(normalized_argument)) {
             ensure_request(normalized_argument);
             current_system = normalized_argument;
             continue;
@@ -1168,20 +1187,11 @@ std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config)
 std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& config) {
 	std::set<std::string> systems;
 	const std::filesystem::path directory = config.registry.pluginDirectory;
-	const RegistrySourceMap configuredSources = collect_registry_sources(config);
-	RegistryDatabase registryDatabase(config);
+	const RegistrySourceMap configuredSources = collect_explicit_registry_sources(config);
 
 	for (const auto& [name, entry] : configuredSources) {
-		if (!entry.alias && !name.empty() && to_lower(name) != "rqp") {
+		if (!entry.alias && !name.empty() && to_lower(name) != "rqp" && to_lower(name) != "sys") {
 			systems.insert(to_lower(name));
-		}
-	}
-
-	if (registryDatabase.ensureReady()) {
-		for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
-			if (!record.name.empty() && !record.alias && to_lower(record.name) != "rqp") {
-				systems.insert(to_lower(record.name));
-			}
 		}
 	}
 
@@ -1196,7 +1206,7 @@ std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& con
 			}
 
 			const std::string name = to_lower(entry.path().stem().string());
-			if (name != "rqp" && configuredSources.contains(name)) {
+			if (name != "rqp" && name != "sys") {
 				systems.insert(name);
 			}
 		}
