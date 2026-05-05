@@ -1,6 +1,7 @@
 #include "plugins/rq_plugin.h"
 
 #include "core/archive_resolver.h"
+#include "core/registry_database.h"
 #include "core/rq_package.h"
 #include "core/rq_repository.h"
 #include "core/rqp_state_store.h"
@@ -22,6 +23,8 @@
 #include <iomanip>
 #include <map>
 #include <optional>
+#include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -34,6 +37,15 @@
 namespace {
 
 using boost::property_tree::ptree;
+
+constexpr const char* BUILTIN_RQ_PLUGIN_ID = "rqp";
+
+std::string to_lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return value;
+}
 
 std::optional<ptree> parse_json_tree(const std::string& json) {
     if (json.empty()) {
@@ -102,6 +114,117 @@ bool rq_package_installed(const std::filesystem::path& stateRoot, const Package&
     }
 
     return false;
+}
+
+void collect_materialized_plugin_scripts(
+    const std::filesystem::path& root,
+    std::map<std::string, std::filesystem::path>& scriptPaths
+) {
+    std::error_code error;
+    if (!std::filesystem::exists(root, error) || error) {
+        return;
+    }
+
+    for (auto it = std::filesystem::recursive_directory_iterator(root, error);
+         it != std::filesystem::recursive_directory_iterator();
+         it.increment(error)) {
+        if (error) {
+            return;
+        }
+
+        const std::filesystem::directory_entry& entry = *it;
+        if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
+            continue;
+        }
+
+        if (entry.path().parent_path().filename() != entry.path().stem()) {
+            continue;
+        }
+
+        const std::string pluginId = to_lower_copy(entry.path().stem().string());
+        if (pluginId == BUILTIN_RQ_PLUGIN_ID) {
+            continue;
+        }
+
+        scriptPaths[pluginId] = entry.path();
+    }
+}
+
+std::map<std::string, std::filesystem::path> installed_plugin_script_paths(const ReqPackConfig& config) {
+    std::map<std::string, std::filesystem::path> scriptPaths;
+    collect_materialized_plugin_scripts(std::filesystem::path(config.registry.pluginDirectory), scriptPaths);
+
+    std::error_code error;
+    const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path(error) / "plugins";
+    const std::filesystem::path configuredPluginDirectory = std::filesystem::path(config.registry.pluginDirectory);
+    if (!error && workspacePluginDirectory != configuredPluginDirectory) {
+        collect_materialized_plugin_scripts(workspacePluginDirectory, scriptPaths);
+    }
+
+    return scriptPaths;
+}
+
+std::string try_read_text_file(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return {};
+    }
+
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+std::string plugin_version_from_script(const std::filesystem::path& scriptPath) {
+    static const std::regex versionPattern(R"(function\s+plugin\.getVersion\s*\(\s*\)\s*return\s*["']([^"']+)["'])");
+
+    const std::string script = try_read_text_file(scriptPath);
+    if (script.empty()) {
+        return {};
+    }
+
+    std::smatch match;
+    if (!std::regex_search(script, match, versionPattern) || match.size() < 2) {
+        return {};
+    }
+
+    return match[1].str();
+}
+
+PackageInfo installed_plugin_info(
+    const std::string& pluginId,
+    const RegistryRecord* record,
+    const std::string& version,
+    const std::string& fallbackType,
+    const std::string& fallbackDescription
+) {
+    PackageInfo info;
+    info.system = BUILTIN_RQ_PLUGIN_ID;
+    info.name = pluginId;
+    info.packageId = pluginId;
+    info.version = version;
+    info.status = "installed";
+    info.installed = "true";
+    info.packageType = fallbackType;
+
+    std::string description = fallbackDescription;
+    if (record != nullptr) {
+        if (record->alias) {
+            info.packageType = "alias";
+        } else if (!record->role.empty()) {
+            info.packageType = record->role;
+        }
+
+        if (!record->description.empty()) {
+            description = record->description;
+        }
+
+        info.sourceUrl = record->source;
+    }
+
+    info.summary = description;
+    info.description = description;
+    return info;
 }
 
 class RqRuntimeHost final : public IPluginRuntimeHost {
@@ -542,9 +665,95 @@ bool RqPlugin::update(const PluginCallContext& context, const std::vector<Packag
 std::vector<PackageInfo> RqPlugin::list(const PluginCallContext& context) {
     (void)context;
     std::vector<PackageInfo> packages;
-    for (const RqpInstalledPackage& installed : RqpStateStore(config_).listInstalled()) {
-        packages.push_back(packageInfoFromInstalled(installed));
+    std::set<std::string> emittedNames;
+    std::map<std::string, std::string> installedVersions;
+    std::map<std::string, RegistryRecord> recordsByName;
+    std::vector<RegistryRecord> aliasRecords;
+
+    RegistryDatabase registryDatabase(config_);
+    if (registryDatabase.ensureReady()) {
+        for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
+            const std::string normalizedName = to_lower_copy(record.name);
+            if (normalizedName.empty()) {
+                continue;
+            }
+            if (record.alias) {
+                aliasRecords.push_back(record);
+                continue;
+            }
+            recordsByName[normalizedName] = record;
+        }
     }
+
+    const auto appendPackage = [&](PackageInfo info) {
+        const std::string normalizedName = to_lower_copy(info.name);
+        if (normalizedName.empty() || !emittedNames.insert(normalizedName).second) {
+            return;
+        }
+        packages.push_back(std::move(info));
+    };
+
+    const RegistryRecord* builtinRecord = nullptr;
+    if (const auto builtinIt = recordsByName.find(BUILTIN_RQ_PLUGIN_ID); builtinIt != recordsByName.end()) {
+        builtinRecord = &builtinIt->second;
+    }
+
+    const std::string builtinVersion = this->getVersion();
+    installedVersions[BUILTIN_RQ_PLUGIN_ID] = builtinVersion;
+    appendPackage(installed_plugin_info(
+        BUILTIN_RQ_PLUGIN_ID,
+        builtinRecord,
+        builtinVersion,
+        "builtin",
+        this->getName()
+    ));
+
+    for (const auto& [pluginId, scriptPath] : installed_plugin_script_paths(config_)) {
+        const RegistryRecord* record = nullptr;
+        if (const auto it = recordsByName.find(pluginId); it != recordsByName.end()) {
+            record = &it->second;
+        }
+
+        const std::string version = plugin_version_from_script(scriptPath);
+        installedVersions[pluginId] = version;
+        appendPackage(installed_plugin_info(
+            pluginId,
+            record,
+            version,
+            "plugin",
+            "Locally installed plugin"
+        ));
+    }
+
+    for (const RegistryRecord& record : aliasRecords) {
+        const std::string normalizedAlias = to_lower_copy(record.name);
+        const std::string normalizedTarget = to_lower_copy(record.source);
+        if (normalizedAlias.empty() || normalizedTarget.empty()) {
+            continue;
+        }
+        if (!installedVersions.contains(normalizedTarget)) {
+            continue;
+        }
+
+        appendPackage(installed_plugin_info(
+            normalizedAlias,
+            &record,
+            installedVersions[normalizedTarget],
+            "alias",
+            record.description.empty() ? "Alias for " + normalizedTarget : record.description
+        ));
+    }
+
+    std::sort(packages.begin(), packages.end(), [](const PackageInfo& left, const PackageInfo& right) {
+        return left.name < right.name;
+    });
+
+    for (PackageInfo& package : packages) {
+        if (package.description.empty()) {
+            package.description = package.summary;
+        }
+    }
+
     return packages;
 }
 

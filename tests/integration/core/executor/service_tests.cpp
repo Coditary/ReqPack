@@ -31,6 +31,21 @@ private:
     std::filesystem::path path_;
 };
 
+class ScopedCurrentPath {
+public:
+    explicit ScopedCurrentPath(const std::filesystem::path& target) : original_(std::filesystem::current_path()) {
+        std::filesystem::current_path(target);
+    }
+
+    ~ScopedCurrentPath() {
+        std::error_code error;
+        std::filesystem::current_path(original_, error);
+    }
+
+private:
+    std::filesystem::path original_;
+};
+
 void write_file(const std::filesystem::path& path, const std::string& content) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary);
@@ -565,6 +580,69 @@ TEST_CASE("executor list and outdated apply arch and type post filters", "[integ
 
     outdatedRequest.flags = {"type=cli"};
     CHECK(executer.outdated(outdatedRequest).empty());
+}
+
+TEST_CASE("executor list rqp returns installed plugin wrappers and aliases", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-rqp-list"};
+    ScopedCurrentPath scopedCurrentPath(tempDir.path());
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.registry.sources["query"] = RegistrySourceEntry{
+        .source = (tempDir.path() / "sources" / "query.lua").string(),
+        .description = "Query system",
+        .role = "package-manager",
+    };
+    config.registry.sources["lookup"] = RegistrySourceEntry{
+        .source = "query",
+        .alias = true,
+        .description = "Alias for query",
+    };
+
+    add_plugin_script(tempDir.path() / "plugins", "query", QUERY_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Request request;
+    request.action = ActionType::LIST;
+    request.system = "rqp";
+
+    const std::vector<PackageInfo> packages = executer.list(request);
+
+    REQUIRE(packages.size() == 3);
+
+    const auto find_package = [&](const std::string& name) -> const PackageInfo* {
+        for (const PackageInfo& package : packages) {
+            if (package.name == name) {
+                return &package;
+            }
+        }
+        return nullptr;
+    };
+
+    const PackageInfo* builtin = find_package("rqp");
+    REQUIRE(builtin != nullptr);
+    CHECK(builtin->system == "rqp");
+    CHECK(builtin->status == "installed");
+    CHECK(builtin->installed == "true");
+    CHECK(builtin->packageType == "builtin");
+    CHECK_FALSE(builtin->version.empty());
+
+    const PackageInfo* query = find_package("query");
+    REQUIRE(query != nullptr);
+    CHECK(query->system == "rqp");
+    CHECK(query->version == "1.0.0");
+    CHECK(query->packageType == "package-manager");
+    CHECK(query->description == "Query system");
+    CHECK(query->status == "installed");
+    CHECK(query->installed == "true");
+
+    const PackageInfo* alias = find_package("lookup");
+    REQUIRE(alias != nullptr);
+    CHECK(alias->system == "rqp");
+    CHECK(alias->version == "1.0.0");
+    CHECK(alias->packageType == "alias");
+    CHECK(alias->description == "Alias for query");
 }
 
 TEST_CASE("executor search joins package prompt and resolves aliases", "[integration][executor][service]") {
