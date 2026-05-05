@@ -66,6 +66,7 @@ class Executer {
 	std::set<std::string> refreshInstalledState(const std::vector<TransactionRecord>& records) const;
 	void recordHistory(const std::vector<TransactionRecord>& records) const;
 	std::vector<Package> orderedPackages(const Graph& graph) const;
+	std::vector<TaskGroup> systemWideTaskGroups() const;
 	bool dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> buildSuccessRecords(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> buildFailureRecords(const TaskGroup& taskGroup) const;
@@ -76,6 +77,7 @@ public:
 
 	void setRequestedItemCount(int count, bool inputAlreadyFiltered = false) const;
 	void execute(Graph *graph);
+	bool updateSystem(const Request& request) const;
 	std::vector<PackageInfo> list(const Request& request) const;
 	std::vector<PackageInfo> outdated(const Request& request) const;
 	std::vector<PackageInfo> search(const Request& request) const;

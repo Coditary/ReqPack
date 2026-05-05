@@ -32,4 +32,10 @@ public:
 
 	int countRequestedItems() const;
 	int run();
+
+private:
+	bool shouldRefreshPluginWrappers() const;
+	bool shouldRunSystemWidePackageUpdates() const;
+	int runPluginWrapperRefresh();
+	int runSystemWidePackageUpdates();
 };

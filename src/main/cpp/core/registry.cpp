@@ -200,6 +200,25 @@ std::vector<std::string> Registry::getKnownPluginNames() {
     return names;
 }
 
+bool Registry::refreshPlugin(const std::string& name, bool preferLatestTag) {
+    const std::string resolvedName = this->resolvePluginName(name);
+    if (resolvedName == BUILTIN_RQ_PLUGIN_ID) {
+        return false;
+    }
+
+    const std::optional<RegistryRecord> refreshed = this->database.refreshRecord(resolvedName, preferLatestTag);
+    if (!refreshed.has_value()) {
+        return false;
+    }
+
+    this->materializePluginScript(refreshed.value());
+    m_plugins.erase(resolvedName);
+    m_pluginPaths.erase(resolvedName);
+    m_states.erase(resolvedName);
+    this->scanDirectory(this->config.registry.pluginDirectory);
+    return true;
+}
+
 void Registry::materializePluginScript(const RegistryRecord& record) const {
     if (record.name == BUILTIN_RQ_PLUGIN_ID) {
         return;

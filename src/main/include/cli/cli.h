@@ -45,6 +45,7 @@ private:
         const std::string& argument,
         const std::set<std::string>& known_systems
     );
+    static std::set<std::string> discover_non_builtin_plugins(const ReqPackConfig& config);
     static std::set<std::string> discover_primary_systems(const ReqPackConfig& config);
     static std::set<std::string> discover_systems(const ReqPackConfig& config);
 };

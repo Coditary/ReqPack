@@ -1,5 +1,6 @@
 #include "core/registry_database.h"
 #include "core/registry_database_core.h"
+#include "core/version_compare.h"
 
 #include <curl/curl.h>
 
@@ -41,6 +42,12 @@ std::string read_text_file(const std::filesystem::path& path) {
 bool starts_with(const std::string& value, std::string_view prefix) {
     return value.rfind(prefix, 0) == 0;
 }
+
+std::optional<std::pair<std::string, std::string>> fetch_plugin_payload(
+    const ReqPackConfig& config,
+    const std::string& source,
+    const std::string& pluginName
+);
 
 std::optional<std::pair<std::string, std::string>> read_plugin_payload_files(
     const std::filesystem::path& scriptPath,
@@ -133,8 +140,157 @@ bool run_process_quiet(const std::vector<std::string>& arguments) {
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+std::optional<std::string> run_process_capture_stdout(const std::vector<std::string>& arguments) {
+    if (arguments.empty()) {
+        return std::nullopt;
+    }
+
+    int outputPipe[2];
+    if (::pipe(outputPipe) != 0) {
+        return std::nullopt;
+    }
+
+    posix_spawn_file_actions_t fileActions;
+    if (posix_spawn_file_actions_init(&fileActions) != 0) {
+        (void)::close(outputPipe[0]);
+        (void)::close(outputPipe[1]);
+        return std::nullopt;
+    }
+
+    bool actionsReady =
+        posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0 &&
+        posix_spawn_file_actions_adddup2(&fileActions, outputPipe[1], STDOUT_FILENO) == 0 &&
+        posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, outputPipe[0]) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, outputPipe[1]) == 0;
+    if (!actionsReady) {
+        posix_spawn_file_actions_destroy(&fileActions);
+        (void)::close(outputPipe[0]);
+        (void)::close(outputPipe[1]);
+        return std::nullopt;
+    }
+
+    std::vector<char*> argv;
+    argv.reserve(arguments.size() + 1);
+    for (const std::string& argument : arguments) {
+        argv.push_back(const_cast<char*>(argument.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    pid_t pid = 0;
+    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), ::environ);
+    posix_spawn_file_actions_destroy(&fileActions);
+    (void)::close(outputPipe[1]);
+    if (spawnResult != 0) {
+        (void)::close(outputPipe[0]);
+        return std::nullopt;
+    }
+
+    std::string output;
+    char buffer[4096];
+    while (true) {
+        const ssize_t bytesRead = ::read(outputPipe[0], buffer, sizeof(buffer));
+        if (bytesRead > 0) {
+            output.append(buffer, static_cast<std::size_t>(bytesRead));
+            continue;
+        }
+        if (bytesRead == 0) {
+            break;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    (void)::close(outputPipe[0]);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) == -1) {
+        if (errno != EINTR) {
+            return std::nullopt;
+        }
+    }
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return std::nullopt;
+    }
+
+    return output;
+}
+
+std::string trim_copy(const std::string& value) {
+    const std::size_t first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        return {};
+    }
+    const std::size_t last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::optional<std::string> normalize_git_tag_for_compare(const std::string& tag) {
+    const std::string trimmed = trim_copy(tag);
+    if (trimmed.empty() || trimmed.ends_with("^{}")) {
+        return std::nullopt;
+    }
+
+    std::string normalized = trimmed;
+    if (!normalized.empty() && (normalized.front() == 'v' || normalized.front() == 'V') && normalized.size() > 1 &&
+        std::isdigit(static_cast<unsigned char>(normalized[1])) != 0) {
+        normalized.erase(normalized.begin());
+    }
+
+    bool hasDigit = false;
+    for (unsigned char c : normalized) {
+        if (std::isdigit(c) != 0) {
+            hasDigit = true;
+            continue;
+        }
+        if (std::isalpha(c) != 0 || c == '-' || c == '.' || c == '+') {
+            continue;
+        }
+        return std::nullopt;
+    }
+
+    if (!hasDigit || normalized.empty()) {
+        return std::nullopt;
+    }
+
+    return normalized;
+}
+
+std::optional<std::string> latest_git_tag_for_source(const std::string& source) {
+    if (!registry_database_is_git_source(source)) {
+        return std::nullopt;
+    }
+
+    const std::optional<std::string> output = run_process_capture_stdout({
+        "git", "ls-remote", "--tags", "--refs", registry_database_git_source_url(source)
+    });
+    if (!output.has_value()) {
+        return std::nullopt;
+    }
+
+    const std::vector<std::string> tags = registry_database_extract_git_tags(output.value());
+    std::optional<std::string> bestTag;
+    std::optional<std::string> bestNormalized;
+    for (const std::string& tag : tags) {
+        const std::optional<std::string> normalized = normalize_git_tag_for_compare(tag);
+        if (!normalized.has_value()) {
+            continue;
+        }
+        if (!bestNormalized.has_value() || version_compare_values(normalized.value(), bestNormalized.value(), VersionComparatorSpec{.profile = "semver"}) > 0) {
+            bestTag = tag;
+            bestNormalized = normalized;
+        }
+    }
+
+    return bestTag;
+}
+
 bool sync_git_repository(const ReqPackConfig& config, const std::string& source, const std::string& pluginName) {
     const std::filesystem::path repositoryPath = registry_database_git_repository_cache_path(config, source, pluginName);
+    const std::string repositoryUrl = registry_database_git_source_url(source);
+    const std::string requestedRef = registry_database_git_source_ref(source);
 
     std::error_code directoryError;
     std::filesystem::create_directories(repositoryPath.parent_path(), directoryError);
@@ -144,8 +300,16 @@ bool sync_git_repository(const ReqPackConfig& config, const std::string& source,
 
     const std::filesystem::path gitDirectory = repositoryPath / ".git";
     if (std::filesystem::exists(gitDirectory)) {
-        if (run_process_quiet({"git", "-C", repositoryPath.string(), "pull", "--ff-only", "--quiet"})) {
-            return true;
+        if (requestedRef.empty()) {
+            if (run_process_quiet({"git", "-C", repositoryPath.string(), "pull", "--ff-only", "--quiet"})) {
+                return true;
+            }
+        } else {
+            const bool fetched = run_process_quiet({"git", "-C", repositoryPath.string(), "fetch", "--tags", "--quiet", "origin"});
+            const bool checkedOut = fetched && run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef});
+            if (checkedOut) {
+                return true;
+            }
         }
 
         std::error_code removeError;
@@ -164,13 +328,12 @@ bool sync_git_repository(const ReqPackConfig& config, const std::string& source,
     return run_process_quiet({
         "git",
         "clone",
-        "--depth",
-        "1",
-        "--single-branch",
         "--quiet",
-        registry_database_git_source_url(source),
+        repositoryUrl,
         repositoryPath.string()
-    });
+    }) && (requestedRef.empty() || run_process_quiet({
+        "git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef
+    }));
 }
 
 std::optional<std::pair<std::string, std::string>> read_plugin_repository(const std::filesystem::path& repositoryPath, const std::string& pluginName) {
@@ -213,6 +376,38 @@ std::optional<std::pair<std::string, std::string>> fetch_git_plugin_payload(
     }
 
     return read_plugin_repository(registry_database_git_repository_cache_path(config, source, pluginName), pluginName);
+}
+
+std::optional<RegistryRecord> refreshed_record_payload(
+    const ReqPackConfig& config,
+    RegistryRecord record,
+    bool preferLatestTag
+) {
+    if (record.alias) {
+        return record;
+    }
+
+    std::string sourceForPayload = record.source;
+    if (preferLatestTag && registry_database_is_git_source(record.source)) {
+        if (const std::optional<std::string> latestTag = latest_git_tag_for_source(record.source)) {
+            sourceForPayload = registry_database_git_source_with_ref(record.source, latestTag.value());
+        }
+    }
+
+    if (const auto fetchedPayload = fetch_plugin_payload(config, sourceForPayload, record.name)) {
+        record.script = fetchedPayload->first;
+        record.bootstrapScript = fetchedPayload->second;
+        if (const auto bundlePath = resolve_bundle_path(config, sourceForPayload, record.name)) {
+            record.bundleSource = true;
+            record.bundlePath = bundlePath->string();
+        } else {
+            record.bundleSource = false;
+            record.bundlePath.clear();
+        }
+        return record;
+    }
+
+    return std::nullopt;
 }
 
 std::size_t write_to_string(void* contents, std::size_t size, std::size_t nmemb, void* userp) {
@@ -427,6 +622,35 @@ std::optional<RegistryRecord> RegistryDatabase::resolveRecord(const std::string&
     }
 
     return record;
+}
+
+std::optional<RegistryRecord> RegistryDatabase::refreshRecord(const std::string& name, bool preferLatestTag) const {
+    if (!this->ensureReady()) {
+        return std::nullopt;
+    }
+
+    std::optional<RegistryRecord> record = this->getRecord(name);
+    if (!record.has_value()) {
+        return std::nullopt;
+    }
+
+    std::size_t guard = 0;
+    while (record->alias && !record->source.empty() && guard < 16) {
+        record = this->getRecord(record->source);
+        if (!record.has_value()) {
+            return std::nullopt;
+        }
+        ++guard;
+    }
+
+    const std::optional<RegistryRecord> refreshed = refreshed_record_payload(this->config, record.value(), preferLatestTag);
+    if (!refreshed.has_value()) {
+        return std::nullopt;
+    }
+    if (!this->put_record(refreshed.value())) {
+        return std::nullopt;
+    }
+    return refreshed;
 }
 
 std::vector<RegistryRecord> RegistryDatabase::getAllRecords() const {

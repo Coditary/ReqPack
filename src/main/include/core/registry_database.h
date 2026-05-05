@@ -39,6 +39,7 @@ public:
     bool ensureReady() const;
     std::optional<RegistryRecord> getRecord(const std::string& name) const;
     std::optional<RegistryRecord> resolveRecord(const std::string& name) const;
+    std::optional<RegistryRecord> refreshRecord(const std::string& name, bool preferLatestTag = false) const;
     std::vector<RegistryRecord> getAllRecords() const;
     bool cacheScript(const std::string& name, const std::string& script) const;
 

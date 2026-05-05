@@ -40,6 +40,7 @@ public:
     std::string resolvePluginName(const std::string& name) const;
     std::optional<PluginSecurityMetadata> getPluginSecurityMetadata(const std::string& name);
     std::vector<std::string> getKnownPluginNames() override;
+    bool refreshPlugin(const std::string& name, bool preferLatestTag = false);
 
     void scanDirectory(const std::string& directoryPath);
     bool loadPlugin(const std::string& name);

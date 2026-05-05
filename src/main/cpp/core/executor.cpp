@@ -16,6 +16,10 @@ namespace {
 
 constexpr const char* INTERNAL_SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
 
+bool has_flag(const std::vector<std::string>& flags, const std::string& name) {
+	return std::find(flags.begin(), flags.end(), name) != flags.end();
+}
+
 std::string normalize_search_filter_value(std::string value) {
 	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
 		return static_cast<char>(std::tolower(c));
@@ -411,6 +415,48 @@ void Executer::execute(Graph *graph) {
 			this->deleteCommittedTransactions();
 		}
 	}
+}
+
+bool Executer::updateSystem(const Request& request) const {
+	if (request.system.empty() || request.usesLocalTarget || !request.packages.empty()) {
+		return false;
+	}
+
+	std::string errorMessage;
+	const std::optional<Request> resolvedRequest = this->resolveRequest(request, &errorMessage);
+	if (!resolvedRequest.has_value()) {
+		if (!errorMessage.empty()) {
+			Logger::instance().err(errorMessage);
+		}
+		return false;
+	}
+
+	const std::string system = resolvedRequest->system;
+	if (this->securityGateway.isGatewaySystem(system)) {
+		const TaskGroup taskGroup{
+			.action = ActionType::UPDATE,
+			.system = system,
+			.flags = resolvedRequest->flags,
+		};
+		return this->dispatchTaskGroupToSecurityGateway(taskGroup);
+	}
+
+	if (this->registry->getPlugin(system) == nullptr || !this->registry->loadPlugin(system)) {
+		Logger::instance().err("plugin load failed");
+		return false;
+	}
+
+	IPlugin* plugin = this->registry->getPlugin(system);
+	if (plugin == nullptr) {
+		return false;
+	}
+
+	const TaskGroup taskGroup{
+		.action = ActionType::UPDATE,
+		.system = system,
+		.flags = resolvedRequest->flags,
+	};
+	return plugin->update(this->buildPluginContext(plugin, taskGroup), {});
 }
 
 void Executer::startTransactionDb() const {

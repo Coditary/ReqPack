@@ -1013,7 +1013,7 @@ bool LuaBridge::update(const PluginCallContext& context, const std::vector<Packa
         return false;
     }
 
-    auto result = packages.empty() ? func(context, sol::lua_nil) : func(context, packages);
+    auto result = func(context, packages);
     if (!result.valid()) {
         sol::error err = result;
         log_lua_error(m_logger, m_pluginId, std::string("Lua Error (update): ") + err.what());

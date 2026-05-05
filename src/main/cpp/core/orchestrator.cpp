@@ -212,6 +212,20 @@ bool has_explicit_version(const std::string& packageSpecifier) {
     return versionSeparator != std::string::npos && versionSeparator != 0 && versionSeparator + 1 < packageSpecifier.size();
 }
 
+bool request_targets_plugin_wrapper_refresh(const Request& request) {
+    return request.action == ActionType::UPDATE && !request.system.empty() && request.system != "sys" && request.system != "rqp" &&
+           !request.usesLocalTarget && request.packages.empty() &&
+           (std::find(request.flags.begin(), request.flags.end(), "all") == request.flags.end() ||
+            std::find(request.flags.begin(), request.flags.end(), "__reqpack-internal-plugin-refresh-all") != request.flags.end());
+}
+
+bool request_targets_system_wide_package_update(const Request& request) {
+	return request.action == ActionType::UPDATE && !request.system.empty() && request.system != "sys" &&
+	       !request.usesLocalTarget && request.packages.empty() &&
+	       std::find(request.flags.begin(), request.flags.end(), "all") != request.flags.end() &&
+	       std::find(request.flags.begin(), request.flags.end(), "__reqpack-internal-plugin-refresh-all") == request.flags.end();
+}
+
 struct SbomResolutionResult {
     std::vector<Request> requests;
     std::vector<std::string> missingPackages;
@@ -316,6 +330,80 @@ int Orchestrator::countRequestedItems() const {
 	return count;
 }
 
+bool Orchestrator::shouldRefreshPluginWrappers() const {
+	if (this->requests.empty()) {
+		return false;
+	}
+	return std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
+		return request_targets_plugin_wrapper_refresh(request);
+	});
+}
+
+bool Orchestrator::shouldRunSystemWidePackageUpdates() const {
+	if (this->requests.empty()) {
+		return false;
+	}
+	return std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
+		return request_targets_system_wide_package_update(request);
+	});
+}
+
+int Orchestrator::runPluginWrapperRefresh() {
+	Logger& logger = Logger::instance();
+	std::vector<std::string> itemIds;
+	itemIds.reserve(this->requests.size());
+	for (const Request& request : this->requests) {
+		itemIds.push_back(request.system);
+	}
+
+	logger.displaySessionBegin(DisplayMode::UPDATE, itemIds);
+	int succeeded = 0;
+	int failed = 0;
+	for (const Request& request : this->requests) {
+		logger.displayItemBegin(request.system, request.system);
+		logger.displayItemStep(request.system, "refresh plugin wrapper");
+		if (this->registry->refreshPlugin(request.system, true) && this->registry->loadPlugin(request.system)) {
+			logger.displayItemSuccess(request.system);
+			++succeeded;
+			continue;
+		}
+
+		logger.displayItemFailure(request.system, "failed to refresh plugin wrapper");
+		++failed;
+	}
+
+	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
+	return failed == 0 ? 0 : 1;
+}
+
+int Orchestrator::runSystemWidePackageUpdates() {
+	Logger& logger = Logger::instance();
+	std::vector<std::string> itemIds;
+	itemIds.reserve(this->requests.size());
+	for (const Request& request : this->requests) {
+		itemIds.push_back(request.system);
+	}
+
+	logger.displaySessionBegin(DisplayMode::UPDATE, itemIds);
+	int succeeded = 0;
+	int failed = 0;
+	for (const Request& request : this->requests) {
+		logger.displayItemBegin(request.system, request.system);
+		logger.displayItemStep(request.system, "update all packages");
+		if (this->executor->updateSystem(request)) {
+			logger.displayItemSuccess(request.system);
+			++succeeded;
+			continue;
+		}
+
+		logger.displayItemFailure(request.system, "failed to update system packages");
+		++failed;
+	}
+
+	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
+	return failed == 0 ? 0 : 1;
+}
+
 int Orchestrator::run() {
 	(void)this->registry->getDatabase()->ensureReady();
 	this->registry->scanDirectory(this->config.registry.pluginDirectory);
@@ -332,6 +420,12 @@ int Orchestrator::run() {
 	};
 	if (this->requests.empty()) {
 		return 0;
+	}
+	if (this->shouldRunSystemWidePackageUpdates()) {
+		return this->runSystemWidePackageUpdates();
+	}
+	if (this->shouldRefreshPluginWrappers()) {
+		return this->runPluginWrapperRefresh();
 	}
 
 	// ── URL pre-processing ────────────────────────────────────────────────────

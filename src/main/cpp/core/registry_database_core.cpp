@@ -67,7 +67,41 @@ bool registry_database_is_git_source(const std::string& source) {
 }
 
 std::string registry_database_git_source_url(const std::string& source) {
-    return starts_with(source, "git+") ? source.substr(4) : source;
+    const std::string raw = starts_with(source, "git+") ? source.substr(4) : source;
+    return registry_database_strip_query_fragment(raw);
+}
+
+std::string registry_database_git_source_ref(const std::string& source) {
+    const std::string raw = starts_with(source, "git+") ? source.substr(4) : source;
+    const std::size_t queryStart = raw.find('?');
+    const std::size_t fragmentStart = raw.find('#');
+
+    if (queryStart != std::string::npos) {
+        const std::size_t queryEnd = fragmentStart == std::string::npos ? raw.size() : fragmentStart;
+        const std::string query = raw.substr(queryStart + 1, queryEnd - queryStart - 1);
+        std::stringstream stream(query);
+        std::string part;
+        while (std::getline(stream, part, '&')) {
+            if (starts_with(part, "ref=")) {
+                return part.substr(4);
+            }
+        }
+    }
+
+    if (fragmentStart != std::string::npos && fragmentStart + 1 < raw.size()) {
+        return raw.substr(fragmentStart + 1);
+    }
+
+    return {};
+}
+
+std::string registry_database_git_source_with_ref(const std::string& source, const std::string& ref) {
+    const bool gitPrefixed = starts_with(source, "git+");
+    const std::string base = registry_database_git_source_url(source);
+    if (ref.empty()) {
+        return gitPrefixed ? "git+" + base : base;
+    }
+    return (gitPrefixed ? "git+" : std::string{}) + base + "?ref=" + ref;
 }
 
 std::filesystem::path registry_database_git_repository_cache_path(
@@ -78,6 +112,23 @@ std::filesystem::path registry_database_git_repository_cache_path(
     std::ostringstream stream;
     stream << std::hex << fnv1a_hash(source);
     return default_reqpack_repo_cache_path() / (pluginName + "-" + stream.str());
+}
+
+std::vector<std::string> registry_database_extract_git_tags(const std::string& output) {
+    std::vector<std::string> tags;
+    std::istringstream stream(output);
+    std::string line;
+    while (std::getline(stream, line)) {
+        const std::size_t marker = line.find("refs/tags/");
+        if (marker == std::string::npos) {
+            continue;
+        }
+        const std::string tag = line.substr(marker + std::string{"refs/tags/"}.size());
+        if (!tag.empty()) {
+            tags.push_back(tag);
+        }
+    }
+    return tags;
 }
 
 std::string registry_database_escape_field(const std::string& value) {

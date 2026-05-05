@@ -210,6 +210,15 @@ struct RqpConfig {
     std::string statePath{};
 };
 
+struct SelfUpdateConfig {
+    std::string repoUrl{"https://github.com/Coditary/ReqPack.git"};
+    std::string branch{"main"};
+    std::string repoPath{};
+    std::string buildPath{};
+    std::string binaryDirectory{};
+    std::string linkPath{};
+};
+
 struct ArchiveConfig {
     std::string password{};
 };
@@ -301,6 +310,7 @@ struct ReqPackConfig {
     RemoteConfig remote{};
     SbomConfig sbom{};
     RqpConfig rqp{};
+    SelfUpdateConfig selfUpdate{};
     ArchiveConfig archives{};
     std::map<std::string, std::vector<RepositoryEntry>> repositories{};
     HistoryConfig history{};
@@ -385,6 +395,10 @@ std::filesystem::path default_reqpack_plugin_directory();
 std::filesystem::path default_reqpack_history_path();
 std::filesystem::path default_reqpack_transaction_path();
 std::filesystem::path default_reqpack_rqp_state_path();
+std::filesystem::path default_reqpack_self_update_repo_path();
+std::filesystem::path default_reqpack_self_update_build_path();
+std::filesystem::path default_reqpack_self_update_binary_directory();
+std::filesystem::path default_reqpack_self_update_link_path();
 std::filesystem::path default_reqpack_security_cache_path();
 std::filesystem::path default_reqpack_security_index_path();
 std::filesystem::path default_reqpack_osv_database_path();

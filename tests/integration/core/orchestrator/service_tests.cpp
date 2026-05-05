@@ -20,6 +20,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "core/registry.h"
 #include "test_helpers.h"
 
 extern char** environ;
@@ -479,6 +480,112 @@ std::string run_reqpack_with_home(
     return run_command_capture(command);
 }
 
+std::string run_reqpack_with_home_and_env(
+    const std::filesystem::path& workspace,
+    const std::filesystem::path& configPath,
+    const std::filesystem::path& homePath,
+    const std::vector<std::pair<std::string, std::string>>& environment,
+    const std::vector<std::string>& arguments
+) {
+    std::string command = "cd " + escape_shell_arg(workspace.string()) +
+        " && HOME=" + escape_shell_arg(homePath.string());
+    for (const auto& [key, value] : environment) {
+        command += " " + key + "=" + escape_shell_arg(value);
+    }
+    command += " " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " --config " + escape_shell_arg(configPath.string());
+    for (const std::string& argument : arguments) {
+        command += " " + escape_shell_arg(argument);
+    }
+    command += " 2>&1";
+    return run_command_capture(command);
+}
+
+void require_command_success(const std::string& command) {
+    const std::string wrapped = command + " >/dev/null 2>&1 || { echo FAILED; exit 1; }";
+    const std::string output = run_command_capture(wrapped);
+    INFO(output);
+    CHECK(output.find("FAILED") == std::string::npos);
+}
+
+void init_git_repository(const std::filesystem::path& path) {
+    require_command_success(
+        "mkdir -p " + escape_shell_arg(path.string()) +
+        " && git init -b main " + escape_shell_arg(path.string()) +
+        " && git -C " + escape_shell_arg(path.string()) + " config user.name test" +
+        " && git -C " + escape_shell_arg(path.string()) + " config user.email test@example.test"
+    );
+}
+
+std::string git_head_commit(const std::filesystem::path& path) {
+    const std::string output = run_command_capture(
+        "git -C " + escape_shell_arg(path.string()) + " rev-parse --verify HEAD"
+    );
+    std::istringstream input(output);
+    std::string line;
+    std::getline(input, line);
+    return line;
+}
+
+void write_self_update_source_tree(const std::filesystem::path& root, const std::string& versionLabel) {
+    write_file(root / "CMakeLists.txt",
+        "cmake_minimum_required(VERSION 3.15)\n"
+        "project(SelfUpdateStub LANGUAGES CXX)\n"
+        "add_executable(ReqPack src/main.cpp)\n");
+    write_file(root / "src" / "main.cpp",
+        "#include <iostream>\n"
+        "int main() { std::cout << \"" + versionLabel + "\\n\"; return 0; }\n");
+}
+
+void commit_self_update_source(const std::filesystem::path& repoPath, const std::string& message, const std::string& versionLabel) {
+    write_self_update_source_tree(repoPath, versionLabel);
+    require_command_success(
+        "git -C " + escape_shell_arg(repoPath.string()) + " add CMakeLists.txt src/main.cpp" +
+        " && git -C " + escape_shell_arg(repoPath.string()) + " commit -m " + escape_shell_arg(message)
+    );
+}
+
+void tag_git_commit(const std::filesystem::path& repoPath, const std::string& tagName) {
+    require_command_success(
+        "git -C " + escape_shell_arg(repoPath.string()) + " tag " + escape_shell_arg(tagName)
+    );
+}
+
+void write_test_plugin_bundle(const std::filesystem::path& root, const std::string& pluginName, const std::string& versionLabel) {
+    write_file(root / pluginName / (pluginName + ".lua"),
+        "plugin = {}\n"
+        "function plugin.getName() return '" + pluginName + "' end\n"
+        "function plugin.getVersion() return '" + versionLabel + "' end\n"
+        "function plugin.getRequirements() return {} end\n"
+        "function plugin.getCategories() return { 'pkg', 'test' } end\n"
+        "function plugin.getMissingPackages(packages) return packages end\n"
+        "function plugin.install(context, packages) return true end\n"
+        "function plugin.installLocal(context, path) return true end\n"
+        "function plugin.remove(context, packages) return true end\n"
+        "function plugin.update(context, packages) return true end\n"
+        "function plugin.list(context) return { { name = '" + pluginName + "', version = '" + versionLabel + "', description = '" + versionLabel + "' } } end\n"
+        "function plugin.search(context, prompt) return {} end\n"
+        "function plugin.info(context, package) return { name = package, version = '" + versionLabel + "', description = '" + versionLabel + "' } end\n"
+        "function plugin.shutdown() return true end\n");
+}
+
+void commit_plugin_source_version(
+    const std::filesystem::path& repoPath,
+    const std::string& pluginName,
+    const std::string& message,
+    const std::string& versionLabel,
+    const std::optional<std::string>& tagName = std::nullopt
+) {
+    write_test_plugin_bundle(repoPath / "plugins", pluginName, versionLabel);
+    require_command_success(
+        "git -C " + escape_shell_arg(repoPath.string()) + " add plugins" +
+        " && git -C " + escape_shell_arg(repoPath.string()) + " commit -m " + escape_shell_arg(message)
+    );
+    if (tagName.has_value()) {
+        tag_git_commit(repoPath, tagName.value());
+    }
+}
+
 std::string run_reqpack_with_stdin(
     const std::filesystem::path& workspace,
     const std::filesystem::path& configPath,
@@ -841,6 +948,29 @@ function plugin.update(context, packages) return true end
 function plugin.list(context) return {} end
 function plugin.search(context, prompt) return {} end
 function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)";
+
+const char* SYSTEM_WIDE_UPDATE_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages)
+  local path = context.plugin.dir .. "/state/update.txt"
+  local value = tostring(#packages)
+  context.exec.run("mkdir -p '" .. context.plugin.dir .. "/state' && printf '%s' '" .. value .. "' > '" .. path .. "'")
+  return true
+end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0", description = "ok" } end
 function plugin.shutdown() return true end
 )";
 
@@ -2171,6 +2301,236 @@ TEST_CASE("orchestrator update rqp package installs newer repository version", "
     CHECK(output.find("UPDATE: rqp:updatable-artifact") != std::string::npos);
     CHECK(std::filesystem::exists(stateDir / "installed.txt"));
     CHECK(read_file(stateDir / "installed.txt") == "hello-v2");
+}
+
+TEST_CASE("wrapper self-update builds latest git commit and swaps local symlink", "[integration][orchestrator][service][self-update]") {
+    TempDir tempDir{"reqpack-wrapper-self-update"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path homePath = tempDir.path() / "home";
+    const std::filesystem::path originPath = tempDir.path() / "origin";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path fakeBinDirectory = tempDir.path() / "fake-bin";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+    std::filesystem::create_directories(homePath);
+    std::filesystem::create_directories(fakeBinDirectory);
+
+    init_git_repository(originPath);
+    commit_self_update_source(originPath, "initial", "v1");
+    copy_repo_plugin(pluginDirectory, "sys");
+    write_file(fakeBinDirectory / "fake-apt", "#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$REQPACK_TEST_SYS_LOG\"\nexit 0\n");
+    require_command_success("chmod +x " + escape_shell_arg((fakeBinDirectory / "fake-apt").string()));
+
+    write_file(configPath,
+        "return {\n"
+        "  logging = {\n"
+        "    consoleOutput = true,\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  selfUpdate = {\n"
+        "    repoUrl = '" + originPath.string() + "',\n"
+        "    branch = 'main',\n"
+        "    repoPath = '" + (homePath / ".local/share/reqpack/self/repo").string() + "',\n"
+        "    buildPath = '" + (homePath / ".local/share/reqpack/self/build").string() + "',\n"
+        "    binaryDirectory = '" + (homePath / ".local/share/reqpack/self/bin").string() + "',\n"
+        "    linkPath = '" + (homePath / ".local/bin/rqp").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    const std::string firstCommit = git_head_commit(originPath);
+    const std::string firstOutput = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
+    INFO(firstOutput);
+    CHECK(firstOutput.find("self-update: clone repository") != std::string::npos);
+    CHECK(firstOutput.find("self-update: configure build") != std::string::npos);
+    CHECK(firstOutput.find("self-update: build binary") != std::string::npos);
+    CHECK(firstOutput.find("self-update complete: now on commit " + firstCommit) != std::string::npos);
+
+    const std::filesystem::path linkPath = homePath / ".local/bin/rqp";
+    const std::filesystem::path binaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + firstCommit);
+    REQUIRE(std::filesystem::exists(binaryPath));
+    REQUIRE(std::filesystem::is_symlink(linkPath));
+    CHECK(std::filesystem::read_symlink(linkPath) == binaryPath);
+
+    commit_self_update_source(originPath, "second", "v2");
+    const std::string secondCommit = git_head_commit(originPath);
+    const std::string secondOutput = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
+    INFO(secondOutput);
+    CHECK(secondOutput.find("self-update: checkout branch") != std::string::npos);
+    CHECK(secondOutput.find("self-update: pull latest commit") != std::string::npos);
+    CHECK(secondOutput.find("self-update complete: now on commit " + secondCommit) != std::string::npos);
+
+    const std::filesystem::path secondBinaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + secondCommit);
+    REQUIRE(std::filesystem::exists(secondBinaryPath));
+    CHECK(std::filesystem::read_symlink(linkPath) == secondBinaryPath);
+
+    const std::filesystem::path sysLogPath = tempDir.path() / "sys-update.log";
+    const std::string wrapperUpdateOutput = run_reqpack_with_home_and_env(
+        workspace,
+        configPath,
+        homePath,
+        {
+            {"REQPACK_SYS_BACKEND", "apt"},
+            {"REQPACK_SYS_APT_BIN", (fakeBinDirectory / "fake-apt").string()},
+            {"REQPACK_SYS_APT_CACHE_BIN", (fakeBinDirectory / "fake-apt").string()},
+            {"REQPACK_SYS_DPKG_QUERY_BIN", (fakeBinDirectory / "fake-apt").string()},
+            {"REQPACK_SYS_NO_SUDO", "1"},
+            {"REQPACK_TEST_SYS_LOG", sysLogPath.string()},
+        },
+        {"update", "sys", "pip"}
+    );
+    INFO(wrapperUpdateOutput);
+    CHECK(wrapperUpdateOutput.find("self-update:") == std::string::npos);
+    CHECK(wrapperUpdateOutput.find("UPDATE: sys:pip") != std::string::npos);
+    CHECK(wrapperUpdateOutput.find("UPDATE done:  1 ok") != std::string::npos);
+    const std::string sysLog = read_file(sysLogPath);
+    CHECK(sysLog.find("install") != std::string::npos);
+    CHECK(sysLog.find("--only-upgrade") != std::string::npos);
+    CHECK(sysLog.find("python3-pip") != std::string::npos);
+}
+
+TEST_CASE("update plugin refreshes git-backed wrapper to newest tagged version", "[integration][orchestrator][service][plugin-update]") {
+    TempDir tempDir{"reqpack-plugin-wrapper-update"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path pluginRepoPath = tempDir.path() / "plugin-origin";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+
+    init_git_repository(pluginRepoPath);
+    commit_plugin_source_version(pluginRepoPath, "pip", "v1", "1.0.0", "v1.0.0");
+    commit_plugin_source_version(pluginRepoPath, "pip", "v2", "1.2.0", "v1.2.0");
+    commit_plugin_source_version(pluginRepoPath, "pip", "head", "9.9.9-dev");
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    sources = {\n"
+        "      pip = { source = 'git+" + pluginRepoPath.string() + "' },\n"
+        "    },\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "}\n");
+
+    {
+        Registry registry(load_config_from_lua(configPath, default_reqpack_config()));
+        REQUIRE(registry.getDatabase()->ensureReady());
+        REQUIRE(registry.loadPlugin("pip"));
+        REQUIRE(registry.getPlugin("pip") != nullptr);
+        CHECK(registry.getPlugin("pip")->getVersion() == "9.9.9-dev");
+    }
+
+    const std::string output = run_reqpack(workspace, configPath, {"update", "pip"});
+    INFO(output);
+    CHECK(output.find("UPDATE: pip") != std::string::npos);
+    CHECK(output.find("UPDATE done:  1 ok") != std::string::npos);
+    const std::string refreshedScript = read_file(pluginDirectory / "pip" / "pip.lua");
+    CHECK(refreshedScript.find("1.2.0") != std::string::npos);
+}
+
+TEST_CASE("update system --all calls plugin update with empty package list", "[integration][orchestrator][service][plugin-update]") {
+    TempDir tempDir{"reqpack-system-update-all"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apt", SYSTEM_WIDE_UPDATE_PLUGIN);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"update", "apt", "--all"});
+    INFO(output);
+    CHECK(output.find("UPDATE: apt") != std::string::npos);
+    CHECK(output.find("UPDATE done:  1 ok") != std::string::npos);
+    CHECK(read_file(pluginDirectory / "apt" / "state" / "update.txt") == "0");
+}
+
+TEST_CASE("update --all refreshes all known plugin wrappers", "[integration][orchestrator][service][plugin-update]") {
+    TempDir tempDir{"reqpack-plugin-wrapper-update-all"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path pipRepoPath = tempDir.path() / "pip-origin";
+    const std::filesystem::path npmRepoPath = tempDir.path() / "npm-origin";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+
+    init_git_repository(pipRepoPath);
+    commit_plugin_source_version(pipRepoPath, "pip", "v1", "1.0.0", "v1.0.0");
+    commit_plugin_source_version(pipRepoPath, "pip", "v2", "1.2.0", "v1.2.0");
+    commit_plugin_source_version(pipRepoPath, "pip", "head", "9.9.9-dev");
+
+    init_git_repository(npmRepoPath);
+    commit_plugin_source_version(npmRepoPath, "npm", "v1", "2.0.0", "v2.0.0");
+    commit_plugin_source_version(npmRepoPath, "npm", "v2", "2.1.0", "v2.1.0");
+    commit_plugin_source_version(npmRepoPath, "npm", "head", "9.9.9-dev");
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    sources = {\n"
+        "      pip = { source = 'git+" + pipRepoPath.string() + "' },\n"
+        "      npm = { source = 'git+" + npmRepoPath.string() + "' },\n"
+        "    },\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "}\n");
+
+    {
+        Registry registry(load_config_from_lua(configPath, default_reqpack_config()));
+        REQUIRE(registry.getDatabase()->ensureReady());
+        REQUIRE(registry.loadPlugin("pip"));
+        REQUIRE(registry.loadPlugin("npm"));
+        CHECK(registry.getPlugin("pip")->getVersion() == "9.9.9-dev");
+        CHECK(registry.getPlugin("npm")->getVersion() == "9.9.9-dev");
+    }
+
+    const std::string output = run_reqpack(workspace, configPath, {"update", "--all"});
+    INFO(output);
+    CHECK(output.find("UPDATE:") != std::string::npos);
+    CHECK(output.find("UPDATE done:  2 ok") != std::string::npos);
+    const std::string refreshedPipScript = read_file(pluginDirectory / "pip" / "pip.lua");
+    const std::string refreshedNpmScript = read_file(pluginDirectory / "npm" / "npm.lua");
+    CAPTURE(refreshedPipScript);
+    CAPTURE(refreshedNpmScript);
+    CHECK(refreshedPipScript.find("1.2.0") != std::string::npos);
+    CHECK(refreshedNpmScript.find("2.1.0") != std::string::npos);
 }
 
 TEST_CASE("orchestrator sbom command exports planned graph without executing plugin install", "[integration][orchestrator][service]") {

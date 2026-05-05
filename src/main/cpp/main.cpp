@@ -10,9 +10,20 @@
 #include <curl/curl.h>
 
 #include <cctype>
+#include <cerrno>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
+#include <fcntl.h>
+#include <set>
+#include <spawn.h>
+#include <sstream>
+#include <string_view>
+#include <sys/wait.h>
+#include <unistd.h>
+
+extern char** environ;
 
 namespace {
 
@@ -112,6 +123,22 @@ bool contains_flag(const std::vector<std::string>& arguments, const std::string&
 
 bool starts_with(const std::string& value, const std::string& prefix) {
     return value.rfind(prefix, 0) == 0;
+}
+
+std::string to_lower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+bool is_existing_path(const std::string& value) {
+    std::error_code error;
+    return std::filesystem::exists(std::filesystem::path(value), error) && !error;
+}
+
+bool is_url(const std::string& value) {
+    return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0 || value.rfind("file://", 0) == 0;
 }
 
 std::vector<std::string> strip_config_arguments(const std::vector<std::string>& arguments) {
@@ -391,6 +418,364 @@ std::vector<std::string> merged_stream_command_arguments(
     return merged;
 }
 
+std::string escape_shell_arg(const std::string& value) {
+    std::string escaped{"'"};
+    for (char c : value) {
+        if (c == '\'') {
+            escaped += "'\\''";
+        } else {
+            escaped.push_back(c);
+        }
+    }
+    escaped.push_back('\'');
+    return escaped;
+}
+
+int normalize_exit_code(const int status) {
+    if (status == -1) {
+        return -1;
+    }
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+    return status;
+}
+
+struct ProcessResult {
+    int exitCode{-1};
+    std::string output;
+};
+
+ProcessResult run_command_capture_status(const std::string& command) {
+    int outputPipe[2];
+    if (::pipe(outputPipe) != 0) {
+        return {};
+    }
+
+    const int devNull = ::open("/dev/null", O_RDONLY);
+    if (devNull < 0) {
+        (void)::close(outputPipe[0]);
+        (void)::close(outputPipe[1]);
+        return {};
+    }
+
+    const pid_t child = ::fork();
+    if (child < 0) {
+        (void)::close(devNull);
+        (void)::close(outputPipe[0]);
+        (void)::close(outputPipe[1]);
+        return {};
+    }
+
+    if (child == 0) {
+        (void)::dup2(devNull, STDIN_FILENO);
+        (void)::dup2(outputPipe[1], STDOUT_FILENO);
+        (void)::dup2(outputPipe[1], STDERR_FILENO);
+        (void)::close(devNull);
+        (void)::close(outputPipe[0]);
+        (void)::close(outputPipe[1]);
+        ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
+        _exit(127);
+    }
+
+    (void)::close(devNull);
+    (void)::close(outputPipe[1]);
+
+    std::string output;
+    char buffer[4096];
+    while (true) {
+        const ssize_t bytesRead = ::read(outputPipe[0], buffer, sizeof(buffer));
+        if (bytesRead > 0) {
+            output.append(buffer, static_cast<std::size_t>(bytesRead));
+            continue;
+        }
+        if (bytesRead == 0) {
+            break;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    (void)::close(outputPipe[0]);
+
+    int status = -1;
+    while (::waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) {
+            break;
+        }
+    }
+
+    return ProcessResult{.exitCode = normalize_exit_code(status), .output = std::move(output)};
+}
+
+bool run_process(const std::vector<std::string>& arguments, const std::filesystem::path& workingDirectory) {
+    if (arguments.empty()) {
+        return false;
+    }
+
+    posix_spawn_file_actions_t fileActions;
+    if (posix_spawn_file_actions_init(&fileActions) != 0) {
+        return false;
+    }
+
+    bool ready = true;
+#if defined(__linux__)
+    ready = posix_spawn_file_actions_addchdir_np(&fileActions, workingDirectory.c_str()) == 0;
+#endif
+    if (!ready) {
+        posix_spawn_file_actions_destroy(&fileActions);
+        return false;
+    }
+
+    std::vector<char*> argv;
+    argv.reserve(arguments.size() + 1);
+    for (const std::string& argument : arguments) {
+        argv.push_back(const_cast<char*>(argument.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    pid_t pid = 0;
+    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), ::environ);
+    posix_spawn_file_actions_destroy(&fileActions);
+    if (spawnResult != 0) {
+        return false;
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) == -1) {
+        if (errno != EINTR) {
+            return false;
+        }
+    }
+
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+std::optional<std::string> trim_line(const std::string& value) {
+    const std::string trimmed = trim_copy(value);
+    if (trimmed.empty()) {
+        return std::nullopt;
+    }
+    return trimmed;
+}
+
+std::optional<std::string> git_current_commit(const std::filesystem::path& repoPath) {
+    const ProcessResult result = run_command_capture_status(
+        "git -C " + escape_shell_arg(repoPath.string()) + " rev-parse --verify HEAD"
+    );
+    if (result.exitCode != 0) {
+        return std::nullopt;
+    }
+    return trim_line(result.output);
+}
+
+bool ensure_directory(const std::filesystem::path& path) {
+    if (path.empty()) {
+        return true;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(path, error);
+    return !error;
+}
+
+bool copy_file_with_mode(const std::filesystem::path& source, const std::filesystem::path& target) {
+    std::error_code error;
+    if (!ensure_directory(target.parent_path())) {
+        return false;
+    }
+    std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, error);
+    if (error) {
+        return false;
+    }
+    const auto permissions = std::filesystem::status(source, error).permissions();
+    if (!error) {
+        std::filesystem::permissions(target, permissions, std::filesystem::perm_options::replace, error);
+    }
+    return !error;
+}
+
+bool replace_symlink_atomically(const std::filesystem::path& target, const std::filesystem::path& linkPath) {
+    std::error_code error;
+    if (!ensure_directory(linkPath.parent_path())) {
+        return false;
+    }
+
+    const std::filesystem::path tempLink = linkPath.parent_path() / (linkPath.filename().string() + ".tmp");
+    std::filesystem::remove(tempLink, error);
+    error.clear();
+    std::filesystem::create_symlink(target, tempLink, error);
+    if (error) {
+        return false;
+    }
+
+    std::filesystem::rename(tempLink, linkPath, error);
+    if (!error) {
+        return true;
+    }
+
+    error.clear();
+    std::filesystem::remove(linkPath, error);
+    error.clear();
+    std::filesystem::rename(tempLink, linkPath, error);
+    return !error;
+}
+
+std::string binary_name_for_commit(const std::string& commit) {
+    return "rqp-" + commit;
+}
+
+bool sync_self_update_repository(const SelfUpdateConfig& config, Logger& logger) {
+    const std::filesystem::path repoPath(config.repoPath);
+    if (!ensure_directory(repoPath.parent_path())) {
+        logger.err("failed to create self-update repo parent directory");
+        return false;
+    }
+
+    const std::filesystem::path gitDirectory = repoPath / ".git";
+    if (!std::filesystem::exists(gitDirectory)) {
+        logger.stdout("self-update: clone repository");
+        if (!run_process({
+                "git", "clone", "--branch", config.branch, "--single-branch", config.repoUrl, repoPath.string()
+            }, std::filesystem::current_path())) {
+            logger.err("self-update clone failed");
+            return false;
+        }
+        return true;
+    }
+
+    logger.stdout("self-update: checkout branch");
+    if (!run_process({"git", "checkout", config.branch}, repoPath)) {
+        logger.err("self-update checkout failed");
+        return false;
+    }
+    logger.stdout("self-update: pull latest commit");
+    if (!run_process({"git", "pull", "--ff-only", "origin", config.branch}, repoPath)) {
+        logger.err("self-update fast-forward failed");
+        return false;
+    }
+    return true;
+}
+
+bool build_self_update_binary(const ReqPackConfig& config, const std::string& commit, std::filesystem::path& installedBinaryPath, Logger& logger) {
+    const std::filesystem::path repoPath(config.selfUpdate.repoPath);
+    const std::filesystem::path buildPath = std::filesystem::path(config.selfUpdate.buildPath) / commit;
+    const std::filesystem::path outputBinary = std::filesystem::path(config.selfUpdate.binaryDirectory) / binary_name_for_commit(commit);
+    const std::filesystem::path candidateBinary = buildPath / "ReqPack";
+
+    installedBinaryPath = outputBinary;
+    if (std::filesystem::exists(outputBinary)) {
+        logger.stdout("self-update: binary already built for commit " + commit);
+        return true;
+    }
+
+    if (!ensure_directory(buildPath) || !ensure_directory(outputBinary.parent_path())) {
+        logger.err("failed to create self-update build directories");
+        return false;
+    }
+
+    logger.stdout("self-update: configure build");
+    if (!run_process({
+            "cmake",
+            "-S", repoPath.string(),
+            "-B", buildPath.string(),
+            "-DCMAKE_BUILD_TYPE=Release"
+        }, repoPath)) {
+        logger.err("self-update configure failed");
+        return false;
+    }
+
+    logger.stdout("self-update: build binary");
+    if (!run_process({"cmake", "--build", buildPath.string(), "--target", "ReqPack"}, repoPath)) {
+        logger.err("self-update build failed");
+        return false;
+    }
+
+    if (!std::filesystem::exists(candidateBinary)) {
+        logger.err("self-update build produced no ReqPack binary");
+        return false;
+    }
+    if (!copy_file_with_mode(candidateBinary, outputBinary)) {
+        logger.err("failed to install built self-update binary");
+        return false;
+    }
+    return true;
+}
+
+bool is_self_update_command(const std::vector<std::string>& arguments) {
+    const std::vector<std::string> filtered = strip_config_arguments(arguments);
+    if (filtered.empty() || filtered.front() != "update") {
+        return false;
+    }
+
+    for (std::size_t i = 1; i < filtered.size(); ++i) {
+        const std::string& argument = filtered[i];
+        if (argument == "--help" || argument == "-h") {
+            return false;
+        }
+        if (argument == "--all") {
+            return false;
+        }
+        if (argument.rfind("--", 0) == 0) {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+int run_self_update(const ReqPackConfig& config, Logger& logger) {
+    if (config.selfUpdate.repoUrl.empty()) {
+        logger.err("self-update repoUrl is not configured");
+        return 1;
+    }
+    if (config.selfUpdate.branch.empty()) {
+        logger.err("self-update branch is not configured");
+        return 1;
+    }
+    if (config.selfUpdate.repoPath.empty() || config.selfUpdate.buildPath.empty() ||
+        config.selfUpdate.binaryDirectory.empty() || config.selfUpdate.linkPath.empty()) {
+        logger.err("self-update paths are not fully configured");
+        return 1;
+    }
+
+    const std::filesystem::path repoPath(config.selfUpdate.repoPath);
+    const std::optional<std::string> previousCommit = std::filesystem::exists(repoPath / ".git")
+        ? git_current_commit(repoPath)
+        : std::nullopt;
+
+    if (!sync_self_update_repository(config.selfUpdate, logger)) {
+        return 1;
+    }
+
+    const std::optional<std::string> currentCommit = git_current_commit(repoPath);
+    if (!currentCommit.has_value()) {
+        logger.err("failed to resolve self-update commit");
+        return 1;
+    }
+
+    std::filesystem::path installedBinaryPath;
+    if (!build_self_update_binary(config, currentCommit.value(), installedBinaryPath, logger)) {
+        return 1;
+    }
+
+    logger.stdout("self-update: update local symlink");
+    if (!replace_symlink_atomically(installedBinaryPath, std::filesystem::path(config.selfUpdate.linkPath))) {
+        logger.err("failed to update self-update symlink");
+        return 1;
+    }
+
+    if (previousCommit.has_value() && previousCommit.value() == currentCommit.value()) {
+        logger.stdout("self-update complete: already on latest commit " + currentCommit.value());
+    } else {
+        logger.stdout("self-update complete: now on commit " + currentCommit.value());
+    }
+    logger.stdout("self-update link: " + config.selfUpdate.linkPath);
+    return 0;
+}
+
 int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::vector<std::string>& inheritedArguments) {
     Logger& logger = Logger::instance();
     const std::vector<StdinCommand> commands = read_stdin_commands(std::cin);
@@ -571,6 +956,13 @@ int main(int argc, char* argv[]) {
 
     if (is_install_stdin_command(rawArguments)) {
         const int result = run_stdin_install_batch(cli, config, inherited_stream_arguments(rawArguments));
+        curl_global_cleanup();
+        return result;
+    }
+
+    if (is_self_update_command(rawArguments)) {
+        const int result = run_self_update(config, logger);
+        logger.flushSync();
         curl_global_cleanup();
         return result;
     }

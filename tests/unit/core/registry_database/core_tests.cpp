@@ -24,6 +24,20 @@ TEST_CASE("registry database normalizes git source url and strips query fragment
     CHECK(registry_database_git_source_url("git+https://github.com/org/repo.git") == "https://github.com/org/repo.git");
     CHECK(registry_database_git_source_url("https://github.com/org/repo.git") == "https://github.com/org/repo.git");
     CHECK(registry_database_strip_query_fragment("https://github.com/org/repo.git?ref=main#frag") == "https://github.com/org/repo.git");
+    CHECK(registry_database_git_source_ref("git+https://github.com/org/repo.git?ref=v1.2.3") == "v1.2.3");
+    CHECK(registry_database_git_source_ref("https://github.com/org/repo.git#v2.0.0") == "v2.0.0");
+    CHECK(registry_database_git_source_with_ref("git+https://github.com/org/repo.git", "v1.2.3") == "git+https://github.com/org/repo.git?ref=v1.2.3");
+}
+
+TEST_CASE("registry database extracts git tags from ls-remote output", "[unit][registry_database][source]") {
+    const std::vector<std::string> tags = registry_database_extract_git_tags(
+        "abc123\trefs/tags/v1.0.0\n"
+        "def456\trefs/tags/v1.1.0\n"
+    );
+
+    REQUIRE(tags.size() == 2);
+    CHECK(tags[0] == "v1.0.0");
+    CHECK(tags[1] == "v1.1.0");
 }
 
 TEST_CASE("registry database cache path derivation is stable for source and plugin name", "[unit][registry_database][source]") {

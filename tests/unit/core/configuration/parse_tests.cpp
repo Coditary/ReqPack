@@ -85,6 +85,10 @@ TEST_CASE("configuration resolves XDG directories with standard fallbacks", "[un
     CHECK(default_reqpack_repo_cache_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "repos");
     CHECK(default_reqpack_history_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "history");
     CHECK(default_reqpack_rqp_state_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "rqp" / "state");
+    CHECK(default_reqpack_self_update_repo_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "self" / "repo");
+    CHECK(default_reqpack_self_update_build_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "self" / "build");
+    CHECK(default_reqpack_self_update_binary_directory() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "self" / "bin");
+    CHECK(default_reqpack_self_update_link_path() == tempDir.path() / "home" / ".local" / "bin" / "rqp");
     CHECK(default_reqpack_security_index_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "security" / "index");
     CHECK(default_reqpack_osv_database_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "security" / "osv");
     CHECK(default_reqpack_transaction_path() == tempDir.path() / "home" / ".cache" / "reqpack" / "transactions");
@@ -106,6 +110,10 @@ TEST_CASE("configuration honors explicit XDG directories", "[unit][configuration
     CHECK(std::filesystem::path(config.registry.pluginDirectory) == tempDir.path() / "data" / "reqpack" / "plugins");
     CHECK(std::filesystem::path(config.history.historyPath) == tempDir.path() / "data" / "reqpack" / "history");
     CHECK(std::filesystem::path(config.rqp.statePath) == tempDir.path() / "data" / "reqpack" / "rqp" / "state");
+    CHECK(std::filesystem::path(config.selfUpdate.repoPath) == tempDir.path() / "data" / "reqpack" / "self" / "repo");
+    CHECK(std::filesystem::path(config.selfUpdate.buildPath) == tempDir.path() / "data" / "reqpack" / "self" / "build");
+    CHECK(std::filesystem::path(config.selfUpdate.binaryDirectory) == tempDir.path() / "data" / "reqpack" / "self" / "bin");
+    CHECK(std::filesystem::path(config.selfUpdate.linkPath) == reqpack_user_home() / ".local" / "bin" / "rqp");
     CHECK(std::filesystem::path(config.security.indexPath) == tempDir.path() / "data" / "reqpack" / "security" / "index");
     CHECK(std::filesystem::path(config.security.osvDatabasePath) == tempDir.path() / "data" / "reqpack" / "security" / "osv");
     CHECK(std::filesystem::path(config.execution.transactionDatabasePath) == tempDir.path() / "cache" / "reqpack" / "transactions");
@@ -346,6 +354,14 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                 },
                 statePath = "~/rqp-state",
             },
+            selfUpdate = {
+                repoUrl = "https://example.test/ReqPack.git",
+                branch = "stable",
+                repoPath = "~/self/repo",
+                buildPath = "~/self/build",
+                binaryDirectory = "~/self/bin",
+                linkPath = "~/bin/rqp",
+            },
         }
     )");
 
@@ -408,6 +424,12 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
         "file:///srv/rqp/index.json",
     });
     CHECK(std::filesystem::path(config.rqp.statePath) == home / "rqp-state");
+    CHECK(config.selfUpdate.repoUrl == "https://example.test/ReqPack.git");
+    CHECK(config.selfUpdate.branch == "stable");
+    CHECK(std::filesystem::path(config.selfUpdate.repoPath) == home / "self/repo");
+    CHECK(std::filesystem::path(config.selfUpdate.buildPath) == home / "self/build");
+    CHECK(std::filesystem::path(config.selfUpdate.binaryDirectory) == home / "self/bin");
+    CHECK(std::filesystem::path(config.selfUpdate.linkPath) == home / "bin/rqp");
 }
 
 TEST_CASE("configuration falls back for missing or invalid lua config files", "[unit][configuration][load]") {

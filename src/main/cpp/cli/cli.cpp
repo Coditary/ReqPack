@@ -106,6 +106,10 @@ bool consume_package_result_filter_flag(ActionType action,
 	return true;
 }
 
+bool has_flag(const std::vector<std::string>& flags, const std::string& name) {
+	return std::find(flags.begin(), flags.end(), name) != flags.end();
+}
+
 }  // namespace
 
 Cli::Cli() : app(std::make_unique<CLI::App>(PROGRAM_NAME + " - Unified Package Manager Interface")) {
@@ -266,6 +270,24 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         lastParseFailed_ = false;
         return requests;
     }
+
+	if (action == ActionType::UPDATE) {
+		bool hasNonFlagArgument = false;
+		bool hasAllFlag = false;
+		for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
+			if (requestArguments[i] == "--all") {
+				hasAllFlag = true;
+			}
+			if (!is_flag(requestArguments[i])) {
+				hasNonFlagArgument = true;
+				break;
+			}
+		}
+		if (!hasNonFlagArgument && !hasAllFlag) {
+			lastParseFailed_ = false;
+			return requests;
+		}
+	}
 
     // Manifest mode: reqpack install <dir-path>
     // If the first non-flag argument after the action looks like a filesystem path
@@ -549,6 +571,14 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         }
     }
 
+	if (action == ActionType::UPDATE && requests.empty() && has_flag(global_flags, "all")) {
+		for (const std::string& plugin : discover_non_builtin_plugins(config)) {
+			Request request{.action = action, .system = plugin, .flags = global_flags};
+			request.flags.push_back("__reqpack-internal-plugin-refresh-all");
+			requests.push_back(std::move(request));
+		}
+	}
+
     if (action == ActionType::SBOM && requests.empty()) {
         Request request;
         request.action = action;
@@ -726,11 +756,16 @@ void Cli::print_command_help(ActionType action) {
             break;
         case ActionType::UPDATE:
             help =
-                "Usage: ReqPack update <system> [<package>...] [options]\n"
+                "Usage: ReqPack update [options]\n"
+                "       ReqPack update <system> [<package>...] [options]\n"
                 "       ReqPack update <system1>:<package> <system2>:<package> [options]\n"
                 "\n"
-                "Update packages for one or more package managers.\n"
-                "If no packages are specified, all packages for the system are updated.\n"
+                "Update ReqPack itself, plugin wrappers, or packages for one or more package managers.\n"
+                "Without a system argument, ReqPack performs a self-update from its configured Git repository.\n"
+                "With a system argument and no package list, ReqPack refreshes that plugin wrapper to its newest tagged version when the source is Git-backed.\n"
+                "Use '--all' with a system to update all packages for that system instead.\n"
+                "Use 'ReqPack update --all' to refresh all known plugin wrappers.\n"
+                "To update a package-manager binary itself through ReqPack's wrapper layer, use 'ReqPack update sys <tool>'.\n"
                 "\n"
                 "Arguments:\n"
                 "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
@@ -740,6 +775,7 @@ void Cli::print_command_help(ActionType action) {
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
                 "  --dry-run               Show planned actions without executing them\n"
+                "  --all                   Update all packages for system, or all plugin wrappers without a system\n"
                 "  --snyk                  Run Snyk vulnerability scan after update\n"
                 "  --owasp                 Run OWASP/OSV vulnerability scan after update\n"
                 "  --prompt-on-unsafe      Prompt before applying vulnerable updates\n"
@@ -750,8 +786,13 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"
+                "  ReqPack update\n"
+                "  ReqPack update --all\n"
+                "  ReqPack update pip\n"
+                "  ReqPack update pip --all\n"
                 "  ReqPack update apt\n"
                 "  ReqPack update npm express brew\n"
+                "  ReqPack update sys pip\n"
                 "  ReqPack update apt:curl npm:express\n";
             break;
         case ActionType::SEARCH:
@@ -1115,6 +1156,39 @@ std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config)
     }
 
     return systems;
+}
+
+std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& config) {
+	std::set<std::string> systems;
+	const std::filesystem::path directory = config.registry.pluginDirectory;
+	RegistryDatabase registryDatabase(config);
+
+	if (registryDatabase.ensureReady()) {
+		for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
+			if (!record.name.empty() && !record.alias && to_lower(record.name) != "rqp") {
+				systems.insert(to_lower(record.name));
+			}
+		}
+	}
+
+	if (std::filesystem::exists(directory)) {
+		for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
+			if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
+				continue;
+			}
+
+			if (entry.path().parent_path().filename() != entry.path().stem()) {
+				continue;
+			}
+
+			const std::string name = to_lower(entry.path().stem().string());
+			if (name != "rqp") {
+				systems.insert(name);
+			}
+		}
+	}
+
+	return systems;
 }
 
 std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {

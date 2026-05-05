@@ -368,6 +368,49 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         }
     }
 
+    SECTION("update without system returns no orchestrator requests for wrapper self-update") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update"}, config);
+        CHECK(requests.empty());
+        CHECK_FALSE(cli.parseFailed());
+    }
+
+    SECTION("update all expands to known non-builtin plugins") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "--all"}, config);
+        REQUIRE_FALSE(requests.empty());
+        for (const Request& request : requests) {
+            CHECK(request.action == ActionType::UPDATE);
+            CHECK(request.system != "rqp");
+            CHECK(request.packages.empty());
+            CHECK(std::find(request.flags.begin(), request.flags.end(), "all") != request.flags.end());
+            CHECK(std::find(request.flags.begin(), request.flags.end(), "__reqpack-internal-plugin-refresh-all") != request.flags.end());
+        }
+    }
+
+    SECTION("update with explicit system remains normal orchestrator request") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "pip"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::UPDATE);
+        CHECK(requests.front().system == "pip");
+        CHECK(requests.front().packages.empty());
+    }
+
+    SECTION("update system all keeps explicit system-wide package update request") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "pip", "--all"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::UPDATE);
+        CHECK(requests.front().system == "pip");
+        CHECK(requests.front().packages.empty());
+        CHECK(requests.front().flags == std::vector<std::string>{"all"});
+    }
+
+    SECTION("update sys pip stays explicit wrapper request") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "sys", "pip"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::UPDATE);
+        CHECK(requests.front().system == "sys");
+        CHECK(requests.front().packages == std::vector<std::string>{"pip"});
+    }
+
     SECTION("audit infers sarif format from output path") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"audit", "dnf", "curl", "--output", "report.sarif"}, config);
         REQUIRE(requests.size() == 1);

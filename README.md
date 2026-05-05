@@ -35,9 +35,19 @@
 reqpack install pip flask
 reqpack install npm express
 reqpack install java lombok
+reqpack update
+reqpack update --all
+reqpack update pip
+reqpack update pip --all
+reqpack update sys pip
 ```
 
 ReqPack will detect whether Python or `pip` are installed, download them if missing, then proceed with the installation using its Lua plugin.
+When `reqpack update` is called without a system, ReqPack updates itself from its configured Git repository, builds a fresh local binary, and repoints the local `rqp` symlink.
+When `reqpack update --all` is called, ReqPack refreshes all known plugin wrappers.
+When `reqpack update <plugin>` is called without package names, ReqPack refreshes that plugin wrapper itself. For Git-backed plugin sources, it selects the newest tagged version and rematerializes the plugin locally.
+When `reqpack update <system> --all` is called, ReqPack updates all packages for that system.
+When a package-manager binary itself should be updated through ReqPack's wrapper layer, use `reqpack update sys <tool>`, for example `reqpack update sys pip`.
 
 ---
 
@@ -58,9 +68,16 @@ ReqPack follows XDG base directory rules.
 - `$XDG_DATA_HOME/reqpack/registry`
 - `$XDG_DATA_HOME/reqpack/history`
 - `$XDG_DATA_HOME/reqpack/rqp/state`
+- `$XDG_DATA_HOME/reqpack/self/repo`
+- `$XDG_DATA_HOME/reqpack/self/build`
+- `$XDG_DATA_HOME/reqpack/self/bin`
 - `$XDG_DATA_HOME/reqpack/security/index`
 - `$XDG_DATA_HOME/reqpack/security/osv`
 - Fallback when `XDG_DATA_HOME` is unset or empty: `~/.local/share/reqpack/...`
+
+### Local Binary Link
+
+- Self-update symlink default: `~/.local/bin/rqp`
 
 ### Cache
 
