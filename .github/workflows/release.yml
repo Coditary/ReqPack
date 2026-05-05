@@ -1,0 +1,215 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-test-package:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    env:
+      XDG_CACHE_HOME: ${{ github.workspace }}/.cache
+      SOL2_VERSION: v3.3.0
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache/${{ matrix.target }}
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 300M
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux
+            runner: ubuntu-latest
+            family: linux
+          - target: x86_64-darwin
+            runner: macos-13
+            family: macos
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+            family: linux
+          - target: aarch64-darwin
+            runner: macos-14
+            family: macos
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute cache scope
+        id: cache-scope
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore FetchContent cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.XDG_CACHE_HOME }}/reqpack/fetchcontent/${{ runner.os }}
+          key: fetchcontent-v1-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            fetchcontent-v1-${{ runner.os }}-
+
+      - name: Restore sol2 cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.XDG_CACHE_HOME }}/reqpack/sol2
+          key: sol2-v1-${{ runner.os }}-${{ env.SOL2_VERSION }}
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-v1-${{ matrix.target }}-${{ steps.cache-scope.outputs.week }}
+          restore-keys: |
+            ccache-v1-${{ matrix.target }}-
+
+      - name: Restore Homebrew download cache
+        if: matrix.family == 'macos'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: homebrew-v1-${{ matrix.target }}-${{ steps.cache-scope.outputs.week }}
+          restore-keys: |
+            homebrew-v1-${{ matrix.target }}-
+
+      - name: Install Linux dependencies
+        if: matrix.family == 'linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            ccache \
+            cmake \
+            curl \
+            git \
+            pkg-config \
+            libboost-dev \
+            libcli11-dev \
+            libcurl4-openssl-dev \
+            libfmt-dev \
+            liblua5.4-dev \
+            libspdlog-dev \
+            libssl-dev \
+            libzstd-dev
+
+      - name: Install macOS dependencies
+        if: matrix.family == 'macos'
+        run: |
+          brew install ccache cli11 fmt spdlog boost zstd openssl@3 lua@5.4
+          {
+            echo "BREW_PREFIX=$(brew --prefix)"
+            echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)"
+            echo "LUA_PREFIX=$(brew --prefix lua@5.4)"
+          } >> "$GITHUB_ENV"
+
+      - name: Prepare compiler cache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --zero-stats
+
+      - name: Install sol2 headers
+        run: sudo ./.github/scripts/setup-sol2.sh /usr/local/include
+
+      - name: Build and test Linux targets
+        if: matrix.family == 'linux'
+        run: |
+          ./.github/scripts/configure-build-test.sh "build-${{ matrix.target }}" \
+            -DFETCHCONTENT_BASE_DIR="${XDG_CACHE_HOME}/reqpack/fetchcontent/${{ runner.os }}" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build and test macOS targets
+        if: matrix.family == 'macos'
+        run: |
+          export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig:${LUA_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+          ./.github/scripts/configure-build-test.sh "build-${{ matrix.target }}" \
+            -DFETCHCONTENT_BASE_DIR="${XDG_CACHE_HOME}/reqpack/fetchcontent/${{ runner.os }}" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX}" \
+            -DOPENSSL_ROOT_DIR="${OPENSSL_PREFIX}" \
+            -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
+            -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.4.dylib"
+
+      - name: Show compiler cache stats
+        if: always()
+        run: ccache --show-stats || true
+
+      - name: Package target archive
+        run: |
+          mkdir -p release-artifacts
+          ./.github/scripts/package-release.sh "build-${{ matrix.target }}" "${GITHUB_REF_NAME}" "${{ matrix.target }}" release-artifacts
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ matrix.target }}
+          if-no-files-found: error
+          path: release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs-${{ matrix.target }}
+          if-no-files-found: warn
+          path: |
+            build-${{ matrix.target }}/Testing
+            build-${{ matrix.target }}/CMakeCache.txt
+            build-${{ matrix.target }}/CMakeFiles/CMakeOutput.log
+            build-${{ matrix.target }}/CMakeFiles/CMakeError.log
+
+  publish-release:
+    name: publish-release
+    runs-on: ubuntu-latest
+    needs: build-test-package
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: release-bundle-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd release-artifacts
+          sha256sum rqp-*.tar.gz > SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          {
+            echo "## Summary"
+            echo "- Multi-target \\`rqp\\` binaries for x86_64-linux, x86_64-darwin, aarch64-linux, and aarch64-darwin"
+            echo "- Every asset rebuilt from source and verified with full \\`ctest --test-dir build --output-on-failure\\` coverage on its target runner"
+            echo "- Checksums attached in \\`SHA256SUMS\\`"
+            echo
+            echo "## Assets"
+            for file in release-artifacts/rqp-*.tar.gz; do
+              echo "- $(basename "$file")"
+            done
+            echo "- SHA256SUMS"
+          } > release-notes.md
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$tag" --notes-file release-notes.md
+            gh release upload "$tag" release-artifacts/rqp-*.tar.gz release-artifacts/SHA256SUMS --clobber
+          else
+            gh release create "$tag" release-artifacts/rqp-*.tar.gz release-artifacts/SHA256SUMS --title "$tag" --notes-file release-notes.md
+          fi

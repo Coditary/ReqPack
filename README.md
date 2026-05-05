@@ -296,6 +296,18 @@ make
 
 ---
 
+## 🔁 CI & Releases
+
+- `.github/workflows/ci.yml` runs on `push` and `pull_request`
+- validated targets: `x86_64-linux`, `x86_64-darwin`, `aarch64-linux`, `aarch64-darwin`
+- each target builds `ReqPack`, `core_unit_tests`, `core_integration_tests`, `exec_rules_unit_tests`, and `exec_rules_integration_tests`, then runs `ctest --test-dir build --output-on-failure`
+- workflows reuse safe caches for CMake `FetchContent`, sol2 headers, `ccache`, and Homebrew downloads
+- tags matching `v*` trigger `.github/workflows/release.yml`
+- release assets are named `rqp-<tag>-<target>.tar.gz` and include shipped binary `rqp`
+- each release also publishes `SHA256SUMS`
+
+---
+
 ## ❤️ Contributing
 
 Want to add support for a new package manager? Add a Lua plugin under `plugins/<system>/`, register a source in `registry.lua`, or submit a pull request to update the shared registry sources.
