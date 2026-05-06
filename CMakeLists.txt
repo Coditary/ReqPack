@@ -23,6 +23,7 @@ find_package(CLI11 REQUIRED)
 find_package(CURL REQUIRED)
 find_package(Boost REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_library(REQPACK_ZSTD_LIBRARY NAMES zstd REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 
@@ -286,7 +287,7 @@ target_link_libraries(ReqPack PRIVATE
 	lmdb
 	OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
-	zstd
+	${REQPACK_ZSTD_LIBRARY}
 	${LUA_LIBRARIES}
 	Boost::boost
 	spdlog::spdlog
@@ -314,7 +315,7 @@ target_link_libraries(core_unit_tests PRIVATE
     lmdb
     OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
-    zstd
+    ${REQPACK_ZSTD_LIBRARY}
     ${LUA_LIBRARIES}
     Boost::boost
     spdlog::spdlog
@@ -327,7 +328,7 @@ target_link_libraries(core_integration_tests PRIVATE
     lmdb
     OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
-    zstd
+    ${REQPACK_ZSTD_LIBRARY}
     ${LUA_LIBRARIES}
     Boost::boost
     spdlog::spdlog

@@ -112,6 +112,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX};${ZSTD_PREFIX}" \
             -DOPENSSL_ROOT_DIR="${OPENSSL_PREFIX}" \
+            -DREQPACK_ZSTD_LIBRARY="${ZSTD_PREFIX}/lib/libzstd.dylib" \
             -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
             -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
             -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.5.4.dylib"
