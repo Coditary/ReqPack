@@ -77,8 +77,8 @@ jobs:
 
       - name: Install sol2 headers
         run: |
-          git clone https://github.com/ThePhD/sol2.git
-          sudo cp -r sol2/include/sol /usr/local/include/
+          git clone --depth 1 -b ${{ env.SOL2_VERSION }} https://github.com/ThePhD/sol2.git
+          echo "SOL2_INCLUDE_DIR=${{ github.workspace }}/sol2/include" >> "$GITHUB_ENV"
 
       - name: Prepare compiler cache
         run: |
@@ -94,7 +94,8 @@ jobs:
           cd build
           cmake .. \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}"
           make -j$(nproc)
           ctest --output-on-failure
 
@@ -110,8 +111,9 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX}" \
             -DOPENSSL_ROOT_DIR="${OPENSSL_PREFIX}" \
+            -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
             -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
-            -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.4.dylib"
+            -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.5.4.dylib"
           make -j$(sysctl -n hw.ncpu)
           ctest --output-on-failure
 
