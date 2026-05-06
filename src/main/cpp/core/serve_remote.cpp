@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +32,19 @@ namespace {
 
 constexpr const char* REMOTE_UPLOAD_INSTALL_COMMAND = "__reqpack_upload_install__";
 constexpr const char* REMOTE_UPLOAD_PATH_PLACEHOLDER = "__REQPACK_REMOTE_UPLOAD_PATH__";
+
+volatile std::sig_atomic_t g_remote_signal_shutdown_requested = 0;
+volatile std::sig_atomic_t g_remote_signal_server_fd = -1;
+
+void handle_remote_serve_signal(int) {
+    g_remote_signal_shutdown_requested = 1;
+    const int serverFd = static_cast<int>(g_remote_signal_server_fd);
+    if (serverFd != -1) {
+        ::shutdown(serverFd, SHUT_RDWR);
+        ::close(serverFd);
+        g_remote_signal_server_fd = -1;
+    }
+}
 
 struct RemoteResponse {
     bool ok{false};
@@ -91,6 +105,45 @@ struct RemoteServerState {
     int serverFd{-1};
     int nextSessionId{1};
     std::atomic<bool> shutdownRequested{false};
+};
+
+class ScopedRemoteSignalHandlers {
+public:
+    explicit ScopedRemoteSignalHandlers(int serverFd) {
+        g_remote_signal_shutdown_requested = 0;
+        g_remote_signal_server_fd = serverFd;
+
+        struct sigaction action {};
+        action.sa_handler = handle_remote_serve_signal;
+        ::sigemptyset(&action.sa_mask);
+
+        if (::sigaction(SIGTERM, &action, &oldTerm_) != 0) {
+            return;
+        }
+        if (::sigaction(SIGINT, &action, &oldInt_) != 0) {
+            ::sigaction(SIGTERM, &oldTerm_, nullptr);
+            return;
+        }
+        installed_ = true;
+    }
+
+    ~ScopedRemoteSignalHandlers() {
+        g_remote_signal_server_fd = -1;
+        g_remote_signal_shutdown_requested = 0;
+        if (installed_) {
+            ::sigaction(SIGTERM, &oldTerm_, nullptr);
+            ::sigaction(SIGINT, &oldInt_, nullptr);
+        }
+    }
+
+    bool shutdownRequested() const {
+        return g_remote_signal_shutdown_requested != 0;
+    }
+
+private:
+    struct sigaction oldTerm_ {};
+    struct sigaction oldInt_ {};
+    bool installed_{false};
 };
 
 std::string trim_copy(const std::string& value) {
@@ -1254,6 +1307,8 @@ int run_remote_serve(
         return 1;
     }
 
+    ScopedRemoteSignalHandlers signalHandlers(serverFd);
+
 	render_command_output(CommandOutput{
 		.mode = DisplayMode::SERVE,
 		.sessionItems = {"remote-server"},
@@ -1280,12 +1335,12 @@ int run_remote_serve(
     };
     std::mutex commandMutex;
 
-    while (!state.shutdownRequested.load()) {
+    while (!state.shutdownRequested.load() && !signalHandlers.shutdownRequested()) {
         sockaddr_storage clientAddress{};
         socklen_t clientLength = sizeof(clientAddress);
         const int clientFd = ::accept(serverFd, reinterpret_cast<sockaddr*>(&clientAddress), &clientLength);
         if (clientFd == -1) {
-            if (state.shutdownRequested.load()) {
+            if (state.shutdownRequested.load() || signalHandlers.shutdownRequested()) {
                 break;
             }
             continue;
@@ -1347,6 +1402,12 @@ int run_remote_serve(
             std::lock_guard<std::mutex> lock(state.mutex);
             state.sessions.erase(sessionId);
         }).detach();
+    }
+
+    if (signalHandlers.shutdownRequested()) {
+        state.shutdownRequested.store(true);
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.serverFd = -1;
     }
 
     logger.flushSync();

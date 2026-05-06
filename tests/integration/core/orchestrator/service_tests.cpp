@@ -3389,6 +3389,49 @@ TEST_CASE("reqpack serve remote json mode returns json responses", "[integration
     ::close(client);
 }
 
+TEST_CASE("reqpack serve remote json mode rejects invalid json requests", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-json-invalid"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--json", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const int client = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(client, "not-json\n"));
+    const std::string response = read_json_response_line(client);
+    INFO(response);
+    CHECK(response.find("\"ok\":false") != std::string::npos);
+    CHECK(response.find("invalid json request") != std::string::npos);
+    ::close(client);
+}
+
+TEST_CASE("reqpack serve remote json mode accepts empty commands after auth", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-json-empty"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--json", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const int client = connect_with_retry("127.0.0.1", port);
+    REQUIRE(send_socket_text(client, "{\"token\":\"secret\",\"command\":\"\"}\n"));
+    const std::string response = read_json_response_line(client);
+    CHECK(response.find("\"ok\":true") != std::string::npos);
+    CHECK(response.find("\"output\":\"\"") != std::string::npos);
+    ::close(client);
+}
+
 TEST_CASE("reqpack serve remote autodetects json clients without json flag", "[integration][orchestrator][remote]") {
     TempDir tempDir{"reqpack-orchestrator-remote-auto-json"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
@@ -3430,6 +3473,38 @@ TEST_CASE("reqpack serve remote enforces max connections", "[integration][orches
     CHECK(response.second.find("max connections") != std::string::npos);
     ::close(firstClient);
     ::close(secondClient);
+}
+
+TEST_CASE("reqpack serve remote http and https modes report unimplemented", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-http"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    SECTION("http") {
+        int status = 0;
+        const std::string output = run_reqpack_with_home_and_status(
+            tempDir.path(),
+            configPath,
+            tempDir.path(),
+            {"serve", "--remote", "--http"},
+            status
+        );
+        CHECK(status != 0);
+        CHECK(output.find("serve --remote --http is not implemented yet") != std::string::npos);
+    }
+
+    SECTION("https") {
+        int status = 0;
+        const std::string output = run_reqpack_with_home_and_status(
+            tempDir.path(),
+            configPath,
+            tempDir.path(),
+            {"serve", "--remote", "--https"},
+            status
+        );
+        CHECK(status != 0);
+        CHECK(output.find("serve --remote --https is not implemented yet") != std::string::npos);
+    }
 }
 
 TEST_CASE("reqpack serve remote supports admin commands from server remote users", "[integration][orchestrator][remote]") {
@@ -3740,6 +3815,117 @@ TEST_CASE("reqpack remote upload respects readonly server mode", "[integration][
     CHECK(status != 0);
     CHECK(output.find("readonly") != std::string::npos);
     CHECK_FALSE(std::filesystem::exists(pluginDirectory / "apply" / "state" / "local.txt"));
+}
+
+TEST_CASE("reqpack remote reports missing named profile", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-missing-profile"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = { host = '127.0.0.1', port = 4545 },\n"
+        "}\n");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "remote", "missing", "list", "apply"
+    }, status);
+    CHECK(status != 0);
+    CHECK(output.find("remote profile not found: missing") != std::string::npos);
+}
+
+TEST_CASE("reqpack remote json profiles require forwarded command", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-json-no-command"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = {\n"
+        "    host = '127.0.0.1',\n"
+        "    port = 4545,\n"
+        "    protocol = 'json',\n"
+        "  },\n"
+        "}\n");
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "remote", "dev"
+    }, status);
+    CHECK(status != 0);
+    CHECK(output.find("json remote profiles require a forwarded command") != std::string::npos);
+}
+
+TEST_CASE("reqpack remote rejects invalid local upload arguments before connecting", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-upload-errors"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = {\n"
+        "    host = '127.0.0.1',\n"
+        "    port = 4545,\n"
+        "  },\n"
+        "}\n");
+
+    SECTION("non-regular upload path is rejected") {
+        int status = 0;
+        const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+            "remote", "dev", "install", "apply", tempDir.path().string()
+        }, status);
+        CHECK(status != 0);
+        CHECK(output.find("remote upload only supports regular files") != std::string::npos);
+    }
+
+    SECTION("multiple local upload files are rejected") {
+        const std::filesystem::path firstUpload = tempDir.path() / "one.pkg";
+        const std::filesystem::path secondUpload = tempDir.path() / "two.pkg";
+        write_file(firstUpload, "one");
+        write_file(secondUpload, "two");
+
+        int status = 0;
+        const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+            "remote", "dev", "install", "apply", firstUpload.string(), secondUpload.string()
+        }, status);
+        CHECK(status != 0);
+        CHECK(output.find("remote upload supports one local file per install command") != std::string::npos);
+    }
+}
+
+TEST_CASE("reqpack remote client reports http and https profiles as unimplemented", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-http-client"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    SECTION("http profile") {
+        write_remote_profiles(tempDir.path(),
+            "return {\n"
+            "  dev = { url = 'http://127.0.0.1:4545' },\n"
+            "}\n");
+
+        int status = 0;
+        const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+            "remote", "dev", "list", "apply"
+        }, status);
+        CHECK(status != 0);
+        CHECK(output.find("http remote profiles are not implemented yet") != std::string::npos);
+    }
+
+    SECTION("https profile") {
+        write_remote_profiles(tempDir.path(),
+            "return {\n"
+            "  dev = { url = 'https://127.0.0.1:4545' },\n"
+            "}\n");
+
+        int status = 0;
+        const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+            "remote", "dev", "list", "apply"
+        }, status);
+        CHECK(status != 0);
+        CHECK(output.find("https remote profiles are not implemented yet") != std::string::npos);
+    }
 }
 
 TEST_CASE("orchestrator sys plugin maps logical packages to apt backend", "[integration][orchestrator][service][sys]") {

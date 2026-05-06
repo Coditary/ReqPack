@@ -207,3 +207,146 @@ TEST_CASE("downloader blocks unpinned git registry plugin when thin-layer trust 
     CHECK_FALSE(downloader.downloadPlugin("dnf"));
     CHECK_FALSE(std::filesystem::exists(target));
 }
+
+TEST_CASE("downloader public download copies local files and reports missing sources", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-public-download"};
+    ReqPackConfig config = make_downloader_test_config(tempDir.path());
+    Downloader downloader(nullptr, config);
+
+    SECTION("existing local file is copied into target path") {
+        const std::filesystem::path source = tempDir.path() / "source.lua";
+        const std::filesystem::path target = tempDir.path() / "plugins" / "dnf" / "dnf.lua";
+        write_file(source, "return { getName = function() return 'dnf' end }\n");
+
+        REQUIRE(downloader.download(source.string(), target.string()));
+        CHECK(read_file(target) == "return { getName = function() return 'dnf' end }\n");
+    }
+
+    SECTION("missing local file fails without creating target") {
+        const std::filesystem::path target = tempDir.path() / "plugins" / "dnf" / "dnf.lua";
+
+        CHECK_FALSE(downloader.download((tempDir.path() / "missing.lua").string(), target.string()));
+        CHECK_FALSE(std::filesystem::exists(target));
+    }
+}
+
+TEST_CASE("downloader rejects plugin download when disabled or database unavailable", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-guards"};
+
+    SECTION("disabled downloader short-circuits before database access") {
+        ReqPackConfig config = make_downloader_test_config(tempDir.path());
+        config.downloader.enabled = false;
+
+        CHECK_FALSE(Downloader(nullptr, config).downloadPlugin("dnf"));
+    }
+
+    SECTION("missing registry database blocks plugin download") {
+        ReqPackConfig config = make_downloader_test_config(tempDir.path());
+
+        CHECK_FALSE(Downloader(nullptr, config).downloadPlugin("dnf"));
+    }
+}
+
+TEST_CASE("downloader resolves planner aliases before materializing plugins", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-planner-alias"};
+    const std::filesystem::path source = tempDir.path() / "sources" / "dnf.lua";
+    write_file(source, "return { getName = function() return 'dnf' end }\n");
+
+    ReqPackConfig config = make_downloader_test_config(tempDir.path());
+    config.planner.systemAliases["yum"] = "dnf";
+    config.registry.sources["dnf"] = RegistrySourceEntry{
+        .source = source.string(),
+        .alias = false,
+        .description = "dnf plugin",
+    };
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    Downloader downloader(&database, config);
+    REQUIRE(downloader.downloadPlugin("yum"));
+
+    const std::filesystem::path dnfTarget = tempDir.path() / "plugins" / "dnf" / "dnf.lua";
+    CHECK(std::filesystem::exists(dnfTarget));
+    CHECK(read_file(dnfTarget) == "return { getName = function() return 'dnf' end }\n");
+    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "plugins" / "yum"));
+}
+
+TEST_CASE("downloader copies bundled plugin directories and skips git metadata", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-bundle-copy"};
+    const std::filesystem::path bundleRoot = tempDir.path() / "bundle" / "dnf";
+    write_file(bundleRoot / "dnf.lua", "return { getName = function() return 'dnf' end }\n");
+    write_file(bundleRoot / "bootstrap.lua", "print('boot')\n");
+    write_file(bundleRoot / "lib" / "helper.txt", "helper\n");
+    write_file(bundleRoot / ".git" / "config", "ignored\n");
+
+    ReqPackConfig config = make_downloader_test_config(tempDir.path());
+    config.registry.sources["dnf"] = RegistrySourceEntry{
+        .source = bundleRoot.string(),
+        .alias = false,
+        .description = "dnf bundle",
+    };
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    const std::filesystem::path targetDirectory = tempDir.path() / "plugins" / "dnf";
+    write_file(targetDirectory / "stale.txt", "stale\n");
+
+    Downloader downloader(&database, config);
+    REQUIRE(downloader.downloadPlugin("dnf"));
+
+    CHECK_FALSE(std::filesystem::exists(targetDirectory / "stale.txt"));
+    CHECK(read_file(targetDirectory / "dnf.lua") == "return { getName = function() return 'dnf' end }\n");
+    CHECK(read_file(targetDirectory / "bootstrap.lua") == "print('boot')\n");
+    CHECK(read_file(targetDirectory / "lib" / "helper.txt") == "helper\n");
+    CHECK_FALSE(std::filesystem::exists(targetDirectory / ".git"));
+}
+
+TEST_CASE("downloader writes bootstrap scripts and removes stale bootstrap files", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-bootstrap"};
+
+    SECTION("bootstrap from local source file is materialized next to plugin") {
+        const std::filesystem::path sourceDirectory = tempDir.path() / "source-with-bootstrap";
+        const std::filesystem::path source = sourceDirectory / "dnf.lua";
+        write_file(source, "return { getName = function() return 'dnf' end }\n");
+        write_file(sourceDirectory / "bootstrap.lua", "print('boot')\n");
+
+        ReqPackConfig config = make_downloader_test_config(tempDir.path() / "with-bootstrap");
+        config.registry.sources["dnf"] = RegistrySourceEntry{
+            .source = source.string(),
+            .alias = false,
+            .description = "dnf plugin",
+        };
+
+        RegistryDatabase database(config);
+        REQUIRE(database.ensureReady());
+        REQUIRE(Downloader(&database, config).downloadPlugin("dnf"));
+
+        const std::filesystem::path targetDirectory = std::filesystem::path(config.registry.pluginDirectory) / "dnf";
+        CHECK(read_file(targetDirectory / "dnf.lua") == "return { getName = function() return 'dnf' end }\n");
+        CHECK(read_file(targetDirectory / "bootstrap.lua") == "print('boot')\n");
+    }
+
+    SECTION("stale bootstrap is removed when source no longer ships one") {
+        const std::filesystem::path source = tempDir.path() / "source-without-bootstrap" / "dnf.lua";
+        write_file(source, "return { getName = function() return 'dnf' end }\n");
+
+        ReqPackConfig config = make_downloader_test_config(tempDir.path() / "without-bootstrap");
+        config.registry.sources["dnf"] = RegistrySourceEntry{
+            .source = source.string(),
+            .alias = false,
+            .description = "dnf plugin",
+        };
+
+        RegistryDatabase database(config);
+        REQUIRE(database.ensureReady());
+
+        const std::filesystem::path targetDirectory = std::filesystem::path(config.registry.pluginDirectory) / "dnf";
+        write_file(targetDirectory / "bootstrap.lua", "old\n");
+
+        REQUIRE(Downloader(&database, config).downloadPlugin("dnf"));
+        CHECK(read_file(targetDirectory / "dnf.lua") == "return { getName = function() return 'dnf' end }\n");
+        CHECK_FALSE(std::filesystem::exists(targetDirectory / "bootstrap.lua"));
+    }
+}

@@ -49,6 +49,20 @@ When `reqpack update <plugin>` is called without package names, ReqPack refreshe
 When `reqpack update <system> --all` is called, ReqPack updates all packages for that system.
 When a package-manager binary itself should be updated through ReqPack's wrapper layer, use `reqpack update sys <tool>`, for example `reqpack update sys pip`.
 
+### Test Coverage And Profiling
+
+```bash
+# Build instrumented tests, run them, and print a coverage summary
+make test-coverage
+
+# Build profiling binaries, run tests through perf when available,
+# and print hottest symbols from the captured run
+make profile-tests
+```
+
+Coverage writes CTest output under `build/coverage/Testing/.../Coverage.xml` and prints a summary for files in `src/main/cpp`.
+Profiling writes raw data and text reports under `build/profile/profile-data/`. On Linux, `perf` is preferred and profiles each test binary directly without inheriting child processes, which keeps the hotspot list focused on ReqPack code instead of external helper tools. If `perf` is unavailable, ReqPack falls back to repeated `gprof` runs for the unit-test binaries.
+
 ---
 
 ## 📁 File Locations

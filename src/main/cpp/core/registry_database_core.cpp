@@ -351,11 +351,18 @@ std::string registry_database_escape_field(const std::string& value) {
 }
 
 std::string registry_database_unescape_field(const std::string& value) {
+    const std::size_t firstEscape = value.find('\\');
+    if (firstEscape == std::string::npos) {
+        return value;
+    }
+
     std::string unescaped;
     unescaped.reserve(value.size());
+    unescaped.append(value, 0, firstEscape);
 
     bool escaped = false;
-    for (char c : value) {
+    for (std::size_t index = firstEscape; index < value.size(); ++index) {
+        const char c = value[index];
         if (!escaped && c == '\\') {
             escaped = true;
             continue;

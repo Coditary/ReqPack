@@ -2,6 +2,8 @@
 
 #include <cstdlib>
 
+#include "output/ansi_color.h"
+#include "output/color_display.h"
 #include "output/logger.h"
 #include "output/logger_core.h"
 #include "output/command_output.h"
@@ -85,6 +87,22 @@ private:
     const char* name_;
     bool hadPrevious_{false};
     std::string previous_;
+};
+
+class TestColorDisplay final : public ColorDisplay {
+public:
+    using ColorDisplay::ColorDisplay;
+    using ColorDisplay::decorateBarEmpty;
+    using ColorDisplay::decorateBarFill;
+    using ColorDisplay::decorateBarOuter;
+    using ColorDisplay::decorateFailureMarker;
+    using ColorDisplay::decorateHeader;
+    using ColorDisplay::decorateMessage;
+    using ColorDisplay::decorateRule;
+    using ColorDisplay::decorateStep;
+    using ColorDisplay::decorateSuccessMarker;
+    using ColorDisplay::decorateSummaryFail;
+    using ColorDisplay::decorateSummaryOk;
 };
 
 std::string padRight(const std::string& text, size_t width) {
@@ -202,6 +220,109 @@ TEST_CASE("progress metric helpers normalize and humanize values", "[unit][logge
 TEST_CASE("logger render returns empty for flush and stop events", "[unit][logger][format]") {
     CHECK(logger_render_output_event(OutputEvent{.action = OutputAction::FLUSH}).empty());
     CHECK(logger_render_output_event(OutputEvent{.action = OutputAction::STOP}).empty());
+}
+
+TEST_CASE("logger renders raw stdout log and display trace events", "[unit][logger][format]") {
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::STDOUT,
+        .context = OutputContext{.message = "plain", .source = "cli", .scope = "trace"},
+    }) == "[cli] (trace) plain");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::LOG,
+        .context = OutputContext{.message = "line", .source = "plugin"},
+    }) == "[plugin] line");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_SESSION_BEGIN,
+        .context = OutputContext{.payload = "LIST dnf"},
+    }) == "[display:session_begin] LIST dnf");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_SESSION_END,
+        .context = OutputContext{.payload = "done"},
+    }) == "[display:session_end] done");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_ITEM_BEGIN,
+        .context = OutputContext{.message = "ripgrep", .source = "dnf:ripgrep"},
+    }) == "[display:item_begin] dnf:ripgrep ripgrep");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_ITEM_STEP,
+        .context = OutputContext{.message = "Downloading", .source = "dnf:ripgrep"},
+    }) == "[display:item_step] dnf:ripgrep Downloading");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_ITEM_SUCCESS,
+        .context = OutputContext{.source = "dnf:ripgrep"},
+    }) == "[display:item_success] dnf:ripgrep");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_ITEM_FAILURE,
+        .context = OutputContext{.message = "failed", .source = "dnf:ripgrep"},
+    }) == "[display:item_failure] dnf:ripgrep failed");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_MESSAGE,
+        .context = OutputContext{.message = "hello"},
+    }) == "[display:message] hello");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_TABLE_HEADER,
+        .context = OutputContext{.payload = "Name|Version"},
+    }) == "[display:table_header] Name|Version");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_TABLE_ROW,
+        .context = OutputContext{.payload = "ripgrep|14.1"},
+    }) == "[display:table_row] ripgrep|14.1");
+
+    CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_TABLE_END,
+        .context = {},
+    }) == "[display:table_end]");
+}
+
+TEST_CASE("color display wraps decorated segments with configured ansi styles", "[unit][display][color]") {
+    TestColorDisplay display(DisplayColorScheme{
+        .rule = "underline blue",
+        .header = "bold",
+        .summaryOk = "green",
+        .summaryFail = "red",
+        .barFill = "yellow",
+        .barEmpty = "dim",
+        .step = "cyan",
+        .successMarker = "bright_green",
+        .failureMarker = "bright_red",
+        .message = "magenta",
+    });
+
+    CHECK(display.decorateRule("-----") == ansi_wrap("-----", "underline blue"));
+    CHECK(display.decorateHeader("LIST: dnf") == ansi_wrap("LIST: dnf", "bold"));
+    CHECK(display.decorateSummaryOk("done") == ansi_wrap("done", "green"));
+    CHECK(display.decorateSummaryFail("failed") == ansi_wrap("failed", "red"));
+    CHECK(display.decorateBarFill(3) == ansi_wrap("###", "yellow"));
+    CHECK(display.decorateBarEmpty(2) == ansi_wrap("..", "dim"));
+    CHECK(display.decorateStep("Downloading") == ansi_wrap("Downloading", "cyan"));
+    CHECK(display.decorateSuccessMarker("OK") == ansi_wrap("OK", "bright_green"));
+    CHECK(display.decorateFailureMarker("[FAILED]") == ansi_wrap("[FAILED]", "bright_red"));
+    CHECK(display.decorateMessage("hello") == ansi_wrap("hello", "magenta"));
+}
+
+TEST_CASE("color display colors only progress bar brackets when configured", "[unit][display][color]") {
+    const std::string inner = ansi_wrap("###..", "green");
+
+    SECTION("empty and none bar specs keep plain brackets") {
+        CHECK(TestColorDisplay(DisplayColorScheme{}).decorateBarOuter(inner) == "[" + inner + "]");
+        CHECK(TestColorDisplay(DisplayColorScheme{.barOuter = "none"}).decorateBarOuter(inner) == "[" + inner + "]");
+    }
+
+    SECTION("bar outer spec wraps brackets only") {
+        const std::string spec = "bold blue";
+        const std::string expected = ansi_open(spec) + "[" + ansi_reset(spec) + inner + ansi_open(spec) + "]" + ansi_reset(spec);
+        CHECK(TestColorDisplay(DisplayColorScheme{.barOuter = spec}).decorateBarOuter(inner) == expected);
+    }
 }
 
 TEST_CASE("logger routes item-scoped plugin callbacks to display lifecycle", "[unit][logger][display]") {

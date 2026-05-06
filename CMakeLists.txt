@@ -3,10 +3,35 @@ project(ReqPack LANGUAGES CXX)
 enable_language(C)
 enable_testing()
 
+option(REQPACK_ENABLE_COVERAGE "Build ReqPack targets with coverage instrumentation" OFF)
+option(REQPACK_ENABLE_PROFILING "Build ReqPack targets with profiling instrumentation" OFF)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
+
+function(reqpack_apply_instrumentation target_name)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        if(REQPACK_ENABLE_COVERAGE OR REQPACK_ENABLE_PROFILING)
+            message(WARNING "ReqPack instrumentation flags are only configured for GNU or Clang compilers")
+        endif()
+        return()
+    endif()
+
+    if(REQPACK_ENABLE_COVERAGE)
+        target_compile_options(${target_name} PRIVATE -O0 -g --coverage)
+        target_link_options(${target_name} PRIVATE --coverage)
+    endif()
+
+    if(REQPACK_ENABLE_PROFILING)
+        if(NOT REQPACK_ENABLE_COVERAGE)
+            target_compile_options(${target_name} PRIVATE -O2)
+        endif()
+        target_compile_options(${target_name} PRIVATE -g -fno-omit-frame-pointer -pg)
+        target_link_options(${target_name} PRIVATE -pg)
+    endif()
+endfunction()
 
 if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
@@ -236,6 +261,7 @@ add_executable(core_unit_tests
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
     src/main/cpp/output/plain_display.cpp
+    src/main/cpp/output/color_display.cpp
     src/main/cpp/output/command_output.cpp
 )
 
@@ -246,6 +272,16 @@ add_custom_target(reqpack_test_targets
         exec_rules_unit_tests
         exec_rules_integration_tests
 )
+
+foreach(reqpack_target IN ITEMS
+    ReqPack
+    exec_rules_unit_tests
+    exec_rules_integration_tests
+    core_unit_tests
+    core_integration_tests
+)
+    reqpack_apply_instrumentation(${reqpack_target})
+endforeach()
 
 target_include_directories(ReqPack PRIVATE 
     ${SOL2_INCLUDE_DIR}
