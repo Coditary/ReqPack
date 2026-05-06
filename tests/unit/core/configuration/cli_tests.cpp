@@ -407,6 +407,12 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK_FALSE(cli.parseFailed());
     }
 
+    SECTION("host refresh is handled outside orchestrator request parsing") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"host", "refresh"}, config);
+        CHECK(requests.empty());
+        CHECK_FALSE(cli.parseFailed());
+    }
+
     SECTION("update all expands to known non-builtin plugins") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "--all"}, config);
         REQUIRE_FALSE(requests.empty());

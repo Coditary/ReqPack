@@ -40,6 +40,7 @@ reqpack update --all
 reqpack update pip
 reqpack update pip --all
 reqpack update sys pip
+reqpack host refresh
 ```
 
 ReqPack will detect whether Python or `pip` are installed, download them if missing, then proceed with the installation using its Lua plugin.
@@ -48,6 +49,7 @@ When `reqpack update --all` is called, ReqPack refreshes all known plugin wrappe
 When `reqpack update <plugin>` is called without package names, ReqPack refreshes that plugin wrapper itself. For Git-backed plugin sources, it selects the newest tagged version and rematerializes the plugin locally.
 When `reqpack update <system> --all` is called, ReqPack updates all packages for that system.
 When a package-manager binary itself should be updated through ReqPack's wrapper layer, use `reqpack update sys <tool>`, for example `reqpack update sys pip`.
+When `reqpack host refresh` is called, ReqPack forces a live refresh of the cached host system snapshot used by plugins.
 
 ### Test Coverage And Profiling
 
@@ -97,6 +99,7 @@ ReqPack follows XDG base directory rules.
 
 - `$XDG_CACHE_HOME/reqpack/transactions`
 - `$XDG_CACHE_HOME/reqpack/security/cache`
+- `$XDG_CACHE_HOME/reqpack/host/info.v1.json`
 - Fallback when `XDG_CACHE_HOME` is unset or empty: `~/.cache/reqpack/...`
 
 ---

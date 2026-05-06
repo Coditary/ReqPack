@@ -2,6 +2,7 @@
 
 #include "core/archive_resolver.h"
 #include "core/downloader.h"
+#include "core/host_info.h"
 #include "output/progress_metrics_lua.h"
 #include "plugins/exec_rules.h"
 
@@ -791,6 +792,108 @@ sol::table make_string_array_table(sol::state& lua, const std::vector<std::strin
     return table;
 }
 
+void set_string_field_if_present(sol::table& table, const std::string& key, const std::string& value) {
+	if (!value.empty()) {
+		table[key] = value;
+	}
+}
+
+void set_optional_string_field(sol::state& lua, sol::table& table, const std::string& key, const std::optional<std::string>& value) {
+	table[key] = value.has_value() ? sol::make_object(lua, value.value()) : sol::make_object(lua, sol::lua_nil);
+}
+
+void set_optional_uint32_field(sol::state& lua, sol::table& table, const std::string& key, const std::optional<std::uint32_t>& value) {
+	table[key] = value.has_value() ? sol::make_object(lua, value.value()) : sol::make_object(lua, sol::lua_nil);
+}
+
+void set_optional_uint64_field(sol::state& lua, sol::table& table, const std::string& key, const std::optional<std::uint64_t>& value) {
+	table[key] = value.has_value() ? sol::make_object(lua, value.value()) : sol::make_object(lua, sol::lua_nil);
+}
+
+void set_optional_bool_field(sol::state& lua, sol::table& table, const std::string& key, const std::optional<bool>& value) {
+	table[key] = value.has_value() ? sol::make_object(lua, value.value()) : sol::make_object(lua, sol::lua_nil);
+}
+
+sol::table make_host_info_table(sol::state& lua, const HostInfoSnapshot& snapshot) {
+	sol::table host = lua.create_table();
+
+	sol::table platform = lua.create_table();
+	set_string_field_if_present(platform, "osFamily", snapshot.platform.osFamily);
+	set_string_field_if_present(platform, "arch", snapshot.platform.arch);
+	set_string_field_if_present(platform, "target", snapshot.platform.target);
+	set_string_field_if_present(platform, "supportLevel", snapshot.platform.supportLevel);
+	set_optional_string_field(lua, platform, "supportReason", snapshot.platform.supportReason);
+	host["platform"] = platform;
+
+	sol::table os = lua.create_table();
+	set_string_field_if_present(os, "family", snapshot.os.family);
+	set_string_field_if_present(os, "id", snapshot.os.id);
+	set_string_field_if_present(os, "name", snapshot.os.name);
+	set_optional_string_field(lua, os, "version", snapshot.os.version);
+	set_optional_string_field(lua, os, "versionId", snapshot.os.versionId);
+	set_optional_string_field(lua, os, "prettyName", snapshot.os.prettyName);
+	set_optional_string_field(lua, os, "distroId", snapshot.os.distroId);
+	set_optional_string_field(lua, os, "distroName", snapshot.os.distroName);
+	host["os"] = os;
+
+	sol::table kernel = lua.create_table();
+	set_optional_string_field(lua, kernel, "name", snapshot.kernel.name);
+	set_optional_string_field(lua, kernel, "release", snapshot.kernel.release);
+	set_optional_string_field(lua, kernel, "version", snapshot.kernel.version);
+	host["kernel"] = kernel;
+
+	sol::table cpu = lua.create_table();
+	set_string_field_if_present(cpu, "arch", snapshot.cpu.arch);
+	set_optional_string_field(lua, cpu, "vendor", snapshot.cpu.vendor);
+	set_optional_string_field(lua, cpu, "model", snapshot.cpu.model);
+	set_optional_uint32_field(lua, cpu, "logicalCores", snapshot.cpu.logicalCores);
+	set_optional_uint32_field(lua, cpu, "physicalCores", snapshot.cpu.physicalCores);
+	host["cpu"] = cpu;
+
+	sol::table memory = lua.create_table();
+	set_optional_uint64_field(lua, memory, "totalBytes", snapshot.memory.totalBytes);
+	set_optional_uint64_field(lua, memory, "availableBytes", snapshot.memory.availableBytes);
+	host["memory"] = memory;
+
+	sol::table gpus = lua.create_table(static_cast<int>(snapshot.gpus.size()), 0);
+	for (std::size_t index = 0; index < snapshot.gpus.size(); ++index) {
+		sol::table gpu = lua.create_table();
+		set_optional_string_field(lua, gpu, "vendor", snapshot.gpus[index].vendor);
+		set_optional_string_field(lua, gpu, "model", snapshot.gpus[index].model);
+		set_optional_string_field(lua, gpu, "driverVersion", snapshot.gpus[index].driverVersion);
+		set_optional_string_field(lua, gpu, "backend", snapshot.gpus[index].backend);
+		gpus[static_cast<int>(index + 1)] = gpu;
+	}
+	host["gpus"] = gpus;
+
+	sol::table storage = lua.create_table();
+	sol::table mounts = lua.create_table(static_cast<int>(snapshot.storage.mounts.size()), 0);
+	for (std::size_t index = 0; index < snapshot.storage.mounts.size(); ++index) {
+		const HostMountInfo& mountInfo = snapshot.storage.mounts[index];
+		sol::table mount = lua.create_table();
+		set_optional_string_field(lua, mount, "device", mountInfo.device);
+		set_string_field_if_present(mount, "mountPoint", mountInfo.mountPoint);
+		set_optional_string_field(lua, mount, "fsType", mountInfo.fsType);
+		set_optional_uint64_field(lua, mount, "totalBytes", mountInfo.totalBytes);
+		set_optional_uint64_field(lua, mount, "usedBytes", mountInfo.usedBytes);
+		set_optional_uint64_field(lua, mount, "availableBytes", mountInfo.availableBytes);
+		set_optional_bool_field(lua, mount, "readOnly", mountInfo.readOnly);
+		mounts[static_cast<int>(index + 1)] = mount;
+	}
+	storage["mounts"] = mounts;
+	host["storage"] = storage;
+
+	sol::table cache = lua.create_table();
+	cache["schemaVersion"] = snapshot.cache.schemaVersion;
+	cache["collectedAtEpoch"] = snapshot.cache.collectedAtEpoch;
+	cache["expiresAtEpoch"] = snapshot.cache.expiresAtEpoch;
+	set_string_field_if_present(cache, "refreshReason", snapshot.cache.refreshReason);
+	set_string_field_if_present(cache, "source", snapshot.cache.source);
+	host["cache"] = cache;
+
+	return host;
+}
+
 std::vector<std::string> string_array_from_lua_table(const sol::table& table) {
 	std::vector<std::string> values;
 	for (const auto& [_, value] : table) {
@@ -1095,6 +1198,10 @@ void LuaBridge::register_context_types() {
             }
             return repositories;
         }),
+		"host", sol::readonly_property([this](const PluginCallContext& context) {
+			const std::shared_ptr<const HostInfoSnapshot> snapshot = context.hostInfo != nullptr ? context.hostInfo : HostInfoService::currentSnapshot();
+			return make_host_info_table(m_lua, *snapshot);
+		}),
         "proxy", sol::readonly_property([this](const PluginCallContext& context) {
             if (!context.proxy.has_value()) {
                 return sol::make_object(m_lua, sol::lua_nil);
@@ -1226,6 +1333,7 @@ void LuaBridge::register_reqpack_namespace() {
         return runCommand(command, m_silentRuntimeOutput.load());
     });
     reqpack["exec"] = exec;
+	reqpack["host"] = make_host_info_table(m_lua, *HostInfoService::currentSnapshot());
 }
 
 bool LuaBridge::hasSilentRuntimeFlag(const std::vector<std::string>& flags) const {
@@ -1322,7 +1430,8 @@ PluginCallContext LuaBridge::makeContext(const std::vector<std::string>& flags) 
         .flags = flags,
 		.host = const_cast<LuaBridge*>(this),
 		.proxy = proxy_config_for_system(m_config, m_pluginId),
-		.repositories = repositories_for_ecosystem(m_config, m_pluginId)
+		.repositories = repositories_for_ecosystem(m_config, m_pluginId),
+		.hostInfo = HostInfoService::currentSnapshot()
     };
 }
 

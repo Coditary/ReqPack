@@ -2,11 +2,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 #include "core/configuration.h"
+#include "core/host_info.h"
 #include "core/types.h"
 #include "core/version_compare.h"
 #include "output/progress_metrics.h"
@@ -79,6 +81,7 @@ struct PluginCallContext {
 	/// so the display can correlate events to the right item row.
 	std::string currentItemId{};
 	std::vector<RepositoryEntry> repositories{};
+	std::shared_ptr<const HostInfoSnapshot> hostInfo{};
 
 	ExecResult execute(const std::string& command) const {
 		return host != nullptr ? host->execute(pluginId, command) : ExecResult{};

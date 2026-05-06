@@ -12,6 +12,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "core/host_info.h"
 #include "plugins/lua_bridge.h"
 #include "test_helpers.h"
 
@@ -139,6 +140,7 @@ PluginCallContext make_context(LuaBridge& bridge, const ReqPackConfig& config, s
         .host = bridge.getRuntimeHost(),
         .proxy = proxy_config_for_system(config, bridge.getPluginId()),
         .repositories = repositories_for_ecosystem(config, bridge.getPluginId()),
+        .hostInfo = HostInfoService::currentSnapshot(),
     };
 }
 
@@ -192,11 +194,12 @@ end
 function plugin.getCategories() return { "query", BOOTSTRAP_READY } end
 function plugin.getMissingPackages(packages)
   local missing = {}
+  local host_os = reqpack.host.platform.osFamily or "unknown"
   for _, package in ipairs(packages) do
     missing[#missing + 1] = {
       action = package.action,
       system = package.system,
-      name = package.name .. "-missing",
+      name = package.name .. "-" .. host_os .. "-missing",
       version = package.version,
       sourcePath = package.sourcePath,
       localTarget = package.localTarget,
@@ -291,16 +294,20 @@ function plugin.install(context, packages)
     },
   })
   local global = reqpack.exec.run("printf 'global-exec'")
+  local host_os = context.host.platform.osFamily
+  local host_arch = context.host.cpu.arch
+  local host_source = context.host.cache.source
+  local global_host_os = reqpack.host.platform.osFamily
 
   local src = context.plugin.dir .. "/source.zip"
   local dst = context.plugin.dir .. "/downloaded.txt"
   local net_ok = context.net.download(src, dst) and context.exec.run("test -d '" .. dst .. "' && test -f '" .. dst .. "/source.txt'").success
 
   local meta_path = context.plugin.dir .. "/meta.txt"
-  local meta_cmd = "printf '%s\\n%s\\n%s\\n%s\\n%s' '" .. context.flags[1] .. "' '" .. context.plugin.id .. "' '" .. plain.stdout .. "' '" .. global.stdout .. "' '" .. tmp .. "' > '" .. meta_path .. "'"
+  local meta_cmd = "printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n%s' '" .. context.flags[1] .. "' '" .. context.plugin.id .. "' '" .. plain.stdout .. "' '" .. global.stdout .. "' '" .. tmp .. "' '" .. host_os .. "' '" .. host_arch .. "' '" .. host_source .. ":" .. global_host_os .. "' > '" .. meta_path .. "'"
   local meta_write = context.exec.run(meta_cmd)
 
-  return tmp_check.success and plain.success and plain.exitCode == 0 and plain.stdout == "ctx-exec" and ruled.success and global.success and global.stdout == "global-exec" and net_ok and meta_write.success and packages[1].name == "demo"
+  return tmp_check.success and plain.success and plain.exitCode == 0 and plain.stdout == "ctx-exec" and ruled.success and global.success and global.stdout == "global-exec" and net_ok and meta_write.success and packages[1].name == "demo" and host_os == global_host_os and host_arch ~= nil and host_arch ~= ""
 end
 function plugin.installLocal(context, path) return path ~= "" end
 function plugin.remove(context, packages) return true end
@@ -471,7 +478,7 @@ TEST_CASE("lua bridge loads bootstrap state and parses query values", "[integrat
     REQUIRE(missing.size() == 1);
     CHECK(missing[0].action == ActionType::INSTALL);
     CHECK(missing[0].system == "query");
-    CHECK(missing[0].name == "demo-missing");
+    CHECK(missing[0].name == "demo-" + HostInfoService::currentSnapshot()->platform.osFamily + "-missing");
     CHECK(missing[0].version == "1.2.3");
     CHECK(missing[0].sourcePath == "/tmp/demo.pkg");
     CHECK(missing[0].localTarget);
@@ -534,12 +541,16 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
     for (std::string line; std::getline(metaStream, line);) {
         metaLines.push_back(line);
     }
-    REQUIRE(metaLines.size() == 5);
+    REQUIRE(metaLines.size() == 8);
+    const std::shared_ptr<const HostInfoSnapshot> hostInfo = HostInfoService::currentSnapshot();
     CHECK(metaLines[0] == "--bridge-flag");
     CHECK(metaLines[1] == "bridge");
     CHECK(metaLines[2] == "ctx-exec");
     CHECK(metaLines[3] == "global-exec");
     CHECK(std::filesystem::exists(metaLines[4]));
+    CHECK(metaLines[5] == hostInfo->platform.osFamily);
+    CHECK(metaLines[6] == hostInfo->cpu.arch);
+    CHECK(metaLines[7] == hostInfo->cache.source + ":" + hostInfo->platform.osFamily);
     std::error_code removeError;
     std::filesystem::remove_all(metaLines[4], removeError);
 

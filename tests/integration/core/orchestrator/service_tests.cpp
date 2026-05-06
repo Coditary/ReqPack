@@ -20,6 +20,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "core/host_info.h"
 #include "core/registry.h"
 #include "test_helpers.h"
 
@@ -2423,6 +2424,31 @@ TEST_CASE("wrapper self-update builds latest git commit and swaps local symlink"
     CHECK(sysLog.find("install") != std::string::npos);
     CHECK(sysLog.find("--only-upgrade") != std::string::npos);
     CHECK(sysLog.find("python3-pip") != std::string::npos);
+}
+
+TEST_CASE("host refresh rewrites cached host snapshot", "[integration][orchestrator][service][host]") {
+    TempDir tempDir{"reqpack-host-refresh"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path homePath = tempDir.path() / "home";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    std::filesystem::create_directories(workspace);
+    std::filesystem::create_directories(homePath);
+
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path cachePath = homePath / ".cache" / "reqpack" / "host" / "info.v1.json";
+    write_file(cachePath, "{ invalid json }");
+
+    const std::string output = run_reqpack_with_home(workspace, configPath, homePath, {"host", "refresh"});
+    INFO(output);
+    CHECK(output.find("host refresh: cache updated") != std::string::npos);
+    CHECK(output.find("host cache: " + cachePath.string()) != std::string::npos);
+
+    const std::optional<HostInfoSnapshot> snapshot = read_host_info_snapshot_file(cachePath);
+    REQUIRE(snapshot.has_value());
+    CHECK_FALSE(snapshot->platform.osFamily.empty());
+    CHECK_FALSE(snapshot->platform.arch.empty());
+    CHECK(snapshot->cache.source == "cache");
+    CHECK(snapshot->cache.refreshReason == "manual-live-probe");
 }
 
 TEST_CASE("update plugin refreshes git-backed wrapper to newest tagged version", "[integration][orchestrator][service][plugin-update]") {

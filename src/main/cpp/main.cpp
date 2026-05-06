@@ -1,5 +1,6 @@
 #include "cli/cli.h"
 #include "core/configuration.h"
+#include "core/host_info.h"
 #include "core/orchestrator.h"
 #include "core/remote_client.h"
 #include "core/serve_remote.h"
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <fcntl.h>
 #include <set>
@@ -730,6 +732,24 @@ bool is_self_update_command(const std::vector<std::string>& arguments) {
     }
     return true;
 }
+
+bool is_host_refresh_command(const std::vector<std::string>& arguments) {
+    const std::vector<std::string> filtered = strip_config_arguments(arguments);
+    if (filtered.size() != 2) {
+        return false;
+    }
+    return to_lower(filtered[0]) == "host" && to_lower(filtered[1]) == "refresh";
+}
+
+int run_host_refresh(Logger& logger) {
+    const std::shared_ptr<const HostInfoSnapshot> snapshot = HostInfoService::refreshSnapshot();
+    logger.stdout("host refresh: cache updated");
+    logger.stdout("host os: " + snapshot->platform.osFamily);
+    logger.stdout("host arch: " + snapshot->platform.arch);
+    logger.stdout("host cache: " + default_reqpack_host_info_cache_path().string());
+    return 0;
+}
+
 int run_self_update(const ReqPackConfig& config, Logger& logger) {
     if (config.selfUpdate.repoUrl.empty()) {
         logger.err("self-update repoUrl is not configured");
@@ -769,6 +789,9 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
     if (!replace_symlink_atomically(installedBinaryPath, std::filesystem::path(config.selfUpdate.linkPath))) {
         logger.err("failed to update self-update symlink");
         return 1;
+    }
+    if (!HostInfoService::invalidateCache()) {
+        logger.warn("self-update: failed to invalidate host info cache");
     }
 
     if (previousCommit.has_value() && previousCommit.value() == currentCommit.value()) {
@@ -968,6 +991,13 @@ int main(int argc, char* argv[]) {
 
     if (is_self_update_command(rawArguments)) {
         const int result = run_self_update(config, logger);
+        logger.flushSync();
+        curl_global_cleanup();
+        return result;
+    }
+
+    if (is_host_refresh_command(rawArguments)) {
+        const int result = run_host_refresh(logger);
         logger.flushSync();
         curl_global_cleanup();
         return result;

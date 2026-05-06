@@ -107,6 +107,7 @@ set(SOURCES
     src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/plugins/rq_plugin.cpp
     src/main/cpp/core/configuration.cpp
+    src/main/cpp/core/host_info.cpp
     src/main/cpp/core/manifest_loader.cpp
     src/main/cpp/core/archive_resolver.cpp
     src/main/cpp/core/downloader.cpp
@@ -166,6 +167,7 @@ add_executable(core_integration_tests
     tests/integration/core/registry/service_tests.cpp
     tests/integration/plugins/lua_bridge/service_tests.cpp
     src/main/cpp/core/executor.cpp
+    src/main/cpp/core/host_info.cpp
     src/main/cpp/core/osv_core.cpp
     src/main/cpp/core/planner.cpp
     src/main/cpp/core/planner_core.cpp
@@ -211,6 +213,7 @@ add_executable(core_unit_tests
     tests/cpp/test_main.cpp
     tests/unit/core/configuration/parse_tests.cpp
     tests/unit/core/configuration/cli_tests.cpp
+    tests/unit/core/host_info/core_tests.cpp
     tests/unit/core/downloader/core_tests.cpp
     tests/unit/core/history/core_tests.cpp
     tests/unit/core/manifest_loader/core_tests.cpp
@@ -231,6 +234,7 @@ add_executable(core_unit_tests
     tests/unit/core/vulnerability_database/core_tests.cpp
     tests/unit/output/logger/format_tests.cpp
     src/main/cpp/core/configuration.cpp
+    src/main/cpp/core/host_info.cpp
     src/main/cpp/cli/cli.cpp
     src/main/cpp/core/archive_resolver.cpp
     src/main/cpp/core/manifest_loader.cpp

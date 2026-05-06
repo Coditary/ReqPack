@@ -1,5 +1,7 @@
 #include "core/request_resolution.h"
 
+#include "core/host_info.h"
+
 #include <algorithm>
 #include <cctype>
 
@@ -44,6 +46,7 @@ PluginCallContext RequestResolutionService::buildProxyContext(IPlugin* plugin, c
         .proxy = proxy_config_for_system(this->config, plugin->getPluginId()),
         .currentItemId = item_id_for_request(request),
         .repositories = repositories_for_ecosystem(this->config, plugin->getPluginId()),
+        .hostInfo = HostInfoService::currentSnapshot(),
     };
 }
 

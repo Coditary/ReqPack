@@ -1,5 +1,6 @@
 #include "core/executor.h"
 
+#include "core/host_info.h"
 #include "core/request_resolution.h"
 #include "output/idisplay.h"
 #include "output/logger.h"
@@ -736,7 +737,8 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 		.host = plugin->getRuntimeHost(),
 		.proxy = proxy_config_for_system(this->config, plugin->getPluginId()),
 		.currentItemId = itemId,
-		.repositories = repositories_for_ecosystem(this->config, plugin->getPluginId())
+		.repositories = repositories_for_ecosystem(this->config, plugin->getPluginId()),
+		.hostInfo = HostInfoService::currentSnapshot()
 	};
 }
 

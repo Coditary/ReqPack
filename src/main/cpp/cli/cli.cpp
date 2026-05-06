@@ -301,6 +301,11 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         return requests;
     }
 
+    if (action == ActionType::HOST) {
+        lastParseFailed_ = false;
+        return requests;
+    }
+
 	if (action == ActionType::UPDATE) {
 		bool hasNonFlagArgument = false;
 		bool hasAllFlag = false;
@@ -682,6 +687,7 @@ void Cli::print_help() {
         "  ensure [systems...]     Ensures plugin requirements are installed\n"
         "  sbom                    Exports planned graph as table or JSON\n"
         "  audit                   Audits planned graph for vulnerabilities\n"
+        "  host                    Manages cached host system metadata\n"
         "  snapshot                Snapshots installed packages to reqpack.lua\n"
         "  serve                   Reads commands from stdin and keeps process running\n"
         "  remote                  Connects to remote profile from XDG config (~/.config/reqpack fallback)\n"
@@ -988,6 +994,19 @@ void Cli::print_command_help(ActionType action) {
                 "  ReqPack outdated dnf --arch noarch\n"
                 "  ReqPack outdated dnf --type doc\n";
             break;
+        case ActionType::HOST:
+            help =
+                "Usage: ReqPack host refresh\n"
+                "\n"
+                "Refresh the cached host system snapshot used by plugins via context.host and reqpack.host.\n"
+                "This forces a live probe and rewrites the cache file under XDG cache.\n"
+                "\n"
+                "Subcommands:\n"
+                "  refresh                 Force a live refresh of host metadata cache\n"
+                "\n"
+                "Examples:\n"
+                "  ReqPack host refresh\n";
+            break;
         case ActionType::SNAPSHOT:
             help =
                 "Usage: ReqPack snapshot [options]\n"
@@ -1104,6 +1123,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "outdated") {
         return ActionType::OUTDATED;
+    }
+    if (normalized_command == "host") {
+        return ActionType::HOST;
     }
     if (normalized_command == "snapshot") {
         return ActionType::SNAPSHOT;

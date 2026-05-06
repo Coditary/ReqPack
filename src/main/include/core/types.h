@@ -18,6 +18,7 @@ enum class ActionType {
 	SBOM,
 	AUDIT,
 	OUTDATED,
+	HOST,
 	SNAPSHOT,
 	SERVE,
 	REMOTE
