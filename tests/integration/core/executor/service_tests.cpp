@@ -608,6 +608,42 @@ end
 function plugin.shutdown() return true end
 )";
 
+const char* PARALLEL_MARKER_PLUGIN = R"(
+plugin = {}
+
+local function shell_quote(value)
+  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function append_line(path, line)
+  reqpack.exec.run("printf '%s\\n' " .. shell_quote(line) .. " >> " .. shell_quote(path))
+end
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "parallel" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages)
+  local log_path = context.plugin.dir .. "/parallel.log"
+  local sleep_value = "0.4"
+  if packages[1] ~= nil and packages[1].version ~= nil and packages[1].version ~= "" then
+    sleep_value = packages[1].version
+  end
+  append_line(log_path, "start\t" .. REQPACK_PLUGIN_ID)
+  reqpack.exec.run("sleep " .. sleep_value)
+  append_line(log_path, "end\t" .. REQPACK_PLUGIN_ID)
+  return true
+end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("executor list dispatches flags and plugin context", "[integration][executor][service]") {
@@ -1218,4 +1254,70 @@ TEST_CASE("executor records explicit owner for already installed direct request"
     REQUIRE(dep != nullptr);
     CHECK(dep->installMethod == "explicit");
     CHECK(dep->owners == std::vector<std::string>{installed_root_owner_id("dep", "maven")});
+}
+
+TEST_CASE("executor runs independent task groups in parallel when jobs exceed one", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-parallel-independent"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.execution.useTransactionDb = false;
+    config.execution.jobs = 2;
+
+    add_plugin_script(tempDir.path() / "plugins", "alpha", PARALLEL_MARKER_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "beta", PARALLEL_MARKER_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Graph graph;
+    boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "alpha", .name = "one", .version = "0.4"}, graph);
+    boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "beta", .name = "two", .version = "0.4"}, graph);
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    executer.execute(&graph);
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count();
+
+    const std::string alphaLog = read_file(tempDir.path() / "plugins" / "alpha" / "parallel.log");
+    const std::string betaLog = read_file(tempDir.path() / "plugins" / "beta" / "parallel.log");
+    CHECK(alphaLog.find("start\talpha") != std::string::npos);
+    CHECK(alphaLog.find("end\talpha") != std::string::npos);
+    CHECK(betaLog.find("start\tbeta") != std::string::npos);
+    CHECK(betaLog.find("end\tbeta") != std::string::npos);
+    CHECK(elapsedMs < 700);
+}
+
+TEST_CASE("executor keeps same-system task groups serialized even when jobs exceed one", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-parallel-serialized"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.execution.useTransactionDb = false;
+    config.execution.jobs = 2;
+
+    add_plugin_script(tempDir.path() / "plugins", "alpha", PARALLEL_MARKER_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Graph graph;
+    const Graph::vertex_descriptor first = boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "alpha", .name = "one", .version = "0.25"}, graph);
+    const Graph::vertex_descriptor second = boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "alpha", .name = "two", .version = "0.25"}, graph);
+    boost::add_edge(first, second, graph);
+
+    executer.execute(&graph);
+
+    const std::string alphaLog = read_file(tempDir.path() / "plugins" / "alpha" / "parallel.log");
+    std::size_t startCount = 0;
+    std::size_t pos = 0;
+    while ((pos = alphaLog.find("start\talpha", pos)) != std::string::npos) {
+        ++startCount;
+        pos += 1;
+    }
+    std::size_t endCount = 0;
+    pos = 0;
+    while ((pos = alphaLog.find("end\talpha", pos)) != std::string::npos) {
+        ++endCount;
+        pos += 1;
+    }
+    CHECK(startCount == 1);
+    CHECK(endCount == 1);
 }

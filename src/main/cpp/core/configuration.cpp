@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <limits>
 #include <set>
+#include <thread>
 #include <pwd.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -64,6 +66,30 @@ std::optional<RepositoryChecksumPolicy> repository_checksum_policy_from_string(c
     }
 
     return std::nullopt;
+}
+
+std::optional<unsigned int> unsigned_int_from_string(const std::string& value) {
+    std::string trimmed = value;
+    trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(), [](unsigned char c) {
+        return !std::isspace(c);
+    }));
+    trimmed.erase(std::find_if(trimmed.rbegin(), trimmed.rend(), [](unsigned char c) {
+        return !std::isspace(c);
+    }).base(), trimmed.end());
+    if (trimmed.empty()) {
+        return std::nullopt;
+    }
+
+    try {
+        std::size_t consumed = 0;
+        const unsigned long parsed = std::stoul(trimmed, &consumed, 10);
+        if (consumed != trimmed.size() || parsed == 0 || parsed > std::numeric_limits<unsigned int>::max()) {
+            return std::nullopt;
+        }
+        return static_cast<unsigned int>(parsed);
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 std::optional<std::filesystem::path> passwd_home_from_user(const std::string& username) {
@@ -815,6 +841,27 @@ std::optional<DisplayRenderer> display_renderer_from_string(const std::string& r
     return std::nullopt;
 }
 
+std::optional<ExecutionJobsMode> execution_jobs_mode_from_string(const std::string& mode) {
+    const std::string normalized = to_lower(mode);
+    if (normalized == "fixed") {
+        return ExecutionJobsMode::FIXED;
+    }
+    if (normalized == "max") {
+        return ExecutionJobsMode::MAX;
+    }
+
+    return std::nullopt;
+}
+
+std::size_t resolved_execution_jobs(const ReqPackConfig& config) {
+    if (config.execution.jobsMode == ExecutionJobsMode::MAX) {
+        const unsigned int concurrency = std::thread::hardware_concurrency();
+        return concurrency == 0 ? 1u : static_cast<std::size_t>(concurrency);
+    }
+
+    return std::max<std::size_t>(1u, static_cast<std::size_t>(config.execution.jobs));
+}
+
 ReqPackConfig::ReqPackConfig()
     : security(SecurityConfig{
           .cachePath = default_reqpack_security_cache_path().string(),
@@ -1164,6 +1211,10 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(execution.value(), "checkVirtualFileSystemWrite", config.execution.checkVirtualFileSystemWrite);
         assign_if_present(execution.value(), "stopOnFirstFailure", config.execution.stopOnFirstFailure);
         assign_if_present(execution.value(), "dryRun", config.execution.dryRun);
+        if (const sol::optional<int> jobs = execution.value()["jobs"]; jobs.has_value() && jobs.value() > 0) {
+            config.execution.jobs = static_cast<unsigned int>(jobs.value());
+        }
+        assign_if_present(execution.value(), "jobsMode", execution_jobs_mode_from_string, config.execution.jobsMode);
         assign_if_present(execution.value(), "transactionDatabasePath", config.execution.transactionDatabasePath);
     }
     config.execution.transactionDatabasePath = expand_user_path(config.execution.transactionDatabasePath).string();
@@ -1379,6 +1430,8 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.dryRun.has_value()) config.execution.dryRun = overrides.dryRun.value();
     if (overrides.stopOnFirstFailure.has_value()) config.execution.stopOnFirstFailure = overrides.stopOnFirstFailure.value();
     if (overrides.useTransactionDb.has_value()) config.execution.useTransactionDb = overrides.useTransactionDb.value();
+    if (overrides.jobs.has_value()) config.execution.jobs = std::max(1u, overrides.jobs.value());
+    if (overrides.jobsMode.has_value()) config.execution.jobsMode = overrides.jobsMode.value();
 
     if (overrides.enableProxyExpansion.has_value()) config.planner.enableProxyExpansion = overrides.enableProxyExpansion.value();
     for (const auto& [name, target] : overrides.proxyDefaultTargets) {
@@ -1457,6 +1510,10 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
         return true;
     };
 
+    auto set_error = [&](const std::string& message) {
+        overrides.errorMessage = message;
+    };
+
     std::string value;
     if (starts_with("-D")) {
         (void)parse_define(argument);
@@ -1495,6 +1552,32 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
     if (argument == "--dry-run") {
         overrides.dryRun = true;
+        return true;
+    }
+    if (argument == "--jobs") {
+        if (!require_value(value)) {
+            set_error("missing value for --jobs");
+            return true;
+        }
+        if (overrides.jobsMode == ExecutionJobsMode::MAX) {
+            set_error("cannot combine --jobs with --jobs-max");
+            return true;
+        }
+        const std::optional<unsigned int> parsedJobs = unsigned_int_from_string(value);
+        if (!parsedJobs.has_value()) {
+            set_error("invalid value for --jobs: " + value);
+            return true;
+        }
+        overrides.jobs = parsedJobs.value();
+        overrides.jobsMode = ExecutionJobsMode::FIXED;
+        return true;
+    }
+    if (argument == "--jobs-max") {
+        if (overrides.jobs.has_value()) {
+            set_error("cannot combine --jobs with --jobs-max");
+            return true;
+        }
+        overrides.jobsMode = ExecutionJobsMode::MAX;
         return true;
     }
     if (argument == "--prompt-on-unsafe") {
@@ -1676,6 +1759,9 @@ ReqPackConfigOverrides extract_cli_config_overrides(const std::vector<std::strin
 
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         (void)consume_cli_config_flag(arguments, i, overrides);
+        if (overrides.errorMessage.has_value()) {
+            break;
+        }
     }
 
     return overrides;

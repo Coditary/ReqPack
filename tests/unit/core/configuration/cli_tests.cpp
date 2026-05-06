@@ -42,6 +42,8 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.reportFormat = ReportFormat::CYCLONEDX;
     overrides.reportOutputPath = "~/reports/bom.json";
     overrides.dryRun = true;
+    overrides.jobs = 4;
+    overrides.jobsMode = ExecutionJobsMode::FIXED;
     overrides.enableProxyExpansion = false;
     overrides.proxyDefaultTargets["java"] = "gradle";
     overrides.registryPath = "~/registry";
@@ -78,6 +80,8 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(config.reports.format == ReportFormat::CYCLONEDX);
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/bom.json");
     CHECK(config.execution.dryRun);
+    CHECK(config.execution.jobs == 4);
+    CHECK(config.execution.jobsMode == ExecutionJobsMode::FIXED);
     CHECK_FALSE(config.planner.enableProxyExpansion);
     REQUIRE(config.planner.proxies.contains("java"));
     CHECK(config.planner.proxies.at("java").defaultTarget == "gradle");
@@ -149,6 +153,55 @@ TEST_CASE("configuration consumes CLI flags with positional and inline values", 
             REQUIRE(consume_cli_config_flag(arguments, index, overrides));
             REQUIRE(overrides.archivePassword.has_value());
             CHECK(overrides.archivePassword.value() == "secret");
+        }
+    }
+
+    SECTION("jobs flags map to expected overrides") {
+        {
+            const std::vector<std::string> arguments{"--jobs", "3"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.jobs.has_value());
+            CHECK(overrides.jobs.value() == 3);
+            REQUIRE(overrides.jobsMode.has_value());
+            CHECK(overrides.jobsMode.value() == ExecutionJobsMode::FIXED);
+            CHECK(index == 1);
+        }
+
+        {
+            const std::vector<std::string> arguments{"--jobs-max"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.jobsMode.has_value());
+            CHECK(overrides.jobsMode.value() == ExecutionJobsMode::MAX);
+            CHECK_FALSE(overrides.jobs.has_value());
+        }
+
+        {
+            const std::vector<std::string> arguments{"--jobs", "0"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.errorMessage.has_value());
+            CHECK(overrides.errorMessage.value() == "invalid value for --jobs: 0");
+        }
+
+        {
+            const std::vector<std::string> arguments{"--jobs-max", "--jobs", "2"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            CHECK_FALSE(overrides.errorMessage.has_value());
+            index = 1;
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.errorMessage.has_value());
+            CHECK(overrides.errorMessage.value() == "cannot combine --jobs with --jobs-max");
         }
     }
 
@@ -231,6 +284,8 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
     std::vector<std::string> arguments{
         "ReqPack",
         "--dry-run",
+        "--jobs",
+        "6",
         "--registry=/tmp/reqpack-registry",
         "--non-interactive",
         "--osv-db",
@@ -259,6 +314,10 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
 
     REQUIRE(overrides.dryRun.has_value());
     CHECK(overrides.dryRun.value());
+    REQUIRE(overrides.jobs.has_value());
+    CHECK(overrides.jobs.value() == 6);
+    REQUIRE(overrides.jobsMode.has_value());
+    CHECK(overrides.jobsMode.value() == ExecutionJobsMode::FIXED);
     REQUIRE(overrides.registryPath.has_value());
     CHECK(overrides.registryPath.value() == "/tmp/reqpack-registry");
     REQUIRE(overrides.interactive.has_value());
@@ -324,6 +383,26 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().system == "java");
         CHECK(requests.front().packages == std::vector<std::string>{"artifact"});
         CHECK(requests.front().flags.empty());
+    }
+
+    SECTION("install accepts jobs flags without forwarding them to plugins") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "dnf", "curl", "--jobs", "3"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().packages == std::vector<std::string>{"curl"});
+        CHECK(requests.front().flags.empty());
+    }
+
+    SECTION("install accepts jobs max without forwarding it to plugins") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "dnf", "curl", "--jobs-max"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().packages == std::vector<std::string>{"curl"});
+        CHECK(requests.front().flags.empty());
+    }
+
+    SECTION("conflicting jobs flags fail in config override extraction layer") {
+        const ReqPackConfigOverrides overrides = extract_cli_config_overrides(std::vector<std::string>{"install", "dnf", "curl", "--jobs", "3", "--jobs-max"});
+        REQUIRE(overrides.errorMessage.has_value());
+        CHECK(overrides.errorMessage.value() == "cannot combine --jobs with --jobs-max");
     }
 
     SECTION("local regular file before system resolution becomes local target") {

@@ -157,6 +157,12 @@ TEST_CASE("configuration parses known enum strings and rejects invalid values", 
     REQUIRE(audit_output_format_from_string("sarif").has_value());
     CHECK(audit_output_format_from_string("sarif").value() == AuditOutputFormat::SARIF);
     CHECK_FALSE(audit_output_format_from_string("xml").has_value());
+
+    REQUIRE(execution_jobs_mode_from_string("FiXeD").has_value());
+    CHECK(execution_jobs_mode_from_string("FiXeD").value() == ExecutionJobsMode::FIXED);
+    REQUIRE(execution_jobs_mode_from_string("max").has_value());
+    CHECK(execution_jobs_mode_from_string("max").value() == ExecutionJobsMode::MAX);
+    CHECK_FALSE(execution_jobs_mode_from_string("auto").has_value());
 }
 
 TEST_CASE("configuration resolves registry paths for directories and files", "[unit][configuration][path]") {
@@ -334,6 +340,10 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                 format = "json",
                 outputPath = "~/reports/reqpack.json",
             },
+            execution = {
+                jobs = 8,
+                jobsMode = "max",
+            },
             planner = {
                 systemAliases = {
                     Brew = "APT",
@@ -429,6 +439,8 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(config.reports.enabled);
     CHECK(config.reports.format == ReportFormat::JSON);
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/reqpack.json");
+    CHECK(config.execution.jobs == 8);
+    CHECK(config.execution.jobsMode == ExecutionJobsMode::MAX);
     REQUIRE(config.planner.systemAliases.contains("brew"));
     CHECK(config.planner.systemAliases.at("brew") == "apt");
     REQUIRE(config.planner.proxies.contains("java"));
@@ -502,6 +514,18 @@ TEST_CASE("archive password resolution prefers config then environment fallback"
 
     config.archives.password.clear();
     CHECK(resolve_archive_password(config) == "from-env");
+}
+
+TEST_CASE("configuration resolves execution jobs from fixed and max modes", "[unit][configuration][execution]") {
+    ReqPackConfig fixed;
+    fixed.execution.jobs = 5;
+    fixed.execution.jobsMode = ExecutionJobsMode::FIXED;
+    CHECK(resolved_execution_jobs(fixed) == 5);
+
+    ReqPackConfig maxConfig;
+    maxConfig.execution.jobs = 1;
+    maxConfig.execution.jobsMode = ExecutionJobsMode::MAX;
+    CHECK(resolved_execution_jobs(maxConfig) >= 1);
 }
 
 TEST_CASE("configuration parses structured repositories and preserves flat extras", "[unit][configuration][load]") {

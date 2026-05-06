@@ -178,6 +178,7 @@ std::vector<Request> Cli::parse(int argc, char* argv[]) {
 std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& config) {
     pendingHelpAction_ = ActionType::UNKNOWN;
     lastParseFailed_ = false;
+    lastParseError_.clear();
     if (argc < 2) {
         return {};
     }
@@ -215,6 +216,7 @@ std::vector<Request> Cli::parse(int argc, char* argv[], const ReqPackConfig& con
 std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const ReqPackConfig& config) {
     pendingHelpAction_ = ActionType::UNKNOWN;
     lastParseFailed_ = false;
+    lastParseError_.clear();
     std::vector<Request> requests;
     std::vector<std::string> global_flags;
     std::unordered_map<std::string, std::size_t> request_index_by_system;
@@ -256,6 +258,11 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         ReqPackConfigOverrides ignoredOverrides;
         std::size_t configIndex = i;
         if (consume_cli_config_flag(arguments, configIndex, ignoredOverrides)) {
+            if (ignoredOverrides.errorMessage.has_value()) {
+                lastParseFailed_ = true;
+                lastParseError_ = ignoredOverrides.errorMessage.value();
+                return {};
+            }
             i = configIndex;
             continue;
         }
@@ -665,6 +672,10 @@ bool Cli::parseFailed() const {
     return lastParseFailed_;
 }
 
+const std::string& Cli::lastParseError() const {
+    return lastParseError_;
+}
+
 void Cli::print_help() {
     if (pendingHelpAction_ != ActionType::UNKNOWN) {
         print_command_help(pendingHelpAction_);
@@ -752,6 +763,8 @@ void Cli::print_command_help(ActionType action) {
                 "  --fail-on-unresolved-version    Abort if version cannot be resolved\n"
                 "  --prompt-on-unresolved-version  Prompt if version cannot be resolved\n"
                 "  --archive-password <value> Password for encrypted archives\n"
+                "  --jobs <n>             Use exactly n workers for independent groups\n"
+                "  --jobs-max             Use all logical CPU threads as workers\n"
                 "  --stop-on-first-failure Stop after the first failing system\n"
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"

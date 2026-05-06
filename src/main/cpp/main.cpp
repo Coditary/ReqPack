@@ -807,7 +807,12 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
     Logger& logger = Logger::instance();
     const std::vector<StdinCommand> commands = read_stdin_commands(std::cin);
     std::vector<Request> requests;
-    ReqPackConfig effectiveConfig = apply_config_overrides(config, extract_cli_config_overrides(inheritedArguments));
+    const ReqPackConfigOverrides inheritedOverrides = extract_cli_config_overrides(inheritedArguments);
+    if (inheritedOverrides.errorMessage.has_value()) {
+        logger.err(inheritedOverrides.errorMessage.value());
+        return 1;
+    }
+    ReqPackConfig effectiveConfig = apply_config_overrides(config, inheritedOverrides);
 
     for (const StdinCommand& command : commands) {
         const std::vector<std::string> commandTokens = tokenize_command_line(command.text);
@@ -817,9 +822,18 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
         }
 
         const std::vector<std::string> mergedTokens = merged_stream_command_arguments(commandTokens, inheritedArguments);
-        effectiveConfig = apply_config_overrides(effectiveConfig, extract_cli_config_overrides(mergedTokens));
+        const ReqPackConfigOverrides mergedOverrides = extract_cli_config_overrides(mergedTokens);
+        if (mergedOverrides.errorMessage.has_value()) {
+            logger.err("stdin line " + std::to_string(command.lineNumber) + ": " + mergedOverrides.errorMessage.value());
+            return 1;
+        }
+        effectiveConfig = apply_config_overrides(effectiveConfig, mergedOverrides);
         const std::vector<Request> parsed = cli.parse(mergedTokens, effectiveConfig);
         if (parsed.empty()) {
+            if (!cli.lastParseError().empty()) {
+                logger.err("stdin line " + std::to_string(command.lineNumber) + ": " + cli.lastParseError());
+                return 1;
+            }
             logger.err("stdin line " + std::to_string(command.lineNumber) + ": failed to parse '" + command.text + "'");
             return 1;
         }
@@ -865,9 +879,20 @@ int run_stdin_serve_loop(Cli& cli, const ReqPackConfig& config, const std::vecto
         }
 
         const std::vector<std::string> mergedTokens = merged_stream_command_arguments(commandTokens, inheritedArguments);
-        const ReqPackConfig effectiveConfig = apply_config_overrides(config, extract_cli_config_overrides(mergedTokens));
+        const ReqPackConfigOverrides mergedOverrides = extract_cli_config_overrides(mergedTokens);
+        if (mergedOverrides.errorMessage.has_value()) {
+            logger.err("stdin line " + std::to_string(lineNumber) + ": " + mergedOverrides.errorMessage.value());
+            exitCode = 1;
+            continue;
+        }
+        const ReqPackConfig effectiveConfig = apply_config_overrides(config, mergedOverrides);
         const std::vector<Request> requests = cli.parse(mergedTokens, effectiveConfig);
         if (requests.empty()) {
+            if (!cli.lastParseError().empty()) {
+                logger.err("stdin line " + std::to_string(lineNumber) + ": " + cli.lastParseError());
+                exitCode = 1;
+                continue;
+            }
             logger.err("stdin line " + std::to_string(lineNumber) + ": failed to parse '" + trimmed + "'");
             exitCode = 1;
             continue;
@@ -901,6 +926,13 @@ int main(int argc, char* argv[]) {
 
     Cli cli;
     const ReqPackConfigOverrides configOverrides = cli.parseConfigOverrides(argc, argv);
+    if (configOverrides.errorMessage.has_value()) {
+        Logger& logger = Logger::instance();
+        logger.err(configOverrides.errorMessage.value());
+        logger.flushSync();
+        curl_global_cleanup();
+        return 1;
+    }
     const std::filesystem::path configPath = configOverrides.configPath.value_or(default_reqpack_config_path());
     ReqPackConfig defaults = default_reqpack_config();
     defaults.registry.remoteUrl = DEFAULT_MAIN_REGISTRY_URL;
@@ -1007,6 +1039,9 @@ int main(int argc, char* argv[]) {
 
     if (requests.empty()) {
         if (cli.parseFailed()) {
+            if (!cli.lastParseError().empty()) {
+                logger.err(cli.lastParseError());
+            }
             logger.flushSync();
             curl_global_cleanup();
             return 1;

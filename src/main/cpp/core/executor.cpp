@@ -9,10 +9,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <condition_variable>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <queue>
 #include <set>
+#include <thread>
 
 namespace {
 
@@ -193,6 +196,19 @@ bool is_install_like_action(ActionType action) {
 bool is_remove_action(ActionType action) {
 	return action == ActionType::REMOVE;
 }
+
+struct ParallelExecutionState {
+	std::mutex mutex;
+	std::condition_variable condition;
+	std::queue<std::size_t> readyIndices;
+	std::set<std::string> busySystems;
+	std::vector<std::size_t> pendingDependencies;
+	std::vector<bool> started;
+	std::vector<bool> completed;
+	std::vector<bool> failed;
+	bool stopLaunching{false};
+	std::size_t runningWorkers{0};
+};
 
 }  // namespace
 
@@ -384,8 +400,8 @@ void Executer::execute(Graph *graph) {
 		this->activeRunId.clear();
 	}
 	const std::vector<TaskGroup> allTaskGroups = this->createTaskGroups(*graph);
-	const std::vector<TaskGroup> plannedTaskGroups = inputAlreadyFiltered ? allTaskGroups : this->filterExecutableTaskGroups(allTaskGroups);
-	taskGroups = plannedTaskGroups;
+	taskGroups = inputAlreadyFiltered ? allTaskGroups : this->filterExecutableTaskGroups(allTaskGroups);
+	this->preloadTaskGroups(taskGroups);
 	if (this->config.execution.useTransactionDb && !taskGroups.empty()) {
 		this->activeRunId.clear();
 		std::vector<std::string> runFlags;
@@ -668,46 +684,227 @@ std::vector<Executer::TransactionRecord> Executer::removeOrphanedDependencies(
 }
 
 bool Executer::updateSystem(const Request& request) const {
-	if (request.system.empty() || request.usesLocalTarget || !request.packages.empty()) {
-		return false;
-	}
-
-	std::string errorMessage;
-	const std::optional<Request> resolvedRequest = this->resolveRequest(request, &errorMessage);
-	if (!resolvedRequest.has_value()) {
-		if (!errorMessage.empty()) {
-			Logger::instance().err(errorMessage);
-		}
-		return false;
-	}
-
-	const std::string system = resolvedRequest->system;
-	if (this->securityGateway.isGatewaySystem(system)) {
-		const TaskGroup taskGroup{
-			.action = ActionType::UPDATE,
-			.system = system,
-			.flags = resolvedRequest->flags,
-		};
-		return this->dispatchTaskGroupToSecurityGateway(taskGroup);
-	}
-
-	if (this->registry->getPlugin(system) == nullptr || !this->registry->loadPlugin(system)) {
-		Logger::instance().err("plugin load failed");
-		return false;
-	}
-
-	IPlugin* plugin = this->registry->getPlugin(system);
-	if (plugin == nullptr) {
-		return false;
-	}
-
-	const TaskGroup taskGroup{
-		.action = ActionType::UPDATE,
-		.system = system,
-		.flags = resolvedRequest->flags,
-	};
-	return plugin->update(this->buildPluginContext(plugin, taskGroup), {});
+	const std::vector<bool> results = this->updateSystems({request});
+	return !results.empty() && results.front();
 }
+
+std::vector<bool> Executer::updateSystems(const std::vector<Request>& requests) const {
+	std::vector<bool> results(requests.size(), false);
+	if (requests.empty()) {
+		return results;
+	}
+
+	struct UpdateTask {
+		std::size_t requestIndex{0};
+		TaskGroup taskGroup;
+	};
+
+	std::vector<UpdateTask> updateTasks;
+	updateTasks.reserve(requests.size());
+	for (std::size_t index = 0; index < requests.size(); ++index) {
+		const Request& request = requests[index];
+		if (request.system.empty() || request.usesLocalTarget || !request.packages.empty()) {
+			continue;
+		}
+
+		std::string errorMessage;
+		const std::optional<Request> resolvedRequest = this->resolveRequest(request, &errorMessage);
+		if (!resolvedRequest.has_value()) {
+			if (!errorMessage.empty()) {
+				Logger::instance().err(errorMessage);
+			}
+			continue;
+		}
+
+		updateTasks.push_back(UpdateTask{
+			.requestIndex = index,
+			.taskGroup = TaskGroup{
+				.action = ActionType::UPDATE,
+				.system = resolvedRequest->system,
+				.flags = resolvedRequest->flags,
+			}
+		});
+	}
+
+	if (updateTasks.empty()) {
+		return results;
+	}
+
+	std::vector<TaskGroup> preloadGroups;
+	preloadGroups.reserve(updateTasks.size());
+	for (const UpdateTask& task : updateTasks) {
+		preloadGroups.push_back(task.taskGroup);
+	}
+	this->preloadTaskGroups(preloadGroups);
+	for (std::size_t index = 0; index < updateTasks.size(); ++index) {
+		updateTasks[index].taskGroup = preloadGroups[index];
+	}
+
+	auto execute_update = [&](const TaskGroup& taskGroup) {
+		if (this->securityGateway.isGatewaySystem(taskGroup.system)) {
+			return this->dispatchTaskGroupToSecurityGateway(taskGroup);
+		}
+		if (taskGroup.pluginLoadFailed) {
+			return false;
+		}
+		return this->dispatchTaskGroupToPlugin(taskGroup);
+	};
+
+	auto run_task = [&](const UpdateTask& task) {
+		Logger::instance().displayItemBegin(task.taskGroup.system, task.taskGroup.system);
+		Logger::instance().displayItemStep(task.taskGroup.system, "update all packages");
+		const bool ok = execute_update(task.taskGroup);
+		if (ok) {
+			Logger::instance().displayItemSuccess(task.taskGroup.system);
+		} else {
+			Logger::instance().displayItemFailure(task.taskGroup.system, "failed to update system packages");
+		}
+		results[task.requestIndex] = ok;
+		return ok;
+	};
+
+	if (resolved_execution_jobs(this->config) <= 1 || updateTasks.size() <= 1) {
+		for (const UpdateTask& task : updateTasks) {
+			const bool ok = run_task(task);
+			if (!ok && this->config.execution.stopOnFirstFailure) {
+				break;
+			}
+		}
+		return results;
+	}
+
+	ParallelExecutionState state;
+	for (std::size_t index = 0; index < updateTasks.size(); ++index) {
+		state.readyIndices.push(index);
+	}
+	state.started.assign(updateTasks.size(), false);
+	state.completed.assign(updateTasks.size(), false);
+	state.failed.assign(updateTasks.size(), false);
+
+	auto worker = [&]() {
+		for (;;) {
+			std::size_t index = 0;
+			UpdateTask task;
+			{
+				std::unique_lock<std::mutex> lock(state.mutex);
+				for (;;) {
+					if (state.stopLaunching || (state.readyIndices.empty() && state.runningWorkers == 0)) {
+						return;
+					}
+
+					const std::size_t readyCount = state.readyIndices.size();
+					bool found = false;
+					for (std::size_t attempt = 0; attempt < readyCount; ++attempt) {
+						const std::size_t candidate = state.readyIndices.front();
+						state.readyIndices.pop();
+						if (state.started[candidate]) {
+							continue;
+						}
+						const std::string& system = updateTasks[candidate].taskGroup.system;
+						if (state.busySystems.contains(system)) {
+							state.readyIndices.push(candidate);
+							continue;
+						}
+						state.started[candidate] = true;
+						state.busySystems.insert(system);
+						++state.runningWorkers;
+						index = candidate;
+						task = updateTasks[candidate];
+						found = true;
+						break;
+					}
+					if (found) {
+						break;
+					}
+					if (state.runningWorkers == 0) {
+						return;
+					}
+					state.condition.wait(lock);
+				}
+			}
+
+			const bool ok = run_task(task);
+			{
+				std::lock_guard<std::mutex> lock(state.mutex);
+				state.completed[index] = true;
+				state.failed[index] = !ok;
+				state.busySystems.erase(task.taskGroup.system);
+				if (!ok && this->config.execution.stopOnFirstFailure) {
+					state.stopLaunching = true;
+				}
+				if (state.runningWorkers > 0) {
+					--state.runningWorkers;
+				}
+			}
+			state.condition.notify_all();
+		}
+	};
+
+	const std::size_t workerCount = std::min<std::size_t>(resolved_execution_jobs(this->config), updateTasks.size());
+	std::vector<std::thread> workers;
+	workers.reserve(workerCount);
+	for (std::size_t index = 0; index < workerCount; ++index) {
+		workers.emplace_back(worker);
+	}
+	for (std::thread& thread : workers) {
+		if (thread.joinable()) {
+			thread.join();
+		}
+	}
+
+	return results;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 void Executer::startTransactionDb() const {
 	if (this->transactionDatabase != nullptr) {
@@ -851,10 +1048,42 @@ std::vector<Package> Executer::collectPackages(const std::vector<TaskGroup>& tas
 	return packages;
 }
 
+std::vector<Graph::vertex_descriptor> Executer::orderedVertices(const Graph& graph) const {
+	const auto numVertices = boost::num_vertices(graph);
+	if (numVertices == 0) {
+		return {};
+	}
+
+	std::vector<Graph::vertex_descriptor> order;
+	boost::topological_sort(graph, std::back_inserter(order));
+	std::reverse(order.begin(), order.end());
+
+	std::vector<int> levels(numVertices, 0);
+	for (const Graph::vertex_descriptor v : order) {
+		auto [edgeBegin, edgeEnd] = boost::out_edges(v, graph);
+		for (auto edgeIt = edgeBegin; edgeIt != edgeEnd; ++edgeIt) {
+			const Graph::vertex_descriptor target = boost::target(*edgeIt, graph);
+			if (levels[target] <= levels[v]) {
+				levels[target] = levels[v] + 1;
+			}
+		}
+	}
+
+	std::stable_sort(order.begin(), order.end(), [&](const Graph::vertex_descriptor a, const Graph::vertex_descriptor b) {
+		if (levels[a] != levels[b]) {
+			return levels[a] < levels[b];
+		}
+		return graph[a].system < graph[b].system;
+	});
+
+	return order;
+}
+
 std::vector<Executer::TaskGroup> Executer::createTaskGroups(const Graph& graph) const {
 	std::vector<TaskGroup> groups;
 
-	for (const Package& package : this->orderedPackages(graph)) {
+	for (const Graph::vertex_descriptor vertex : this->orderedVertices(graph)) {
+		const Package& package = graph[vertex];
 		if (groups.empty() || groups.back().action != package.action || groups.back().system != package.system) {
 			groups.push_back(TaskGroup{.action = package.action, .system = package.system, .flags = package.flags});
 		}
@@ -867,6 +1096,65 @@ std::vector<Executer::TaskGroup> Executer::createTaskGroups(const Graph& graph) 
 	}
 
 	return groups;
+}
+
+void Executer::preloadTaskGroups(std::vector<TaskGroup>& taskGroups) const {
+	for (TaskGroup& taskGroup : taskGroups) {
+		taskGroup.plugin = nullptr;
+		taskGroup.pluginLoadFailed = false;
+		if (this->securityGateway.isGatewaySystem(taskGroup.system)) {
+			continue;
+		}
+		if (this->registry->getPlugin(taskGroup.system) == nullptr || !this->registry->loadPlugin(taskGroup.system)) {
+			taskGroup.pluginLoadFailed = true;
+			continue;
+		}
+		taskGroup.plugin = this->registry->getPlugin(taskGroup.system);
+		if (taskGroup.plugin == nullptr) {
+			taskGroup.pluginLoadFailed = true;
+		}
+	}
+}
+
+std::vector<Executer::TaskGroupPlan> Executer::createTaskGroupPlans(const std::vector<TaskGroup>& taskGroups, const Graph* graph) const {
+	std::vector<TaskGroupPlan> plans;
+	plans.reserve(taskGroups.size());
+	for (const TaskGroup& taskGroup : taskGroups) {
+		plans.push_back(TaskGroupPlan{.taskGroup = taskGroup});
+	}
+	if (graph == nullptr || taskGroups.empty()) {
+		return plans;
+	}
+
+	std::map<std::string, std::size_t> packageToGroupIndex;
+	for (std::size_t groupIndex = 0; groupIndex < taskGroups.size(); ++groupIndex) {
+		for (const Package& package : taskGroups[groupIndex].packages) {
+			packageToGroupIndex[package_identity_key(package)] = groupIndex;
+		}
+	}
+
+	std::set<std::pair<std::size_t, std::size_t>> seenEdges;
+	auto [edgeBegin, edgeEnd] = boost::edges(*graph);
+	for (auto edgeIt = edgeBegin; edgeIt != edgeEnd; ++edgeIt) {
+		const Package& sourcePackage = (*graph)[boost::source(*edgeIt, *graph)];
+		const Package& targetPackage = (*graph)[boost::target(*edgeIt, *graph)];
+		const auto sourceGroupIt = packageToGroupIndex.find(package_identity_key(sourcePackage));
+		const auto targetGroupIt = packageToGroupIndex.find(package_identity_key(targetPackage));
+		if (sourceGroupIt == packageToGroupIndex.end() || targetGroupIt == packageToGroupIndex.end()) {
+			continue;
+		}
+		if (sourceGroupIt->second == targetGroupIt->second) {
+			continue;
+		}
+		const std::pair<std::size_t, std::size_t> edge{sourceGroupIt->second, targetGroupIt->second};
+		if (!seenEdges.insert(edge).second) {
+			continue;
+		}
+		plans[sourceGroupIt->second].successors.push_back(targetGroupIt->second);
+		++plans[targetGroupIt->second].pendingDependencies;
+	}
+
+	return plans;
 }
 
 std::vector<Executer::TaskGroup> Executer::filterExecutableTaskGroups(const std::vector<TaskGroup>& taskGroups) const {
@@ -911,53 +1199,158 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroups(const std::
 }
 
 std::vector<Executer::TransactionRecord> Executer::executeRecordedTaskGroups(const std::vector<TaskGroup>& taskGroups, const std::string& runId, const Graph* graph) const {
-	std::vector<TransactionRecord> records;
-	std::set<Graph::vertex_descriptor> failedVertices;
+	std::vector<TaskGroupPlan> plans = this->createTaskGroupPlans(taskGroups, graph);
 
-	for (const TaskGroup& taskGroup : taskGroups) {
-		if (this->config.execution.stopOnFirstFailure && !failedVertices.empty()) {
-			// When the graph is available use dependency information: only skip
-			// groups whose packages are transitively reachable from a failed vertex.
-			// Without the graph fall back to the original behaviour (stop everything).
-			const bool shouldSkip = (graph == nullptr) || groupDependsOnFailure(*graph, taskGroup.packages, failedVertices);
-			if (shouldSkip) {
-				// Leave the packages in their initial "planned" state in the DB by
-				// not adding any records for this group.
+	auto has_failure = [](const std::vector<TransactionRecord>& groupRecords) {
+		return std::any_of(groupRecords.begin(), groupRecords.end(), [](const TransactionRecord& record) {
+			return record.status == "failed";
+		});
+	};
+
+	auto run_sequential = [&]() {
+		std::vector<TransactionRecord> records;
+		std::vector<std::size_t> pendingDependencies;
+		std::vector<bool> blocked(plans.size(), false);
+		pendingDependencies.reserve(plans.size());
+		for (const TaskGroupPlan& plan : plans) {
+			pendingDependencies.push_back(plan.pendingDependencies);
+		}
+
+		for (std::size_t index = 0; index < plans.size(); ++index) {
+			if (blocked[index] || pendingDependencies[index] != 0) {
 				continue;
+			}
+
+			const std::vector<TransactionRecord> groupRecords = this->executeTaskGroup(plans[index].taskGroup, runId);
+			records.insert(records.end(), groupRecords.begin(), groupRecords.end());
+			const bool failed = has_failure(groupRecords);
+
+			for (const std::size_t successor : plans[index].successors) {
+				if (pendingDependencies[successor] > 0) {
+					--pendingDependencies[successor];
+				}
+				if (failed) {
+					blocked[successor] = true;
+				}
+			}
+
+			if (failed && this->config.execution.stopOnFirstFailure) {
+				break;
 			}
 		}
 
-		const std::vector<TransactionRecord> groupRecords = this->executeTaskGroup(taskGroup, runId);
-		records.insert(records.end(), groupRecords.begin(), groupRecords.end());
+		return records;
+	};
 
-		if (this->config.execution.stopOnFirstFailure) {
-			const bool hasFailure = std::any_of(groupRecords.begin(), groupRecords.end(), [](const TransactionRecord& record) {
-				return record.status == "failed";
-			});
+	if (graph == nullptr || resolved_execution_jobs(this->config) <= 1 || taskGroups.size() <= 1) {
+		return run_sequential();
+	}
 
-			if (hasFailure) {
-				if (graph == nullptr) {
-					// No graph available (e.g. crash-recovery path): original behaviour.
-					break;
-				}
-				// Record which vertices failed so subsequent groups can be checked.
-				auto [vBegin, vEnd] = boost::vertices(*graph);
-				for (const TransactionRecord& record : groupRecords) {
-					if (record.status != "failed") {
-						continue;
-					}
-					for (auto vIt = vBegin; vIt != vEnd; ++vIt) {
-						const Package& vPkg = (*graph)[*vIt];
-						if (vPkg.system == record.system && vPkg.name == record.packageName && vPkg.action == record.action) {
-							failedVertices.insert(*vIt);
-							break;
-						}
-					}
-				}
-			}
+	std::vector<std::vector<TransactionRecord>> resultSlots(plans.size());
+	ParallelExecutionState state;
+	state.pendingDependencies.reserve(plans.size());
+	state.started.assign(plans.size(), false);
+	state.completed.assign(plans.size(), false);
+	state.failed.assign(plans.size(), false);
+	for (const TaskGroupPlan& plan : plans) {
+		state.pendingDependencies.push_back(plan.pendingDependencies);
+	}
+	for (std::size_t index = 0; index < plans.size(); ++index) {
+		if (state.pendingDependencies[index] == 0) {
+			state.readyIndices.push(index);
 		}
 	}
 
+	auto worker = [&]() {
+		for (;;) {
+			std::size_t index = 0;
+			TaskGroup taskGroup;
+			{
+				std::unique_lock<std::mutex> lock(state.mutex);
+				for (;;) {
+					if (state.stopLaunching || (state.readyIndices.empty() && state.runningWorkers == 0)) {
+						return;
+					}
+
+					const std::size_t readyCount = state.readyIndices.size();
+					bool found = false;
+					for (std::size_t attempt = 0; attempt < readyCount; ++attempt) {
+						const std::size_t candidate = state.readyIndices.front();
+						state.readyIndices.pop();
+						if (state.started[candidate] || state.failed[candidate] || state.pendingDependencies[candidate] != 0) {
+							continue;
+						}
+						const std::string& system = plans[candidate].taskGroup.system;
+						if (state.busySystems.contains(system)) {
+							state.readyIndices.push(candidate);
+							continue;
+						}
+						state.started[candidate] = true;
+						state.busySystems.insert(system);
+						++state.runningWorkers;
+						index = candidate;
+						taskGroup = plans[candidate].taskGroup;
+						found = true;
+						break;
+					}
+
+					if (found) {
+						break;
+					}
+					if (state.runningWorkers == 0) {
+						return;
+					}
+					state.condition.wait(lock);
+				}
+			}
+
+			std::vector<TransactionRecord> groupRecords = this->executeTaskGroup(taskGroup, runId);
+			const bool failed = has_failure(groupRecords);
+
+			{
+				std::lock_guard<std::mutex> lock(state.mutex);
+				resultSlots[index] = std::move(groupRecords);
+				state.completed[index] = true;
+				state.failed[index] = failed;
+				state.busySystems.erase(taskGroup.system);
+				for (const std::size_t successor : plans[index].successors) {
+					if (state.pendingDependencies[successor] > 0) {
+						--state.pendingDependencies[successor];
+					}
+					if (failed) {
+						state.failed[successor] = true;
+					}
+					if (state.pendingDependencies[successor] == 0 && !state.started[successor] && !state.completed[successor] && !state.failed[successor]) {
+						state.readyIndices.push(successor);
+					}
+				}
+				if (failed && this->config.execution.stopOnFirstFailure) {
+					state.stopLaunching = true;
+				}
+				if (state.runningWorkers > 0) {
+					--state.runningWorkers;
+				}
+			}
+			state.condition.notify_all();
+		}
+	};
+
+	const std::size_t workerCount = std::min<std::size_t>(resolved_execution_jobs(this->config), plans.size());
+	std::vector<std::thread> workers;
+	workers.reserve(workerCount);
+	for (std::size_t index = 0; index < workerCount; ++index) {
+		workers.emplace_back(worker);
+	}
+	for (std::thread& thread : workers) {
+		if (thread.joinable()) {
+			thread.join();
+		}
+	}
+
+	std::vector<TransactionRecord> records;
+	for (const auto& slot : resultSlots) {
+		records.insert(records.end(), slot.begin(), slot.end());
+	}
 	return records;
 }
 
@@ -1008,7 +1401,7 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGr
 		return records;
 	}
 
-	if (this->registry->getPlugin(taskGroup.system) == nullptr || !this->registry->loadPlugin(taskGroup.system)) {
+	if (taskGroup.pluginLoadFailed || (taskGroup.plugin == nullptr && (this->registry->getPlugin(taskGroup.system) == nullptr || !this->registry->loadPlugin(taskGroup.system)))) {
 		std::vector<TransactionRecord> records = this->buildFailureRecords(taskGroup);
 		for (TransactionRecord& record : records) {
 			record.runId = runId;
@@ -1336,40 +1729,8 @@ void Executer::recordHistory(const std::vector<TransactionRecord>& records) cons
 }
 
 std::vector<Package> Executer::orderedPackages(const Graph& graph) const {
-	const auto numVertices = boost::num_vertices(graph);
-	if (numVertices == 0) {
-		return {};
-	}
-
-	std::vector<Graph::vertex_descriptor> order;
-	boost::topological_sort(graph, std::back_inserter(order));
-	std::reverse(order.begin(), order.end());
-
-	// Compute the topological level for each vertex (longest path from any root).
-	// Vertices at the same level have no dependency between them and can be freely
-	// reordered.  This lets createTaskGroups() batch same-system packages together.
-	std::vector<int> levels(numVertices, 0);
-	for (const Graph::vertex_descriptor v : order) {
-		auto [edgeBegin, edgeEnd] = boost::out_edges(v, graph);
-		for (auto edgeIt = edgeBegin; edgeIt != edgeEnd; ++edgeIt) {
-			const Graph::vertex_descriptor target = boost::target(*edgeIt, graph);
-			if (levels[target] <= levels[v]) {
-				levels[target] = levels[v] + 1;
-			}
-		}
-	}
-
-	// Within the same topological level sort by system name so that same-system
-	// packages become consecutive and createTaskGroups() merges them into a single
-	// TaskGroup (one plugin call instead of many).
-	std::stable_sort(order.begin(), order.end(), [&](const Graph::vertex_descriptor a, const Graph::vertex_descriptor b) {
-		if (levels[a] != levels[b]) {
-			return levels[a] < levels[b];
-		}
-		return graph[a].system < graph[b].system;
-	});
-
 	std::vector<Package> packages;
+	const std::vector<Graph::vertex_descriptor> order = this->orderedVertices(graph);
 	packages.reserve(order.size());
 	for (const Graph::vertex_descriptor vertex : order) {
 		packages.push_back(graph[vertex]);
@@ -1381,7 +1742,7 @@ bool Executer::dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const {
 	if (this->securityGateway.isGatewaySystem(taskGroup.system)) {
 		return this->dispatchTaskGroupToSecurityGateway(taskGroup);
 	}
-	IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
+	IPlugin* plugin = taskGroup.plugin != nullptr ? taskGroup.plugin : this->registry->getPlugin(taskGroup.system);
 	if (plugin == nullptr) {
 		return false;
 	}

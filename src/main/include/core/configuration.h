@@ -60,6 +60,11 @@ enum class DisplayRenderer {
     COLOR
 };
 
+enum class ExecutionJobsMode {
+    FIXED,
+    MAX
+};
+
 enum class RepositoryAuthType {
     NONE,
     BASIC,
@@ -138,6 +143,8 @@ struct ExecutionConfig {
     bool checkVirtualFileSystemWrite{true};
     bool stopOnFirstFailure{false};
     bool dryRun{false};
+    unsigned int jobs{1};
+    ExecutionJobsMode jobsMode{ExecutionJobsMode::FIXED};
     std::string transactionDatabasePath{};
 };
 
@@ -379,6 +386,8 @@ struct ReqPackConfigOverrides {
     std::optional<bool> dryRun;
     std::optional<bool> stopOnFirstFailure;
     std::optional<bool> useTransactionDb;
+    std::optional<unsigned int> jobs;
+    std::optional<ExecutionJobsMode> jobsMode;
 
     std::optional<bool> enableProxyExpansion;
     std::map<std::string, std::string> proxyDefaultTargets{};
@@ -395,6 +404,8 @@ struct ReqPackConfigOverrides {
     std::optional<bool> sbomPrettyPrint;
     std::optional<bool> sbomIncludeDependencyEdges;
     std::optional<bool> sbomSkipMissingPackages;
+
+    std::optional<std::string> errorMessage;
 };
 
 ReqPackConfig default_reqpack_config();
@@ -407,6 +418,7 @@ std::optional<OsvRefreshMode> osv_refresh_mode_from_string(const std::string& mo
 std::optional<SbomOutputFormat> sbom_output_format_from_string(const std::string& format);
 std::optional<AuditOutputFormat> audit_output_format_from_string(const std::string& format);
 std::optional<DisplayRenderer> display_renderer_from_string(const std::string& renderer);
+std::optional<ExecutionJobsMode> execution_jobs_mode_from_string(const std::string& mode);
 
 std::filesystem::path reqpack_config_directory();
 std::filesystem::path reqpack_data_directory();
@@ -440,6 +452,7 @@ ReqPackConfig load_config_from_lua(
 );
 
 ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackConfigOverrides& overrides);
+std::size_t resolved_execution_jobs(const ReqPackConfig& config);
 
 std::string resolve_archive_password(const ReqPackConfig& config);
 
@@ -556,6 +569,16 @@ inline std::string to_string(DisplayRenderer renderer) {
         case DisplayRenderer::PLAIN:
         default:
             return "plain";
+    }
+}
+
+inline std::string to_string(ExecutionJobsMode mode) {
+    switch (mode) {
+        case ExecutionJobsMode::MAX:
+            return "max";
+        case ExecutionJobsMode::FIXED:
+        default:
+            return "fixed";
     }
 }
 

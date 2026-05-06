@@ -33,6 +33,14 @@ class Executer {
 		std::vector<std::string> flags;
 		std::string localPath;
 		bool usesLocalTarget{false};
+		IPlugin* plugin{nullptr};
+		bool pluginLoadFailed{false};
+	};
+
+	struct TaskGroupPlan {
+		TaskGroup taskGroup;
+		std::vector<std::size_t> successors;
+		std::size_t pendingDependencies{0};
 	};
 
 	Registry* registry;
@@ -50,6 +58,9 @@ class Executer {
 	std::vector<TaskGroup> createTaskGroupsFromRecords(const std::vector<TransactionItemRecord>& records) const;
 	std::vector<Package> collectPackages(const std::vector<TaskGroup>& taskGroups) const;
 	std::vector<TaskGroup> createTaskGroups(const Graph& graph) const;
+	std::vector<Graph::vertex_descriptor> orderedVertices(const Graph& graph) const;
+	void preloadTaskGroups(std::vector<TaskGroup>& taskGroups) const;
+	std::vector<TaskGroupPlan> createTaskGroupPlans(const std::vector<TaskGroup>& taskGroups, const Graph* graph) const;
 	std::vector<TaskGroup> filterExecutableTaskGroups(const std::vector<TaskGroup>& taskGroups) const;
 	std::vector<TransactionRecord> executeTaskGroups(const std::vector<TaskGroup>& taskGroups, const Graph* graph = nullptr) const;
 	std::vector<TransactionRecord> executeRecordedTaskGroups(const std::vector<TaskGroup>& taskGroups, const std::string& runId, const Graph* graph = nullptr) const;
@@ -82,6 +93,7 @@ public:
 	void setRequestedItemCount(int count, bool inputAlreadyFiltered = false) const;
 	void execute(Graph *graph);
 	bool updateSystem(const Request& request) const;
+	std::vector<bool> updateSystems(const std::vector<Request>& requests) const;
 	std::vector<PackageInfo> list(const Request& request) const;
 	std::vector<PackageInfo> outdated(const Request& request) const;
 	std::vector<PackageInfo> search(const Request& request) const;

@@ -387,17 +387,12 @@ int Orchestrator::runSystemWidePackageUpdates() {
 	logger.displaySessionBegin(DisplayMode::UPDATE, itemIds);
 	int succeeded = 0;
 	int failed = 0;
-	for (const Request& request : this->requests) {
-		logger.displayItemBegin(request.system, request.system);
-		logger.displayItemStep(request.system, "update all packages");
-		if (this->executor->updateSystem(request)) {
-			logger.displayItemSuccess(request.system);
+	for (const bool ok : this->executor->updateSystems(this->requests)) {
+		if (ok) {
 			++succeeded;
-			continue;
+		} else {
+			++failed;
 		}
-
-		logger.displayItemFailure(request.system, "failed to update system packages");
-		++failed;
 	}
 
 	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);

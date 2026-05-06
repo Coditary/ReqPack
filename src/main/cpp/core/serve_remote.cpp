@@ -920,9 +920,16 @@ RemoteResponse execute_command(
 
     const RemoteStateSnapshot snapshot = snapshot_remote_state(state);
     const std::vector<std::string> mergedTokens = merged_command_arguments(commandTokens, snapshot.options.inheritedArguments);
-    const ReqPackConfig effectiveConfig = apply_config_overrides(snapshot.config, extract_cli_config_overrides(mergedTokens));
+    const ReqPackConfigOverrides overrides = extract_cli_config_overrides(mergedTokens);
+    if (overrides.errorMessage.has_value()) {
+        return RemoteResponse{.ok = false, .output = command_output_message(DisplayMode::REMOTE, overrides.errorMessage.value(), false)};
+    }
+    const ReqPackConfig effectiveConfig = apply_config_overrides(snapshot.config, overrides);
     const std::vector<Request> requests = cli.parse(mergedTokens, effectiveConfig);
     if (requests.empty()) {
+        if (!cli.lastParseError().empty()) {
+            return RemoteResponse{.ok = false, .output = command_output_message(DisplayMode::REMOTE, cli.lastParseError(), false)};
+        }
 		return RemoteResponse{.ok = false, .output = command_output_message(DisplayMode::REMOTE, "failed to parse '" + trimmed + "'", false)};
     }
 
