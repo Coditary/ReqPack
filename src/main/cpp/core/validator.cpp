@@ -1,4 +1,6 @@
 #include "core/validator.h"
+#include "output/logger.h"
+
 #include <boost/graph/graph_traits.hpp>
 
 #include <algorithm>
@@ -155,7 +157,8 @@ std::vector<OsvAdvisory> Validator::loadAdvisories() const {
 }
 
 bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findings) const {
-	std::cerr << "unsafe findings require confirmation:\n";
+	Logger& logger = Logger::instance();
+	logger.stdout("unsafe findings require confirmation:");
 	std::size_t shown = 0;
 	for (const ValidationFinding& finding : findings) {
 		std::string message = finding.message.empty() ? finding.id : finding.message;
@@ -165,7 +168,7 @@ bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findin
 		if (!finding.package.system.empty() && !finding.package.name.empty()) {
 			message += " [" + finding.package.system + ":" + finding.package.name + "]";
 		}
-		std::cerr << "- " << message << '\n';
+		logger.stdout("- " + message);
 		++shown;
 		if (shown >= 5) {
 			break;
@@ -173,14 +176,22 @@ bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findin
 	}
 
 	if (!this->config.interaction.interactive) {
-		std::cerr << "interactive mode is disabled; refusing to continue.\n";
+		logger.diagnostic(make_error_diagnostic(
+			"security",
+			"interactive mode is disabled; refusing to continue.",
+			"Security policy requires user confirmation, but interactive prompts are disabled.",
+			"Re-run without `--non-interactive`, or switch `security.onUnsafe` to `abort` or `allow`."
+		));
+		logger.flushSync();
 		return false;
 	}
 
-	std::cerr << "Continue? [y/N] " << std::flush;
+	logger.stdout("Continue? [y/N]");
+	logger.flushSync();
 	std::string answer;
 	if (!std::getline(std::cin, answer)) {
-		std::cerr << "aborted.\n";
+		logger.stdout("aborted.");
+		logger.flushSync();
 		return false;
 	}
 
@@ -189,7 +200,8 @@ bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findin
 		return true;
 	}
 
-	std::cerr << "aborted.\n";
+	logger.stdout("aborted.");
+	logger.flushSync();
 	return false;
 }
 

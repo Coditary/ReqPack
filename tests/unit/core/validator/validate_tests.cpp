@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/validator.h"
+#include "output/logger.h"
 
 namespace {
 
@@ -138,6 +139,46 @@ private:
     std::streambuf* previous_;
 };
 
+class RecordingDisplay final : public IDisplay {
+public:
+    void onSessionBegin(DisplayMode, const std::vector<std::string>&) override {}
+    void onSessionEnd(bool, int, int, int) override {}
+    void onItemBegin(const std::string&, const std::string&) override {}
+    void onItemProgress(const std::string&, const DisplayProgressMetrics&) override {}
+    void onItemStep(const std::string&, const std::string&) override {}
+    void onItemSuccess(const std::string&) override {}
+    void onItemFailure(const std::string&, const std::string&) override {}
+
+    void onMessage(const std::string& text, const std::string& source = {}) override {
+        messages.emplace_back(source.empty() ? text : ("[" + source + "] " + text));
+    }
+
+    void onTableBegin(const std::vector<std::string>&) override {}
+    void onTableRow(const std::vector<std::string>&) override {}
+    void onTableEnd() override {}
+    void flush() override {}
+
+    std::vector<std::string> messages;
+};
+
+class ScopedLoggerDisplay {
+public:
+    explicit ScopedLoggerDisplay(IDisplay* display)
+        : logger_(Logger::instance()) {
+        logger_.flushSync();
+        logger_.setDisplay(display);
+    }
+
+    ~ScopedLoggerDisplay() {
+        logger_.flushSync();
+        logger_.setDisplay(nullptr);
+        logger_.flushSync();
+    }
+
+private:
+    Logger& logger_;
+};
+
 class StaticMetadataProvider final : public PluginMetadataProvider {
 public:
     std::map<std::string, PluginSecurityMetadata> metadata;
@@ -247,13 +288,18 @@ TEST_CASE("validator accepts interactive confirmation from stdin", "[unit][valid
 
     Graph graph = make_graph();
     std::istringstream input("y\n");
-    std::ostringstream errorOutput;
     StreamBufferGuard inputGuard(std::cin, input.rdbuf());
-    StreamBufferGuard errorGuard(std::cerr, errorOutput.rdbuf());
+    RecordingDisplay display;
+    ScopedLoggerDisplay displayGuard(&display);
 
     CHECK(validator.validate(&graph) == &graph);
-    CHECK(errorOutput.str().find("unsafe findings require confirmation") != std::string::npos);
-    CHECK(errorOutput.str().find("Continue? [y/N]") != std::string::npos);
+    Logger::instance().flushSync();
+    CHECK(std::any_of(display.messages.begin(), display.messages.end(), [](const std::string& message) {
+        return message.find("unsafe findings require confirmation") != std::string::npos;
+    }));
+    CHECK(std::any_of(display.messages.begin(), display.messages.end(), [](const std::string& message) {
+        return message.find("Continue? [y/N]") != std::string::npos;
+    }));
 }
 
 TEST_CASE("validator denies prompted run when interactive mode is disabled", "[unit][validator][validate]") {
@@ -266,11 +312,17 @@ TEST_CASE("validator denies prompted run when interactive mode is disabled", "[u
     validator.findings = {make_finding("low")};
 
     Graph graph = make_graph();
-    std::ostringstream errorOutput;
-    StreamBufferGuard errorGuard(std::cerr, errorOutput.rdbuf());
+    RecordingDisplay display;
+    ScopedLoggerDisplay displayGuard(&display);
 
     CHECK(validator.validate(&graph) == nullptr);
-    CHECK(errorOutput.str().find("interactive mode is disabled") != std::string::npos);
+    Logger::instance().flushSync();
+    CHECK(std::any_of(display.messages.begin(), display.messages.end(), [](const std::string& message) {
+        return message.find("interactive mode is disabled; refusing to continue.") != std::string::npos;
+    }));
+    CHECK(std::any_of(display.messages.begin(), display.messages.end(), [](const std::string& message) {
+        return message.find("Cause: Security policy requires user confirmation, but interactive prompts are disabled.") != std::string::npos;
+    }));
 }
 
 TEST_CASE("validator returns input graph and generates report for safe findings", "[unit][validator][validate]") {

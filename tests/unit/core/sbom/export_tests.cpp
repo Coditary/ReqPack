@@ -11,6 +11,7 @@
 #include <system_error>
 
 #include "core/sbom_exporter.h"
+#include "output/logger.h"
 
 namespace {
 
@@ -121,6 +122,45 @@ std::string read_file(const std::filesystem::path& path) {
     return buffer.str();
 }
 
+class RecordingDisplay final : public IDisplay {
+public:
+    void onSessionBegin(DisplayMode, const std::vector<std::string>&) override {}
+    void onSessionEnd(bool, int, int, int) override {}
+    void onItemBegin(const std::string&, const std::string&) override {}
+    void onItemProgress(const std::string&, const DisplayProgressMetrics&) override {}
+    void onItemStep(const std::string&, const std::string&) override {}
+    void onItemSuccess(const std::string&) override {}
+    void onItemFailure(const std::string&, const std::string&) override {}
+    void onTableBegin(const std::vector<std::string>&) override {}
+    void onTableRow(const std::vector<std::string>&) override {}
+    void onTableEnd() override {}
+    void flush() override {}
+
+    void onMessage(const std::string& text, const std::string& source = {}) override {
+        messages.push_back(source.empty() ? text : ("[" + source + "] " + text));
+    }
+
+    std::vector<std::string> messages;
+};
+
+class ScopedLoggerDisplay {
+public:
+    explicit ScopedLoggerDisplay(IDisplay* display)
+        : logger_(Logger::instance()) {
+        logger_.flushSync();
+        logger_.setDisplay(display);
+    }
+
+    ~ScopedLoggerDisplay() {
+        logger_.flushSync();
+        logger_.setDisplay(nullptr);
+        logger_.flushSync();
+    }
+
+private:
+    Logger& logger_;
+};
+
 Graph make_graph() {
     Graph graph;
     const auto react = boost::add_vertex(Package{.action = ActionType::SBOM, .system = "npm", .name = "react", .version = "18.3.1"}, graph);
@@ -203,6 +243,27 @@ TEST_CASE("sbom exporter defaults file output to cyclonedx json", "[unit][sbom][
     CHECK(rendered.find("\"bomFormat\": \"CycloneDX\"") != std::string::npos);
     CHECK(rendered.find("\"components\"") != std::string::npos);
     CHECK(rendered.find("\"dependencies\"") != std::string::npos);
+}
+
+TEST_CASE("sbom exporter reports file-open failure through logger diagnostics", "[unit][sbom][export]") {
+    TempDir tempDir{"reqpack-sbom-open-failure"};
+    SbomExporter exporter;
+    Request request;
+    request.action = ActionType::SBOM;
+    request.outputPath = tempDir.path().string();
+    request.flags = {"force"};
+
+    RecordingDisplay display;
+    ScopedLoggerDisplay displayGuard(&display);
+
+    CHECK_FALSE(exporter.exportGraph(make_graph(), request));
+    Logger::instance().flushSync();
+    CHECK(std::any_of(display.messages.begin(), display.messages.end(), [&](const std::string& message) {
+        return message.find("failed to open sbom output path: " + tempDir.path().string()) != std::string::npos;
+    }));
+    CHECK(std::any_of(display.messages.begin(), display.messages.end(), [](const std::string& message) {
+        return message.find("Cause: ReqPack could not open requested SBOM output file for writing.") != std::string::npos;
+    }));
 }
 
 TEST_CASE("sbom exporter formats maven purls from plugin metadata", "[unit][sbom][export]") {

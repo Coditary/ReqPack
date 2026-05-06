@@ -4,6 +4,7 @@
 #include "core/downloader.h"
 #include "core/planner_core.h"
 #include "core/request_resolution.h"
+#include "output/diagnostic.h"
 #include "output/command_output.h"
 #include "output/logger.h"
 
@@ -135,6 +136,59 @@ std::string file_extension(const std::string& path) {
     return ext;
 }
 
+DiagnosticMessage validation_blocked_finding_diagnostic(const ValidationFinding& finding) {
+	std::string summary = finding.message.empty() ? (finding.id.empty() ? finding.kind : finding.id) : finding.message;
+	if (!finding.package.system.empty() && !finding.package.name.empty()) {
+		summary += " [" + finding.package.system + ":" + finding.package.name + "]";
+	}
+
+	if (finding.kind == "sync_error") {
+		return make_error_diagnostic(
+			"security",
+			summary,
+			"ReqPack could not refresh vulnerability data required by current security policy.",
+			"Check OSV feed access, local vulnerability database permissions, and retry.",
+			{},
+			finding.source,
+			"sync"
+		);
+	}
+
+	if (finding.kind == "unsupported_ecosystem") {
+		return make_error_diagnostic(
+			"security",
+			summary,
+			"ReqPack has no vulnerability ecosystem mapping for requested package system.",
+			"Configure `security.ecosystemMap` or plugin `osvEcosystem`, or relax strict ecosystem mapping if risk is acceptable.",
+			{},
+			finding.source,
+			"mapping"
+		);
+	}
+
+	if (finding.kind == "unresolved_version") {
+		return make_error_diagnostic(
+			"security",
+			summary,
+			"ReqPack could not determine exact package version for vulnerability matching.",
+			"Request an explicit version, improve plugin version resolution, or relax unresolved-version policy.",
+			{},
+			finding.source,
+			"version"
+		);
+	}
+
+	return make_error_diagnostic(
+		"security",
+		summary,
+		"Matched vulnerability data blocks execution under current security policy.",
+		"Review advisory details, choose a safe version, or relax security policy only if that risk is acceptable.",
+		{},
+		finding.source,
+		"policy"
+	);
+}
+
 void append_cleanup_paths(std::vector<std::filesystem::path>& tempFiles, const std::vector<std::filesystem::path>& cleanupPaths) {
     tempFiles.insert(tempFiles.end(), cleanupPaths.begin(), cleanupPaths.end());
 }
@@ -187,20 +241,23 @@ bool resolve_local_target(
 }
 
 void log_validation_blocked(const std::vector<ValidationFinding>& findings) {
-    Logger::instance().err("execution blocked by security policy");
-    std::size_t shown = 0;
-    for (const ValidationFinding& finding : findings) {
+	Logger::instance().diagnostic(make_error_diagnostic(
+		"security",
+		"execution blocked by security policy",
+		"One or more requested packages violated current vulnerability or ecosystem safety policy.",
+		"Review reported findings, adjust requested versions, or relax security policy only if that risk is acceptable.",
+		{},
+		"validator",
+		"policy"
+	));
+	std::size_t shown = 0;
+	for (const ValidationFinding& finding : findings) {
         if (finding.kind != "vulnerability" && finding.kind != "sync_error" && finding.kind != "unsupported_ecosystem" &&
             finding.kind != "unresolved_version") {
             continue;
         }
-
-        std::string message = finding.message.empty() ? finding.id : finding.message;
-        if (!finding.package.system.empty() && !finding.package.name.empty()) {
-            message += " [" + finding.package.system + ":" + finding.package.name + "]";
-        }
-        Logger::instance().err(message);
-        ++shown;
+		Logger::instance().diagnostic(validation_blocked_finding_diagnostic(finding));
+		++shown;
         if (shown >= 5) {
             break;
         }
@@ -368,7 +425,16 @@ int Orchestrator::runPluginWrapperRefresh() {
 			continue;
 		}
 
-		logger.displayItemFailure(request.system, "failed to refresh plugin wrapper");
+		logger.displayItemFailure(request.system, make_error_diagnostic(
+			"orchestrator",
+			"Plugin wrapper refresh failed",
+			"ReqPack could not refresh or reload plugin wrapper for requested system.",
+			"Check plugin source, registry state, and local plugin cache, then retry update.",
+			{},
+			request.system,
+			"plugin-refresh",
+			{{"system", request.system}}
+		));
 		++failed;
 	}
 
@@ -437,7 +503,16 @@ int Orchestrator::run() {
 		if (!is_url(request.localPath)) {
 			std::string errorMessage;
 			if (!resolve_local_target(request, this->registry, this->config, tempFiles, &errorMessage)) {
-				Logger::instance().err(errorMessage);
+				Logger::instance().diagnostic(make_error_diagnostic(
+					"orchestrator",
+					"Local target could not be resolved",
+					"ReqPack could not infer plugin or install target details from provided local path.",
+					"Specify system explicitly, for example `ReqPack install <system> <path>`.",
+					errorMessage,
+					request.system.empty() ? "install" : request.system,
+					"local-target",
+					{{"path", request.localPath}}
+				));
 				cleanupTempFiles(tempFiles);
 				return 1;
 			}
@@ -454,7 +529,16 @@ int Orchestrator::run() {
 
 		Downloader downloader(this->registry->getDatabase(), this->config);
 		if (!downloader.download(request.localPath, tempFile.string())) {
-			Logger::instance().err("failed to download: " + request.localPath);
+			Logger::instance().diagnostic(make_error_diagnostic(
+				"network",
+				"Download failed for " + request.localPath,
+				"Remote host could not be reached or returned data ReqPack could not download successfully.",
+				"Check network access, verify URL, and confirm proxy or firewall settings.",
+				{},
+				request.system.empty() ? "download" : request.system,
+				"install",
+				{{"url", request.localPath}, {"target", tempFile.string()}}
+			));
 			cleanupTempFiles(tempFiles);
 			return 1;
 		}
@@ -463,7 +547,16 @@ int Orchestrator::run() {
 		request.localPath = tempFile.string();
 		std::string errorMessage;
 		if (!resolve_local_target(request, this->registry, this->config, tempFiles, &errorMessage)) {
-			Logger::instance().err(errorMessage);
+			Logger::instance().diagnostic(make_error_diagnostic(
+				"orchestrator",
+				"Downloaded target could not be resolved",
+				"ReqPack downloaded file successfully, but could not map it to a plugin or install target.",
+				"Specify system explicitly when installing remote files.",
+				errorMessage,
+				request.system.empty() ? "install" : request.system,
+				"local-target",
+				{{"path", request.localPath}}
+			));
 			cleanupTempFiles(tempFiles);
 			return 1;
 		}
@@ -473,7 +566,15 @@ int Orchestrator::run() {
 	const std::optional<std::vector<Request>> resolvedRequests = requestResolver.resolveRequests(this->requests, &resolutionError);
 	if (!resolvedRequests.has_value()) {
 		if (!resolutionError.empty()) {
-			Logger::instance().err(resolutionError);
+			Logger::instance().diagnostic(make_error_diagnostic(
+				"orchestrator",
+				"Request resolution failed",
+				"ReqPack could not normalize one or more user requests into executable operations.",
+				"Check package specifiers, system names, and command flags, then retry.",
+				resolutionError,
+				"resolver",
+				"request"
+			));
 		}
 		cleanupTempFiles(tempFiles);
 		return 1;
@@ -549,7 +650,16 @@ int Orchestrator::run() {
 	}
 	if (this->requests.front().action == ActionType::SBOM && !missingSbomPackages.empty()) {
 		for (const std::string& packageSpecifier : missingSbomPackages) {
-			Logger::instance().err("sbom missing package: " + packageSpecifier);
+			Logger::instance().diagnostic(make_error_diagnostic(
+				"sbom",
+				"sbom missing package: " + packageSpecifier,
+				"Requested package is missing, unresolved, or not installed in target system.",
+				"Verify package name and version, or rerun with `--sbom-skip-missing-packages` if omission is acceptable.",
+				{},
+				"sbom",
+				"export",
+				{{"package", packageSpecifier}}
+			));
 		}
 		cleanupTempFiles(tempFiles);
 		return 1;

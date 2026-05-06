@@ -5,6 +5,7 @@
 #include "core/remote_client.h"
 #include "core/serve_remote.h"
 #include "output/display_factory.h"
+#include "output/diagnostic.h"
 #include "output/logger.h"
 #include "plugins/lua_bridge.h"
 
@@ -30,6 +31,100 @@ extern char** environ;
 namespace {
 
 constexpr const char* DEFAULT_MAIN_REGISTRY_URL = "https://github.com/Coditary/rqp-registry.git";
+
+void configure_logger_from_config(Logger& logger, const ReqPackConfig& config) {
+    logger.setLevel(to_string(config.logging.level));
+    logger.setPattern(config.logging.pattern);
+    logger.setBacktrace(config.logging.enableBacktrace, config.logging.backtraceSize);
+    logger.setConsoleOutput(config.logging.consoleOutput);
+    logger.setEnabledCategories(config.logging.enabledCategories);
+    logger.setCaptureDisplayEvents(config.logging.captureDisplayEvents);
+    if (config.logging.fileOutput) {
+        logger.setFileSink(config.logging.filePath);
+    } else {
+        logger.disableFileSink();
+    }
+    if (config.logging.structuredFileOutput) {
+        logger.setStructuredFileSink(config.logging.structuredFilePath);
+    } else {
+        logger.disableStructuredFileSink();
+    }
+}
+
+DiagnosticMessage config_override_diagnostic(const std::string& details) {
+    return make_error_diagnostic(
+        "config",
+        "Invalid logging or runtime option",
+        "One or more CLI configuration flags could not be parsed.",
+        "Check flag spelling and required values, then run command again.",
+        details,
+        "cli",
+        "config"
+    );
+}
+
+DiagnosticMessage stdin_syntax_diagnostic(std::size_t lineNumber, const std::string& commandText = {}) {
+    return make_error_diagnostic(
+        "cli",
+        "stdin line " + std::to_string(lineNumber) + ": invalid command syntax",
+        "Input line could not be tokenized because quotes or escapes are incomplete.",
+        "Fix shell-style quoting on that line and try again.",
+        commandText,
+        "stdin",
+        "batch",
+        {{"line", std::to_string(lineNumber)}}
+    );
+}
+
+DiagnosticMessage stdin_parse_diagnostic(std::size_t lineNumber, const std::string& commandText) {
+    return make_error_diagnostic(
+        "cli",
+        "stdin line " + std::to_string(lineNumber) + ": command could not be parsed",
+        "Parsed tokens did not form a valid ReqPack command.",
+        "Check command structure or run same command directly with --help.",
+        commandText,
+        "stdin",
+        "batch",
+        {{"line", std::to_string(lineNumber)}}
+    );
+}
+
+DiagnosticMessage stdin_install_only_diagnostic(std::size_t lineNumber) {
+    return make_error_diagnostic(
+        "cli",
+        "stdin line " + std::to_string(lineNumber) + ": only install commands are allowed here",
+        "`ReqPack install --stdin` accepts only install subcommands.",
+        "Use `ReqPack serve --stdin` for mixed commands, or keep stdin input to install commands only.",
+        {},
+        "stdin",
+        "batch",
+        {{"line", std::to_string(lineNumber)}}
+    );
+}
+
+DiagnosticMessage stdin_empty_batch_diagnostic() {
+    return make_error_diagnostic(
+        "cli",
+        "stdin contained no install commands",
+        "Only comments or empty lines were provided to install batch mode.",
+        "Pipe at least one `install ...` command into ReqPack or use normal CLI arguments.",
+        {},
+        "stdin",
+        "batch"
+    );
+}
+
+DiagnosticMessage self_update_diagnostic(const std::string& summary, const std::string& cause, const std::string& recommendation, const std::string& details = {}) {
+    return make_error_diagnostic(
+        "self-update",
+        summary,
+        cause,
+        recommendation,
+        details,
+        "self-update",
+        "update"
+    );
+}
 
 struct StdinCommand {
     std::size_t lineNumber{0};
@@ -637,7 +732,12 @@ std::string binary_name_for_commit(const std::string& commit) {
 bool sync_self_update_repository(const SelfUpdateConfig& config, Logger& logger) {
     const std::filesystem::path repoPath(config.repoPath);
     if (!ensure_directory(repoPath.parent_path())) {
-        logger.err("failed to create self-update repo parent directory");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update setup failed",
+            "ReqPack could not create parent directory for self-update repository checkout.",
+            "Verify filesystem permissions and that parent path exists and is writable.",
+            repoPath.parent_path().string()
+        ));
         return false;
     }
 
@@ -647,7 +747,12 @@ bool sync_self_update_repository(const SelfUpdateConfig& config, Logger& logger)
         if (!run_process({
                 "git", "clone", "--branch", config.branch, "--single-branch", config.repoUrl, repoPath.string()
             }, std::filesystem::current_path())) {
-            logger.err("self-update clone failed");
+            logger.diagnostic(self_update_diagnostic(
+                "Self-update repository clone failed",
+                "Git could not clone configured ReqPack repository.",
+                "Check repository URL, network access, and local git setup.",
+                config.repoUrl
+            ));
             return false;
         }
         return true;
@@ -655,12 +760,22 @@ bool sync_self_update_repository(const SelfUpdateConfig& config, Logger& logger)
 
     logger.stdout("self-update: checkout branch");
     if (!run_process({"git", "checkout", config.branch}, repoPath)) {
-        logger.err("self-update checkout failed");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update branch checkout failed",
+            "Configured branch could not be checked out in local self-update repository.",
+            "Verify branch name and repository state, then retry self-update.",
+            config.branch
+        ));
         return false;
     }
     logger.stdout("self-update: pull latest commit");
     if (!run_process({"git", "pull", "--ff-only", "origin", config.branch}, repoPath)) {
-        logger.err("self-update fast-forward failed");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update fetch failed",
+            "ReqPack could not fast-forward local self-update repository to configured branch.",
+            "Check remote access, branch protection, and whether local repo has divergent changes.",
+            config.branch
+        ));
         return false;
     }
     return true;
@@ -679,7 +794,12 @@ bool build_self_update_binary(const ReqPackConfig& config, const std::string& co
     }
 
     if (!ensure_directory(buildPath) || !ensure_directory(outputBinary.parent_path())) {
-        logger.err("failed to create self-update build directories");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update build directory setup failed",
+            "ReqPack could not create build or install directories for new binary.",
+            "Check disk permissions and free space in self-update paths.",
+            buildPath.string()
+        ));
         return false;
     }
 
@@ -690,22 +810,42 @@ bool build_self_update_binary(const ReqPackConfig& config, const std::string& co
             "-B", buildPath.string(),
             "-DCMAKE_BUILD_TYPE=Release"
         }, repoPath)) {
-        logger.err("self-update configure failed");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update configure step failed",
+            "CMake could not configure ReqPack build from self-update repository.",
+            "Check build dependencies and inspect CMake output above for missing packages or flags.",
+            buildPath.string()
+        ));
         return false;
     }
 
     logger.stdout("self-update: build binary");
     if (!run_process({"cmake", "--build", buildPath.string(), "--target", "ReqPack"}, repoPath)) {
-        logger.err("self-update build failed");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update build step failed",
+            "ReqPack source fetched successfully, but compilation of new binary failed.",
+            "Inspect compiler output above and ensure required build dependencies are installed.",
+            buildPath.string()
+        ));
         return false;
     }
 
     if (!std::filesystem::exists(candidateBinary)) {
-        logger.err("self-update build produced no ReqPack binary");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update build produced no binary",
+            "Build command completed, but expected ReqPack binary was not found.",
+            "Inspect build directory and build target configuration, then retry self-update.",
+            candidateBinary.string()
+        ));
         return false;
     }
     if (!copy_file_with_mode(candidateBinary, outputBinary)) {
-        logger.err("failed to install built self-update binary");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update binary install failed",
+            "Compiled binary could not be copied into configured self-update binary directory.",
+            "Check filesystem permissions for self-update binary directory.",
+            outputBinary.string()
+        ));
         return false;
     }
     return true;
@@ -752,16 +892,28 @@ int run_host_refresh(Logger& logger) {
 
 int run_self_update(const ReqPackConfig& config, Logger& logger) {
     if (config.selfUpdate.repoUrl.empty()) {
-        logger.err("self-update repoUrl is not configured");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update is not configured",
+            "No repository URL is configured for self-update.",
+            "Set selfUpdate.repoUrl in config before running `ReqPack update` without package arguments."
+        ));
         return 1;
     }
     if (config.selfUpdate.branch.empty()) {
-        logger.err("self-update branch is not configured");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update branch is missing",
+            "ReqPack does not know which branch to pull for self-update.",
+            "Set selfUpdate.branch in config before running self-update."
+        ));
         return 1;
     }
     if (config.selfUpdate.repoPath.empty() || config.selfUpdate.buildPath.empty() ||
         config.selfUpdate.binaryDirectory.empty() || config.selfUpdate.linkPath.empty()) {
-        logger.err("self-update paths are not fully configured");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update paths are incomplete",
+            "One or more required self-update paths are missing from configuration.",
+            "Configure repoPath, buildPath, binaryDirectory, and linkPath before running self-update."
+        ));
         return 1;
     }
 
@@ -776,7 +928,12 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
 
     const std::optional<std::string> currentCommit = git_current_commit(repoPath);
     if (!currentCommit.has_value()) {
-        logger.err("failed to resolve self-update commit");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update commit lookup failed",
+            "Local self-update repository does not have a readable current commit.",
+            "Verify repository checkout under selfUpdate.repoPath and rerun self-update.",
+            repoPath.string()
+        ));
         return 1;
     }
 
@@ -787,11 +944,24 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
 
     logger.stdout("self-update: update local symlink");
     if (!replace_symlink_atomically(installedBinaryPath, std::filesystem::path(config.selfUpdate.linkPath))) {
-        logger.err("failed to update self-update symlink");
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update symlink update failed",
+            "New binary was built, but ReqPack could not update configured executable symlink.",
+            "Check write permissions for configured link path and parent directory.",
+            config.selfUpdate.linkPath
+        ));
         return 1;
     }
     if (!HostInfoService::invalidateCache()) {
-        logger.warn("self-update: failed to invalidate host info cache");
+        logger.diagnostic(make_warning_diagnostic(
+            "self-update",
+            "Self-update completed, but host info cache could not be invalidated",
+            "Old host metadata cache may remain until next refresh.",
+            "Run `ReqPack host refresh` if plugins still report stale host information.",
+            {},
+            "self-update",
+            "update"
+        ));
     }
 
     if (previousCommit.has_value() && previousCommit.value() == currentCommit.value()) {
@@ -809,7 +979,7 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
     std::vector<Request> requests;
     const ReqPackConfigOverrides inheritedOverrides = extract_cli_config_overrides(inheritedArguments);
     if (inheritedOverrides.errorMessage.has_value()) {
-        logger.err(inheritedOverrides.errorMessage.value());
+        logger.diagnostic(config_override_diagnostic(inheritedOverrides.errorMessage.value()));
         return 1;
     }
     ReqPackConfig effectiveConfig = apply_config_overrides(config, inheritedOverrides);
@@ -817,30 +987,30 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
     for (const StdinCommand& command : commands) {
         const std::vector<std::string> commandTokens = tokenize_command_line(command.text);
         if (commandTokens.empty()) {
-            logger.err("stdin line " + std::to_string(command.lineNumber) + ": invalid command syntax");
+            logger.diagnostic(stdin_syntax_diagnostic(command.lineNumber, command.text));
             return 1;
         }
 
         const std::vector<std::string> mergedTokens = merged_stream_command_arguments(commandTokens, inheritedArguments);
         const ReqPackConfigOverrides mergedOverrides = extract_cli_config_overrides(mergedTokens);
         if (mergedOverrides.errorMessage.has_value()) {
-            logger.err("stdin line " + std::to_string(command.lineNumber) + ": " + mergedOverrides.errorMessage.value());
+            logger.diagnostic(config_override_diagnostic("stdin line " + std::to_string(command.lineNumber) + ": " + mergedOverrides.errorMessage.value()));
             return 1;
         }
         effectiveConfig = apply_config_overrides(effectiveConfig, mergedOverrides);
         const std::vector<Request> parsed = cli.parse(mergedTokens, effectiveConfig);
         if (parsed.empty()) {
             if (!cli.lastParseError().empty()) {
-                logger.err("stdin line " + std::to_string(command.lineNumber) + ": " + cli.lastParseError());
+                logger.diagnostic(config_override_diagnostic("stdin line " + std::to_string(command.lineNumber) + ": " + cli.lastParseError()));
                 return 1;
             }
-            logger.err("stdin line " + std::to_string(command.lineNumber) + ": failed to parse '" + command.text + "'");
+            logger.diagnostic(stdin_parse_diagnostic(command.lineNumber, command.text));
             return 1;
         }
 
         for (const Request& request : parsed) {
             if (request.action != ActionType::INSTALL) {
-                logger.err("stdin line " + std::to_string(command.lineNumber) + ": only install commands allowed in 'install --stdin'");
+                logger.diagnostic(stdin_install_only_diagnostic(command.lineNumber));
                 return 1;
             }
             requests.push_back(request);
@@ -848,7 +1018,7 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
     }
 
     if (requests.empty()) {
-        logger.err("stdin contained no install commands");
+        logger.diagnostic(stdin_empty_batch_diagnostic());
         return 1;
     }
 
@@ -873,7 +1043,7 @@ int run_stdin_serve_loop(Cli& cli, const ReqPackConfig& config, const std::vecto
 
         const std::vector<std::string> commandTokens = tokenize_command_line(trimmed);
         if (commandTokens.empty()) {
-            logger.err("stdin line " + std::to_string(lineNumber) + ": invalid command syntax");
+            logger.diagnostic(stdin_syntax_diagnostic(lineNumber, trimmed));
             exitCode = 1;
             continue;
         }
@@ -881,7 +1051,7 @@ int run_stdin_serve_loop(Cli& cli, const ReqPackConfig& config, const std::vecto
         const std::vector<std::string> mergedTokens = merged_stream_command_arguments(commandTokens, inheritedArguments);
         const ReqPackConfigOverrides mergedOverrides = extract_cli_config_overrides(mergedTokens);
         if (mergedOverrides.errorMessage.has_value()) {
-            logger.err("stdin line " + std::to_string(lineNumber) + ": " + mergedOverrides.errorMessage.value());
+            logger.diagnostic(config_override_diagnostic("stdin line " + std::to_string(lineNumber) + ": " + mergedOverrides.errorMessage.value()));
             exitCode = 1;
             continue;
         }
@@ -889,11 +1059,11 @@ int run_stdin_serve_loop(Cli& cli, const ReqPackConfig& config, const std::vecto
         const std::vector<Request> requests = cli.parse(mergedTokens, effectiveConfig);
         if (requests.empty()) {
             if (!cli.lastParseError().empty()) {
-                logger.err("stdin line " + std::to_string(lineNumber) + ": " + cli.lastParseError());
+                logger.diagnostic(config_override_diagnostic("stdin line " + std::to_string(lineNumber) + ": " + cli.lastParseError()));
                 exitCode = 1;
                 continue;
             }
-            logger.err("stdin line " + std::to_string(lineNumber) + ": failed to parse '" + trimmed + "'");
+            logger.diagnostic(stdin_parse_diagnostic(lineNumber, trimmed));
             exitCode = 1;
             continue;
         }
@@ -928,7 +1098,7 @@ int main(int argc, char* argv[]) {
     const ReqPackConfigOverrides configOverrides = cli.parseConfigOverrides(argc, argv);
     if (configOverrides.errorMessage.has_value()) {
         Logger& logger = Logger::instance();
-        logger.err(configOverrides.errorMessage.value());
+        logger.diagnostic(config_override_diagnostic(configOverrides.errorMessage.value()));
         logger.flushSync();
         curl_global_cleanup();
         return 1;
@@ -947,13 +1117,7 @@ int main(int argc, char* argv[]) {
     }
     Logger& logger = Logger::instance();
 
-    logger.setLevel(to_string(config.logging.level));
-    logger.setPattern(config.logging.pattern);
-    logger.setBacktrace(config.logging.enableBacktrace, config.logging.backtraceSize);
-    logger.setConsoleOutput(config.logging.consoleOutput);
-    if (config.logging.fileOutput) {
-        logger.setFileSink(config.logging.filePath);
-    }
+    configure_logger_from_config(logger, config);
 
     std::unique_ptr<IDisplay> display = create_display(config.display);
     logger.setDisplay(display.get());
@@ -969,7 +1133,15 @@ int main(int argc, char* argv[]) {
     const bool isServeCommand = parse_serve_runtime_options(rawArguments, serveOptions, serveError);
     if (isServeCommand) {
         if (!serveError.empty()) {
-            logger.err(serveError);
+            logger.diagnostic(make_error_diagnostic(
+                "remote",
+                "Serve command is invalid",
+                "Remote or stdin serve options could not be parsed.",
+                "Check serve flags and values, then run `ReqPack serve --help`.",
+                serveError,
+                "serve",
+                "remote"
+            ));
             logger.flushSync();
             curl_global_cleanup();
             return 1;
@@ -995,7 +1167,15 @@ int main(int argc, char* argv[]) {
     const bool isRemoteCommand = parse_remote_client_invocation(rawArguments, remoteInvocation, remoteError);
     if (isRemoteCommand) {
         if (!remoteError.empty()) {
-            logger.err(remoteError);
+            logger.diagnostic(make_error_diagnostic(
+                "remote",
+                "Remote command is invalid",
+                "Remote client invocation could not be parsed.",
+                "Check remote profile name and forwarded command syntax, then run `ReqPack remote --help`.",
+                remoteError,
+                "remote",
+                "client"
+            ));
             logger.flushSync();
             curl_global_cleanup();
             return 1;
@@ -1005,7 +1185,15 @@ int main(int argc, char* argv[]) {
         try {
 			result = run_remote_client(config, default_remote_profiles_path(), remoteInvocation.profileName, remoteInvocation.forwardedArguments, display.get());
         } catch (const std::exception& e) {
-            logger.err(e.what());
+            logger.diagnostic(make_error_diagnostic(
+                "remote",
+                "Remote command execution failed",
+                "ReqPack could not complete request against configured remote profile.",
+                "Verify remote profile settings, connectivity, and authentication.",
+                e.what(),
+                remoteInvocation.profileName,
+                "client"
+            ));
             logger.flushSync();
             curl_global_cleanup();
             return 1;
@@ -1040,7 +1228,7 @@ int main(int argc, char* argv[]) {
     if (requests.empty()) {
         if (cli.parseFailed()) {
             if (!cli.lastParseError().empty()) {
-                logger.err(cli.lastParseError());
+                logger.diagnostic(config_override_diagnostic(cli.lastParseError()));
             }
             logger.flushSync();
             curl_global_cleanup();

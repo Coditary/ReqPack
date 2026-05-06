@@ -4,6 +4,11 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cctype>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 
@@ -38,6 +43,94 @@ std::string joinPipe(const std::vector<std::string>& v) {
 		out += v[i];
 	}
 	return out;
+}
+
+std::string to_lower_copy(std::string value) {
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+		return static_cast<char>(std::tolower(c));
+	});
+	return value;
+}
+
+std::string normalize_category(const std::string& category) {
+	return to_lower_copy(category);
+}
+
+bool is_display_action(OutputAction action) {
+	switch (action) {
+		case OutputAction::DISPLAY_SESSION_BEGIN:
+		case OutputAction::DISPLAY_SESSION_END:
+		case OutputAction::DISPLAY_ITEM_BEGIN:
+		case OutputAction::DISPLAY_ITEM_STEP:
+		case OutputAction::DISPLAY_ITEM_SUCCESS:
+		case OutputAction::DISPLAY_ITEM_FAILURE:
+		case OutputAction::DISPLAY_MESSAGE:
+		case OutputAction::DISPLAY_TABLE_HEADER:
+		case OutputAction::DISPLAY_TABLE_ROW:
+		case OutputAction::DISPLAY_TABLE_END:
+			return true;
+		default:
+			return false;
+	}
+}
+
+std::string inferred_category(const OutputEvent& event) {
+	if (!event.context.category.empty()) {
+		return normalize_category(event.context.category);
+	}
+	switch (event.action) {
+		case OutputAction::PLUGIN_STATUS:
+		case OutputAction::PLUGIN_PROGRESS:
+		case OutputAction::PLUGIN_EVENT:
+		case OutputAction::PLUGIN_ARTIFACT:
+			return "plugin";
+		case OutputAction::DISPLAY_SESSION_BEGIN:
+		case OutputAction::DISPLAY_SESSION_END:
+		case OutputAction::DISPLAY_ITEM_BEGIN:
+		case OutputAction::DISPLAY_ITEM_STEP:
+		case OutputAction::DISPLAY_ITEM_SUCCESS:
+		case OutputAction::DISPLAY_ITEM_FAILURE:
+		case OutputAction::DISPLAY_MESSAGE:
+		case OutputAction::DISPLAY_TABLE_HEADER:
+		case OutputAction::DISPLAY_TABLE_ROW:
+		case OutputAction::DISPLAY_TABLE_END:
+			return "display";
+		case OutputAction::STDOUT:
+			return "stdout";
+		case OutputAction::LOG:
+		case OutputAction::DIAGNOSTIC:
+			return "general";
+		case OutputAction::FLUSH:
+		case OutputAction::STOP:
+			return {};
+	}
+	return "general";
+}
+
+std::string utc_timestamp_now() {
+	const auto now = std::chrono::system_clock::now();
+	const std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
+	std::tm tm{};
+	gmtime_r(&currentTime, &tm);
+	std::ostringstream stream;
+	stream << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+	return stream.str();
+}
+
+void emit_message_lines(IDisplay* display, const std::string& text, const std::string& source) {
+	if (display == nullptr) {
+		return;
+	}
+	std::istringstream stream(text);
+	std::string line;
+	bool emitted = false;
+	while (std::getline(stream, line)) {
+		display->onMessage(line, source);
+		emitted = true;
+	}
+	if (!emitted && !text.empty()) {
+		display->onMessage(text, source);
+	}
 }
 
 bool is_item_scoped_plugin_source(const std::string& source) {
@@ -150,6 +243,10 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 	if (d == nullptr) return;
 
 	const OutputContext& ctx = event.context;
+	if (event.action == OutputAction::DIAGNOSTIC) {
+		emit_message_lines(d, logger_diagnostic_text(ctx, false), ctx.source);
+		return;
+	}
 	const bool itemScoped = is_item_scoped_plugin_source(ctx.source);
 	const std::string displaySource = plugin_display_source(ctx);
 
@@ -250,7 +347,7 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 			break;
 
 		case OutputAction::DISPLAY_MESSAGE:
-			d->onMessage(ctx.message, ctx.source);
+			emit_message_lines(d, ctx.message, ctx.source);
 			break;
 
 		// ── Table output ──────────────────────────────────────────────────────
@@ -278,21 +375,36 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 
 void Logger::processEvent(const OutputEvent& event) {
 	IDisplay* d = display.load(std::memory_order_acquire);
+	const bool categoryEnabled = isCategoryEnabled(event);
+	const bool captureDisplay = shouldCaptureDisplayEvents();
+	const bool persistStructured = categoryEnabled && (!is_display_action(event.action) || captureDisplay);
+	if (persistStructured) {
+		writeStructuredEvent(event);
+	}
 
-		switch (event.action) {
-			// ── Spdlog ───────────────────────────────────────────────────────────
-			case OutputAction::LOG:
+	switch (event.action) {
+		case OutputAction::LOG:
+			if (categoryEnabled) {
 				logger->log(event.context.level, logger_render_output_event(event));
-				if (d != nullptr &&
-				    (event.context.level >= spdlog::level::warn || consoleOutputEnabled.load(std::memory_order_acquire))) {
-					d->onMessage(logger_format_message(event.context));
-				}
-				if (event.context.level == spdlog::level::critical) {
+			}
+			if (categoryEnabled && d != nullptr &&
+			    (event.context.level >= spdlog::level::warn || consoleOutputEnabled.load(std::memory_order_acquire))) {
+				d->onMessage(logger_format_message(event.context));
+			}
+			if (event.context.level == spdlog::level::critical) {
 				logger->dump_backtrace();
 			}
 			break;
 
-		// ── Raw stdout (fallback when no display attached) ────────────────────
+		case OutputAction::DIAGNOSTIC:
+			if (categoryEnabled) {
+				logger->log(event.context.level, logger_render_output_event(event));
+			}
+			if (d != nullptr && event.context.mirrorToDisplay) {
+				routeToDisplay(event);
+			}
+			break;
+
 		case OutputAction::STDOUT:
 			if (d != nullptr) {
 				routeToDisplay(event);
@@ -305,7 +417,6 @@ void Logger::processEvent(const OutputEvent& event) {
 			}
 			break;
 
-		// ── Plugin callbacks ──────────────────────────────────────────────────
 		case OutputAction::PLUGIN_STATUS:
 		case OutputAction::PLUGIN_PROGRESS:
 		case OutputAction::PLUGIN_EVENT:
@@ -318,7 +429,6 @@ void Logger::processEvent(const OutputEvent& event) {
 			}
 			break;
 
-		// ── Display events: always routed through IDisplay ────────────────────
 		case OutputAction::DISPLAY_SESSION_BEGIN:
 		case OutputAction::DISPLAY_SESSION_END:
 		case OutputAction::DISPLAY_ITEM_BEGIN:
@@ -329,10 +439,11 @@ void Logger::processEvent(const OutputEvent& event) {
 		case OutputAction::DISPLAY_TABLE_HEADER:
 		case OutputAction::DISPLAY_TABLE_ROW:
 		case OutputAction::DISPLAY_TABLE_END:
-			routeToDisplay(event);
+			if (d != nullptr) {
+				routeToDisplay(event);
+			}
 			break;
 
-		// ── Control ───────────────────────────────────────────────────────────
 		case OutputAction::FLUSH:
 		case OutputAction::STOP:
 			if (d != nullptr) {
@@ -340,6 +451,12 @@ void Logger::processEvent(const OutputEvent& event) {
 			}
 			for (const auto& sink : sinks) {
 				sink->flush();
+			}
+			{
+				std::lock_guard<std::mutex> lock(settingsMutex);
+				if (structuredFileStream.is_open()) {
+					structuredFileStream.flush();
+				}
 			}
 			std::cout.flush();
 			break;
@@ -352,6 +469,57 @@ void Logger::processEvent(const OutputEvent& event) {
 
 std::string Logger::formatMessage(const OutputContext& context) {
 	return logger_format_message(context);
+}
+
+void Logger::refreshSinks() {
+	std::lock_guard<std::mutex> lock(settingsMutex);
+	std::vector<spdlog::sink_ptr> refreshed;
+	if (consoleSink) {
+		refreshed.push_back(consoleSink);
+	}
+	if (textFileSink) {
+		refreshed.push_back(textFileSink);
+	}
+	sinks = std::move(refreshed);
+	logger->sinks() = sinks;
+}
+
+bool Logger::isCategoryEnabled(const OutputEvent& event) const {
+	const std::string category = inferred_category(event);
+	std::lock_guard<std::mutex> lock(settingsMutex);
+	if (enabledCategories.empty() || category.empty()) {
+		return true;
+	}
+	return std::find(enabledCategories.begin(), enabledCategories.end(), category) != enabledCategories.end();
+}
+
+bool Logger::shouldCaptureDisplayEvents() const {
+	std::lock_guard<std::mutex> lock(settingsMutex);
+	return captureDisplayEvents;
+}
+
+void Logger::writeStructuredEvent(const OutputEvent& event) {
+	OutputEvent enriched = event;
+	enriched.context.category = inferred_category(event);
+	if (enriched.context.message.empty()) {
+		enriched.context.message = !enriched.context.payload.empty() ? enriched.context.payload : logger_render_output_event(event);
+	}
+	std::string line = logger_render_structured_event_json(enriched);
+	if (line.empty()) {
+		return;
+	}
+	const std::string timestamp = utc_timestamp_now();
+	const std::string needle = "\"timestamp\":\"\"";
+	const std::size_t offset = line.find(needle);
+	if (offset != std::string::npos) {
+		line.replace(offset, needle.size(), "\"timestamp\":\"" + logger_escape_json(timestamp) + "\"");
+	}
+	std::lock_guard<std::mutex> lock(settingsMutex);
+	if (!structuredFileStream.is_open()) {
+		return;
+	}
+	structuredFileStream << line << '\n';
+	structuredFileStream.flush();
 }
 
 void Logger::updateConsoleSinkLevel() {
@@ -398,9 +566,63 @@ void Logger::setPattern(const std::string& pattern) {
 }
 
 void Logger::setFileSink(const std::string& filename) {
-	auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(filename, true);
-	sinks.push_back(file_sink);
-	logger->sinks() = sinks;
+	{
+		std::lock_guard<std::mutex> lock(settingsMutex);
+		textFileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(filename, true);
+	}
+	refreshSinks();
+}
+
+void Logger::disableFileSink() {
+	{
+		std::lock_guard<std::mutex> lock(settingsMutex);
+		textFileSink.reset();
+	}
+	refreshSinks();
+}
+
+void Logger::setStructuredFileSink(const std::string& filename) {
+	{
+		std::lock_guard<std::mutex> lock(settingsMutex);
+		structuredFileStream.close();
+		structuredFileStream.clear();
+		const std::filesystem::path path(filename);
+		if (path.has_parent_path()) {
+			std::error_code error;
+			std::filesystem::create_directories(path.parent_path(), error);
+		}
+		structuredFileStream.open(filename, std::ios::out | std::ios::app);
+		structuredFilePath = filename;
+		if (!structuredFileStream.is_open()) {
+			structuredFilePath.clear();
+		}
+	}
+}
+
+void Logger::disableStructuredFileSink() {
+	std::lock_guard<std::mutex> lock(settingsMutex);
+	structuredFileStream.close();
+	structuredFileStream.clear();
+	structuredFilePath.clear();
+}
+
+void Logger::setCaptureDisplayEvents(bool enable) {
+	std::lock_guard<std::mutex> lock(settingsMutex);
+	captureDisplayEvents = enable;
+}
+
+void Logger::setEnabledCategories(const std::vector<std::string>& categories) {
+	std::vector<std::string> normalized = categories;
+	for (std::string& category : normalized) {
+		category = normalize_category(category);
+	}
+	normalized.erase(std::remove_if(normalized.begin(), normalized.end(), [](const std::string& category) {
+		return category.empty();
+	}), normalized.end());
+	std::sort(normalized.begin(), normalized.end());
+	normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+	std::lock_guard<std::mutex> lock(settingsMutex);
+	enabledCategories = std::move(normalized);
 }
 
 void Logger::setBacktrace(bool enable, size_t max_size) {
@@ -424,6 +646,22 @@ std::uint64_t Logger::emit(OutputAction action, const OutputContext& context) {
 	}
 	queueCondition.notify_one();
 	return eventId;
+}
+
+std::uint64_t Logger::emitDiagnostic(const DiagnosticMessage& diagnostic, bool mirrorToDisplay) {
+	return this->emit(OutputAction::DIAGNOSTIC,
+	                  OutputContext{
+		                  .level = diagnostic.severity,
+		                  .message = diagnostic.summary,
+		                  .category = diagnostic.category,
+		                  .cause = diagnostic.cause,
+		                  .recommendation = diagnostic.recommendation,
+		                  .details = diagnostic.details,
+		                  .source = diagnostic.source,
+		                  .scope = diagnostic.scope,
+		                  .contextFields = diagnostic.context,
+		                  .mirrorToDisplay = mirrorToDisplay,
+	                  });
 }
 
 void Logger::stdout(const std::string& message,
@@ -461,6 +699,10 @@ void Logger::warn (const std::string& m) { this->emit(OutputAction::LOG, {.level
 void Logger::info (const std::string& m) { this->emit(OutputAction::LOG, {.level = spdlog::level::info,  .message = m}); }
 void Logger::debug(const std::string& m) { this->emit(OutputAction::LOG, {.level = spdlog::level::debug, .message = m}); }
 void Logger::trace(const std::string& m) { this->emit(OutputAction::LOG, {.level = spdlog::level::trace, .message = m}); }
+
+void Logger::diagnostic(const DiagnosticMessage& diagnostic, bool mirrorToDisplay) {
+	(void)this->emitDiagnostic(diagnostic, mirrorToDisplay);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Display session helpers
@@ -506,6 +748,24 @@ void Logger::displayItemFailure(const std::string& itemId,
                                  const std::string& reason) {
 	this->emit(OutputAction::DISPLAY_ITEM_FAILURE,
 	           OutputContext{.message = reason, .source = itemId});
+}
+
+void Logger::displayItemFailure(const std::string& itemId,
+	                             const DiagnosticMessage& diagnostic) {
+	this->displayItemFailure(itemId, diagnostic.summary);
+	this->displayDiagnostic(diagnostic, itemId, false);
+}
+
+void Logger::displayDiagnostic(const DiagnosticMessage& diagnostic,
+	                          const std::string& sourceOverride,
+	                          bool includeSummary) {
+	const std::string message = logger_render_display_message(diagnostic, includeSummary);
+	if (message.empty()) {
+		return;
+	}
+	this->emit(OutputAction::DISPLAY_MESSAGE,
+	           OutputContext{.message = message,
+	                         .source = sourceOverride.empty() ? diagnostic.source : sourceOverride});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

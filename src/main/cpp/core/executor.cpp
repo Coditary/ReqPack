@@ -2,6 +2,7 @@
 
 #include "core/host_info.h"
 #include "core/request_resolution.h"
+#include "output/diagnostic.h"
 #include "output/idisplay.h"
 #include "output/logger.h"
 
@@ -20,6 +21,115 @@
 namespace {
 
 constexpr const char* INTERNAL_SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
+
+DiagnosticMessage resolution_failure_diagnostic(const std::string& details, const std::string& scope) {
+	return make_error_diagnostic(
+		"executor",
+		"Request resolution failed",
+		"ReqPack could not map requested input to an executable plugin request.",
+		"Check system name, package specifier, and flags, then retry.",
+		details,
+		"executor",
+		scope
+	);
+}
+
+DiagnosticMessage system_update_failure_diagnostic(const std::string& system) {
+	return make_error_diagnostic(
+		"executor",
+		"System-wide package update failed",
+		"Plugin could not complete update-all operation for requested system.",
+		"Inspect plugin output above, verify package manager health, then retry update.",
+		{},
+		system,
+		"update"
+	);
+}
+
+DiagnosticMessage transaction_update_failure_diagnostic(const std::string& system) {
+	return make_error_diagnostic(
+		"executor",
+		"Transaction database update failed",
+		"ReqPack could not persist running state for this package operation.",
+		"Check transaction database permissions and configured transaction path.",
+		{},
+		system,
+		"transaction"
+	);
+}
+
+DiagnosticMessage plugin_group_failure_diagnostic(const std::string& system, const std::string& summary, const std::string& cause) {
+	return make_error_diagnostic(
+		"plugin",
+		summary,
+		cause,
+		"Check plugin installation, registry metadata, and package manager health, then retry command.",
+		{},
+		system,
+		"plugin"
+	);
+}
+
+DiagnosticMessage package_failure_diagnostic(const std::string& system, const std::string& packageName, bool unavailable) {
+	if (unavailable) {
+		return make_error_diagnostic(
+			"plugin",
+			"Package is unavailable: " + system + ":" + packageName,
+			"Plugin reported that requested package could not be found or provided by current repositories.",
+			"Verify package name, repositories, and system support, then retry.",
+			{},
+			system + ":" + packageName,
+			"package"
+		);
+	}
+	return make_error_diagnostic(
+		"plugin",
+		"Plugin action failed for " + system + ":" + packageName,
+		"Plugin could not complete requested package operation.",
+		"Inspect plugin-specific output above and confirm underlying package manager works outside ReqPack.",
+		{},
+		system + ":" + packageName,
+		"package"
+	);
+}
+
+DiagnosticMessage security_gateway_finding_diagnostic(const ValidationFinding& finding) {
+	const std::string summary = finding.message.empty() ? (finding.id.empty() ? finding.kind : finding.id) : finding.message;
+
+	if (finding.kind == "sync_warning") {
+		return make_warning_diagnostic(
+			"security",
+			summary,
+			"Security gateway could not use preferred refresh path for requested ecosystems.",
+			"Check upstream vulnerability feed availability. ReqPack may fall back to a slower full refresh.",
+			{},
+			finding.source,
+			"gateway"
+		);
+	}
+
+	if (finding.kind == "sync_error") {
+		return make_error_diagnostic(
+			"security",
+			summary,
+			"Security gateway could not prepare vulnerability data required for this command.",
+			"Check gateway backend configuration, OSV feed access, and local security index permissions.",
+			{},
+			finding.source,
+			"gateway"
+		);
+	}
+
+	return make_error_diagnostic(
+		"security",
+		summary,
+		"Security gateway returned an unexpected validation finding.",
+		"Inspect security gateway configuration and retry command.",
+		{},
+		finding.source,
+		"gateway"
+	);
+}
 
 bool has_flag(const std::vector<std::string>& flags, const std::string& name) {
 	return std::find(flags.begin(), flags.end(), name) != flags.end();
@@ -711,7 +821,7 @@ std::vector<bool> Executer::updateSystems(const std::vector<Request>& requests) 
 		const std::optional<Request> resolvedRequest = this->resolveRequest(request, &errorMessage);
 		if (!resolvedRequest.has_value()) {
 			if (!errorMessage.empty()) {
-				Logger::instance().err(errorMessage);
+				Logger::instance().diagnostic(resolution_failure_diagnostic(errorMessage, "update"));
 			}
 			continue;
 		}
@@ -757,7 +867,7 @@ std::vector<bool> Executer::updateSystems(const std::vector<Request>& requests) 
 		if (ok) {
 			Logger::instance().displayItemSuccess(task.taskGroup.system);
 		} else {
-			Logger::instance().displayItemFailure(task.taskGroup.system, "failed to update system packages");
+			Logger::instance().displayItemFailure(task.taskGroup.system, system_update_failure_diagnostic(task.taskGroup.system));
 		}
 		results[task.requestIndex] = ok;
 		return ok;
@@ -1407,6 +1517,11 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGr
 			record.runId = runId;
 			record.errorMessage = "plugin load failed";
 		}
+		Logger::instance().diagnostic(plugin_group_failure_diagnostic(
+			taskGroup.system,
+			"Plugin load failed for system '" + taskGroup.system + "'",
+			"ReqPack could not load requested plugin implementation before executing operation."
+		));
 		return records;
 	}
 
@@ -1420,6 +1535,11 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGr
 			record.runId = runId;
 			record.errorMessage = "plugin action failed";
 		}
+		Logger::instance().diagnostic(plugin_group_failure_diagnostic(
+			taskGroup.system,
+			"Plugin action failed for system '" + taskGroup.system + "'",
+			"Plugin loaded but returned failure while processing requested action."
+		));
 		return records;
 	}
 
@@ -1438,6 +1558,11 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 				record.runId = runId;
 				record.errorMessage = "plugin action failed";
 			}
+			Logger::instance().diagnostic(plugin_group_failure_diagnostic(
+				taskGroup.system,
+				"Local target install failed for system '" + taskGroup.system + "'",
+				"Plugin could not process requested local file or archive target."
+			));
 			return failureRecords;
 		}
 
@@ -1514,7 +1639,10 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 	const TaskGroup& executableTaskGroup = taskGroup;
 
 	if (!this->transactionDatabase->updateItemsStatus(runId, executableTaskGroup.packages, "running")) {
-		displayFailure(executableTaskGroup.packages, "transaction update failed");
+		for (const Package& package : executableTaskGroup.packages) {
+			Logger::instance().displayItemFailure(taskGroup.system + ":" + package.name,
+			                                   transaction_update_failure_diagnostic(taskGroup.system));
+		}
 		appendFailureRecords(executableTaskGroup.packages, "transaction update failed");
 		return records;
 	}
@@ -1555,10 +1683,10 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 	displaySuccess(succeededPackages);
 	appendSuccessRecords(succeededPackages);
 	for (const Package& package : failedPackages) {
-		const std::string errorMessage = unavailablePackages.find(packageRequestSpec(package)) != unavailablePackages.end()
-			? "package unavailable"
-			: "plugin action failed";
-		Logger::instance().displayItemFailure(taskGroup.system + ":" + package.name, errorMessage);
+		const bool unavailable = unavailablePackages.find(packageRequestSpec(package)) != unavailablePackages.end();
+		const std::string errorMessage = unavailable ? "package unavailable" : "plugin action failed";
+		Logger::instance().displayItemFailure(taskGroup.system + ":" + package.name,
+		                                   package_failure_diagnostic(taskGroup.system, package.name, unavailable));
 		appendFailureRecord(package, errorMessage);
 	}
 
@@ -1772,10 +1900,10 @@ bool Executer::dispatchTaskGroupToSecurityGateway(const TaskGroup& taskGroup) co
 	const std::vector<ValidationFinding> findings = this->securityGateway.executeGatewayRequest(taskGroup.action, taskGroup.system, taskGroup.packages);
 	for (const ValidationFinding& finding : findings) {
 		if (finding.kind == "sync_warning") {
-			Logger::instance().warn(finding.message);
+			Logger::instance().diagnostic(security_gateway_finding_diagnostic(finding));
 		}
 		if (finding.kind == "sync_error") {
-			Logger::instance().err(finding.message);
+			Logger::instance().diagnostic(security_gateway_finding_diagnostic(finding));
 			return false;
 		}
 	}

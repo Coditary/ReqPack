@@ -26,6 +26,10 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.logPattern = "[%l] %v";
     overrides.logFilePath = "~/logs/reqpack.log";
     overrides.fileOutput = true;
+    overrides.structuredFileOutput = true;
+    overrides.structuredLogFilePath = "~/logs/reqpack.jsonl";
+    overrides.captureDisplayEvents = false;
+    overrides.enabledLogCategories = {"network", "plugin", "network"};
     overrides.enableBacktrace = true;
     overrides.backtraceSize = 64;
     overrides.severityThreshold = SeverityLevel::MEDIUM;
@@ -64,6 +68,10 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(config.logging.pattern == "[%l] %v");
     CHECK(config.logging.fileOutput);
     CHECK(std::filesystem::path(config.logging.filePath) == home / "logs/reqpack.log");
+    CHECK(config.logging.structuredFileOutput);
+    CHECK(std::filesystem::path(config.logging.structuredFilePath) == home / "logs/reqpack.jsonl");
+    CHECK_FALSE(config.logging.captureDisplayEvents);
+    CHECK(config.logging.enabledCategories == std::vector<std::string>({"network", "plugin"}));
     CHECK(config.logging.enableBacktrace);
     CHECK(config.logging.backtraceSize == 64);
     CHECK(config.security.severityThreshold == SeverityLevel::MEDIUM);
@@ -120,6 +128,51 @@ TEST_CASE("configuration consumes CLI flags with positional and inline values", 
         REQUIRE(overrides.logFilePath.has_value());
         CHECK(overrides.logFilePath.value() == "~/reqpack.log");
         CHECK(index == 1);
+    }
+
+    SECTION("structured logging flags map to expected overrides") {
+        {
+            const std::vector<std::string> arguments{"--structured-log-file", "~/reqpack.jsonl"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.structuredFileOutput.has_value());
+            CHECK(overrides.structuredFileOutput.value());
+            REQUIRE(overrides.structuredLogFilePath.has_value());
+            CHECK(overrides.structuredLogFilePath.value() == "~/reqpack.jsonl");
+            CHECK(index == 1);
+        }
+
+        {
+            const std::vector<std::string> arguments{"--log-category", "Network"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            CHECK(overrides.enabledLogCategories == std::vector<std::string>{"network"});
+            CHECK(index == 1);
+        }
+
+        {
+            const std::vector<std::string> arguments{"--log-capture-display"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.captureDisplayEvents.has_value());
+            CHECK(overrides.captureDisplayEvents.value());
+        }
+
+        {
+            const std::vector<std::string> arguments{"--no-log-console"};
+            std::size_t index = 0;
+            ReqPackConfigOverrides overrides;
+
+            REQUIRE(consume_cli_config_flag(arguments, index, overrides));
+            REQUIRE(overrides.consoleOutput.has_value());
+            CHECK_FALSE(overrides.consoleOutput.value());
+        }
     }
 
     SECTION("prompt and registry flags map to expected overrides") {
@@ -692,4 +745,24 @@ TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli
         CHECK(capture.str().find("$XDG_CONFIG_HOME/reqpack/remote.lua") != std::string::npos);
         CHECK(capture.str().find("~/.config/reqpack/remote.lua") != std::string::npos);
     }
+}
+
+TEST_CASE("cli general help documents logging flags", "[unit][cli][help]") {
+    Cli cli;
+    std::ostringstream capture;
+    std::streambuf* previous = std::cout.rdbuf(capture.rdbuf());
+
+    char arg0[] = "ReqPack";
+    char arg1[] = "--help";
+    char* argv[] = {arg0, arg1};
+
+    const bool handled = cli.handleHelp(2, argv);
+
+    std::cout.rdbuf(previous);
+
+    REQUIRE(handled);
+    CHECK(capture.str().find("--structured-log-file <path>") != std::string::npos);
+    CHECK(capture.str().find("--log-capture-display") != std::string::npos);
+    CHECK(capture.str().find("--log-category <name>") != std::string::npos);
+    CHECK(capture.str().find("-v,--verbose") != std::string::npos);
 }

@@ -30,6 +30,25 @@
 
 namespace {
 
+void configure_logger_from_config(Logger& logger, const ReqPackConfig& config) {
+    logger.setLevel(to_string(config.logging.level));
+    logger.setPattern(config.logging.pattern);
+    logger.setBacktrace(config.logging.enableBacktrace, config.logging.backtraceSize);
+    logger.setConsoleOutput(config.logging.consoleOutput);
+    logger.setEnabledCategories(config.logging.enabledCategories);
+    logger.setCaptureDisplayEvents(config.logging.captureDisplayEvents);
+    if (config.logging.fileOutput) {
+        logger.setFileSink(config.logging.filePath);
+    } else {
+        logger.disableFileSink();
+    }
+    if (config.logging.structuredFileOutput) {
+        logger.setStructuredFileSink(config.logging.structuredFilePath);
+    } else {
+        logger.disableStructuredFileSink();
+    }
+}
+
 constexpr const char* REMOTE_UPLOAD_INSTALL_COMMAND = "__reqpack_upload_install__";
 constexpr const char* REMOTE_UPLOAD_PATH_PLACEHOLDER = "__REQPACK_REMOTE_UPLOAD_PATH__";
 
@@ -602,13 +621,7 @@ bool reload_remote_state(RemoteServerState& state, Logger& logger, std::string& 
             state.users = users;
         }
 
-        logger.setLevel(to_string(config.logging.level));
-        logger.setPattern(config.logging.pattern);
-        logger.setBacktrace(config.logging.enableBacktrace, config.logging.backtraceSize);
-        logger.setConsoleOutput(config.logging.consoleOutput);
-        if (config.logging.fileOutput) {
-            logger.setFileSink(config.logging.filePath);
-        }
+        configure_logger_from_config(logger, config);
         return true;
     } catch (const std::exception& e) {
         error = e.what();

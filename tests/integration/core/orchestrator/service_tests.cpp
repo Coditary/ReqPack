@@ -622,6 +622,31 @@ std::string run_reqpack_with_stdin(
     return run_command_capture(command);
 }
 
+std::string run_reqpack_with_home_and_stdin(
+    const std::filesystem::path& workspace,
+    const std::filesystem::path& configPath,
+    const std::filesystem::path& homePath,
+    const std::vector<std::string>& arguments,
+    const std::string& stdinContent
+) {
+	std::string innerCommand =
+		"printf %s " + escape_shell_arg(stdinContent) +
+		" | " + escape_shell_arg((build_root() / "ReqPack").string()) +
+		" --config " + escape_shell_arg(configPath.string());
+	for (const std::string& argument : arguments) {
+		innerCommand += " " + escape_shell_arg(argument);
+	}
+
+	std::string command = "cd " + escape_shell_arg(workspace.string()) +
+		" && env HOME=" + escape_shell_arg(homePath.string()) +
+		" XDG_CONFIG_HOME=" + escape_shell_arg((homePath / ".config").string()) +
+		" XDG_DATA_HOME=" + escape_shell_arg((homePath / ".local" / "share").string()) +
+		" XDG_CACHE_HOME=" + escape_shell_arg((homePath / ".cache").string()) +
+		" sh -c " + escape_shell_arg(innerCommand);
+    command += " 2>&1";
+    return run_command_capture(command);
+}
+
 class ServerProcess {
 public:
     ServerProcess(
@@ -3918,6 +3943,43 @@ TEST_CASE("reqpack remote rejects invalid local upload arguments before connecti
         CHECK(status != 0);
         CHECK(output.find("remote upload supports one local file per install command") != std::string::npos);
     }
+}
+
+TEST_CASE("reqpack remote interactive client reports local input errors through diagnostics", "[integration][orchestrator][remote]") {
+    TempDir tempDir{"reqpack-orchestrator-remote-client-input-errors"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path logPath = tempDir.path() / "server.log";
+    const int port = reserve_tcp_port();
+
+    add_plugin_script(pluginDirectory, "apply", ORCHESTRATOR_PLUGIN);
+    write_remote_profiles(tempDir.path(),
+        "return {\n"
+        "  dev = {\n"
+        "    host = '127.0.0.1',\n"
+        "    port = " + std::to_string(port) + ",\n"
+        "    token = 'secret',\n"
+        "  },\n"
+        "}\n");
+
+    ServerProcess server(tempDir.path(), configPath, std::nullopt, {
+        "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
+    }, logPath);
+
+    const std::filesystem::path badUploadDir = tempDir.path() / "upload-dir";
+    std::filesystem::create_directories(badUploadDir);
+    const std::string output = run_reqpack_with_home_and_stdin(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {"remote", "dev"},
+        "\"unterminated\ninstall apply " + badUploadDir.string() + "\nquit\n"
+    );
+
+    CHECK(output.find("invalid command syntax") != std::string::npos);
+    CHECK(output.find("Cause: Interactive remote command could not be tokenized.") != std::string::npos);
+    CHECK(output.find("remote upload only supports regular files") != std::string::npos);
+    CHECK(output.find("Cause: Interactive remote upload request is invalid.") != std::string::npos);
 }
 
 TEST_CASE("reqpack remote client reports http and https profiles as unimplemented", "[integration][orchestrator][remote]") {

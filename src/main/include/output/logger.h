@@ -1,5 +1,6 @@
 #pragma once
 
+#include "output/diagnostic.h"
 #include "output/idisplay.h"
 
 #include <spdlog/spdlog.h>
@@ -16,6 +17,7 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <fstream>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OutputAction — identifies how a queued event should be processed.
@@ -26,6 +28,7 @@
 enum class OutputAction {
 	// ── Logging / raw stdout ─────────────────────────────────────────────────
 	LOG,               ///< Route through spdlog.
+	DIAGNOSTIC,        ///< Route structured diagnostic through spdlog and JSONL.
 	STDOUT,            ///< Write raw message to stdout.
 
 	// ── Plugin runtime callbacks ─────────────────────────────────────────────
@@ -80,6 +83,10 @@ enum class OutputAction {
 struct OutputContext {
 	spdlog::level::level_enum level{spdlog::level::info};
 	std::string               message{};
+	std::string               category{};
+	std::string               cause{};
+	std::string               recommendation{};
+	std::string               details{};
 	std::string               source{};     ///< Plugin id / item id.
 	std::string               scope{};      ///< Package name / sub-scope.
 	int                       statusCode{0};
@@ -89,6 +96,8 @@ struct OutputContext {
 	std::optional<std::uint64_t> bytesPerSecond{};
 	std::string               eventName{};
 	std::string               payload{};    ///< Multi-purpose encoded data.
+	DiagnosticFields          contextFields{};
+	bool                      mirrorToDisplay{true};
 	int                       displayMode{0}; ///< Cast of DisplayMode enum.
 };
 
@@ -112,17 +121,23 @@ class Logger {
 	std::vector<spdlog::sink_ptr>   sinks;
 	/// Reference to the console sink so its level can be muted when a display renderer is active.
 	std::shared_ptr<spdlog::sinks::stdout_color_sink_mt> consoleSink;
+	std::shared_ptr<spdlog::sinks::basic_file_sink_mt> textFileSink;
 	std::thread                     worker;
 	std::deque<OutputEvent>         queue;
 	std::mutex                      queueMutex;
 	std::condition_variable         queueCondition;
 	std::mutex                      processedMutex;
 	std::condition_variable         processedCondition;
+	mutable std::mutex              settingsMutex;
 	std::uint64_t                   nextEventId{0};
 	std::uint64_t                   processedEventId{0};
 	bool                            stopRequested{false};
 	std::string                     pattern{"%^[%T] [%l] %v%$"};
 	std::atomic<bool>              consoleOutputEnabled{true};
+	std::ofstream                   structuredFileStream;
+	std::string                     structuredFilePath{};
+	bool                            captureDisplayEvents{true};
+	std::vector<std::string>        enabledCategories{};
 
 	/// IDisplay implementation; accessed only on the worker thread after set.
 	std::atomic<IDisplay*>          display{nullptr};
@@ -136,6 +151,10 @@ class Logger {
 	void        processEvent(const OutputEvent& event);
 	static std::string formatMessage(const OutputContext& context);
 	void        updateConsoleSinkLevel();
+	void        refreshSinks();
+	bool        isCategoryEnabled(const OutputEvent& event) const;
+	bool        shouldCaptureDisplayEvents() const;
+	void        writeStructuredEvent(const OutputEvent& event);
 
 	/// Route an OutputEvent to the active IDisplay (called on worker thread).
 	void routeToDisplay(const OutputEvent& event);
@@ -154,6 +173,11 @@ public:
 	void setConsoleOutput(bool enable);
 	bool isConsoleOutputEnabled() const;
 	void setFileSink(const std::string& filename);
+	void disableFileSink();
+	void setStructuredFileSink(const std::string& filename);
+	void disableStructuredFileSink();
+	void setCaptureDisplayEvents(bool enable);
+	void setEnabledCategories(const std::vector<std::string>& categories);
 	void setBacktrace(bool enable, size_t max_size = 10);
 
 	/// Attach an IDisplay implementation.  Ownership stays with the caller;
@@ -163,6 +187,7 @@ public:
 	// ── Core emit ─────────────────────────────────────────────────────────────
 
 	std::uint64_t emit(OutputAction action, const OutputContext& context = {});
+	std::uint64_t emitDiagnostic(const DiagnosticMessage& diagnostic, bool mirrorToDisplay = true);
 	void stdout(const std::string& message,
 	            const std::string& source = {},
 	            const std::string& scope  = {});
@@ -177,6 +202,7 @@ public:
 	void info (const std::string& message);
 	void debug(const std::string& message);
 	void trace(const std::string& message);
+	void diagnostic(const DiagnosticMessage& diagnostic, bool mirrorToDisplay = true);
 
 	// ── Display session helpers ───────────────────────────────────────────────
 
@@ -193,6 +219,10 @@ public:
 	void displayItemStep   (const std::string& itemId, const std::string& step);
 	void displayItemSuccess(const std::string& itemId);
 	void displayItemFailure(const std::string& itemId, const std::string& reason);
+	void displayItemFailure(const std::string& itemId, const DiagnosticMessage& diagnostic);
+	void displayDiagnostic(const DiagnosticMessage& diagnostic,
+	                     const std::string& sourceOverride = {},
+	                     bool includeSummary = true);
 
 	// ── Display table helpers ─────────────────────────────────────────────────
 

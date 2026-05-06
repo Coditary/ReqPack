@@ -24,6 +24,18 @@ std::string lua_escape(const std::string& s) {
     return out;
 }
 
+DiagnosticMessage snapshot_output_diagnostic(const std::string& summary, const std::string& cause, const std::string& recommendation) {
+    return make_error_diagnostic(
+        "snapshot",
+        summary,
+        cause,
+        recommendation,
+        {},
+        "snapshot",
+        "output"
+    );
+}
+
 } // namespace
 
 SnapshotExporter::SnapshotExporter(const ReqPackConfig& cfg) : config(cfg) {}
@@ -126,10 +138,13 @@ bool SnapshotExporter::exportSnapshot(const Request& request) const {
     if (std::filesystem::exists(filePath)) {
         const bool force = std::find(request.flags.begin(), request.flags.end(), "force") != request.flags.end();
         if (!force) {
-            std::cerr << resolvedPath << " already exists. Overwrite? [y/N] " << std::flush;
+			Logger& logger = Logger::instance();
+			logger.stdout(resolvedPath + " already exists. Overwrite? [y/N]");
+			logger.flushSync();
             std::string answer;
             if (!std::getline(std::cin, answer) || (answer != "y" && answer != "Y")) {
-                std::cerr << "aborted.\n";
+				logger.stdout("aborted.");
+				logger.flushSync();
                 return false;
             }
         }
@@ -140,20 +155,35 @@ bool SnapshotExporter::exportSnapshot(const Request& request) const {
     if (!parentPath.empty()) {
         std::filesystem::create_directories(parentPath, ec);
         if (ec) {
-            std::cerr << "snapshot: failed to create output directory: " << resolvedPath << '\n';
+			Logger::instance().diagnostic(snapshot_output_diagnostic(
+				"snapshot: failed to create output directory: " + resolvedPath,
+				"ReqPack could not create parent directory for snapshot output.",
+				"Check target path permissions and parent directory state, then retry."
+			));
+			Logger::instance().flushSync();
             return false;
         }
     }
 
     std::ofstream output(resolvedPath, std::ios::binary | std::ios::trunc);
     if (!output.is_open()) {
-        std::cerr << "snapshot: failed to open output path: " << resolvedPath << '\n';
+		Logger::instance().diagnostic(snapshot_output_diagnostic(
+			"snapshot: failed to open output path: " + resolvedPath,
+			"ReqPack could not open requested snapshot output file for writing.",
+			"Check whether path points to writable file location and retry."
+		));
+		Logger::instance().flushSync();
         return false;
     }
 
     output << rendered;
     if (!output.good()) {
-        std::cerr << "snapshot: failed to write output path: " << resolvedPath << '\n';
+		Logger::instance().diagnostic(snapshot_output_diagnostic(
+			"snapshot: failed to write output path: " + resolvedPath,
+			"ReqPack could not finish writing snapshot manifest to output file.",
+			"Check disk space, filesystem health, and write permissions, then retry."
+		));
+		Logger::instance().flushSync();
         return false;
     }
 

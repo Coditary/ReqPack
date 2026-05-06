@@ -242,6 +242,38 @@ TEST_CASE("configuration loads and normalizes registry source entries from lua",
     CHECK(sources.at("yum").source == "https://example.test/yum.lua");
 }
 
+TEST_CASE("configuration loads structured logging settings from lua", "[unit][configuration][parse]") {
+    TempDir tempDir{"reqpack-config-logging"};
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+
+    write_file(configPath, R"(
+        return {
+            logging = {
+                level = "debug",
+                consoleOutput = true,
+                fileOutput = true,
+                filePath = "~/reqpack.log",
+                structuredFileOutput = true,
+                structuredFilePath = "~/reqpack.jsonl",
+                captureDisplayEvents = false,
+                enabledCategories = { "Network", "plugin", "network" },
+            },
+        }
+    )");
+
+    const ReqPackConfig config = load_config_from_lua(configPath, default_reqpack_config());
+    const std::filesystem::path home = reqpack_user_home();
+
+    CHECK(config.logging.level == LogLevel::DEBUG);
+    CHECK(config.logging.consoleOutput);
+    CHECK(config.logging.fileOutput);
+    CHECK(std::filesystem::path(config.logging.filePath) == home / "reqpack.log");
+    CHECK(config.logging.structuredFileOutput);
+    CHECK(std::filesystem::path(config.logging.structuredFilePath) == home / "reqpack.jsonl");
+    CHECK_FALSE(config.logging.captureDisplayEvents);
+    CHECK(config.logging.enabledCategories == std::vector<std::string>({"network", "plugin"}));
+}
+
 TEST_CASE("configuration merges downloader, registry, database, and overlay sources in order", "[unit][configuration][merge]") {
     TempDir tempDir{"reqpack-config-registry-merge"};
     const std::filesystem::path registryDir = tempDir.path() / "registry-db";

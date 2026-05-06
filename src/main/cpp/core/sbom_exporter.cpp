@@ -1,6 +1,7 @@
 #include "core/sbom_exporter.h"
 
 #include "output/ansi_color.h"
+#include "output/logger.h"
 
 #include <boost/graph/graph_traits.hpp>
 
@@ -35,6 +36,18 @@ constexpr std::array<TableColumn, 3> TABLE_COLUMNS{{
     {"NAME", 12, 28},
     {"VERSION", 7, 16},
 }};
+
+DiagnosticMessage sbom_output_diagnostic(const std::string& summary, const std::string& cause, const std::string& recommendation) {
+    return make_error_diagnostic(
+        "sbom",
+        summary,
+        cause,
+        recommendation,
+        {},
+        "sbom",
+        "output"
+    );
+}
 
 std::string normalize_table_value(const std::string& value) {
     std::string normalized;
@@ -591,10 +604,13 @@ bool SbomExporter::exportGraph(const Graph& graph, const Request& request) const
     if (std::filesystem::exists(filePath)) {
         const bool force = std::find(request.flags.begin(), request.flags.end(), "force") != request.flags.end();
         if (!force) {
-            std::cerr << resolvedOutputPath << " already exists. Overwrite? [y/N] " << std::flush;
+			Logger& logger = Logger::instance();
+			logger.stdout(resolvedOutputPath + " already exists. Overwrite? [y/N]");
+			logger.flushSync();
             std::string answer;
             if (!std::getline(std::cin, answer) || (answer != "y" && answer != "Y")) {
-                std::cerr << "aborted.\n";
+				logger.stdout("aborted.");
+				logger.flushSync();
                 return false;
             }
         }
@@ -605,20 +621,35 @@ bool SbomExporter::exportGraph(const Graph& graph, const Request& request) const
     if (!parentPath.empty()) {
         std::filesystem::create_directories(parentPath, error);
         if (error) {
-            std::cerr << "failed to create sbom output directory: " << resolvedOutputPath << '\n';
+			Logger::instance().diagnostic(sbom_output_diagnostic(
+				"failed to create sbom output directory: " + resolvedOutputPath,
+				"ReqPack could not create parent directory for SBOM export output.",
+				"Check target path permissions and parent directory state, then retry."
+			));
+			Logger::instance().flushSync();
             return false;
         }
     }
 
     std::ofstream output(resolvedOutputPath, std::ios::binary | std::ios::trunc);
     if (!output.is_open()) {
-        std::cerr << "failed to open sbom output path: " << resolvedOutputPath << '\n';
+		Logger::instance().diagnostic(sbom_output_diagnostic(
+			"failed to open sbom output path: " + resolvedOutputPath,
+			"ReqPack could not open requested SBOM output file for writing.",
+			"Check whether path points to writable file location and retry."
+		));
+		Logger::instance().flushSync();
         return false;
     }
 
     output << rendered;
     if (!output.good()) {
-        std::cerr << "failed to write sbom output path: " << resolvedOutputPath << '\n';
+		Logger::instance().diagnostic(sbom_output_diagnostic(
+			"failed to write sbom output path: " + resolvedOutputPath,
+			"ReqPack could not finish writing SBOM export to output file.",
+			"Check disk space, filesystem health, and write permissions, then retry."
+		));
+		Logger::instance().flushSync();
         return false;
     }
 

@@ -92,6 +92,18 @@ std::optional<unsigned int> unsigned_int_from_string(const std::string& value) {
     }
 }
 
+std::vector<std::string> normalize_string_list(std::vector<std::string> values) {
+    for (std::string& value : values) {
+        value = to_lower(value);
+    }
+    values.erase(std::remove_if(values.begin(), values.end(), [](const std::string& value) {
+        return value.empty();
+    }), values.end());
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+    return values;
+}
+
 std::optional<std::filesystem::path> passwd_home_from_user(const std::string& username) {
     if (username.empty()) {
         return std::nullopt;
@@ -1101,12 +1113,20 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
         assign_if_present(logging.value(), "consoleOutput", config.logging.consoleOutput);
         assign_if_present(logging.value(), "fileOutput", config.logging.fileOutput);
         assign_if_present(logging.value(), "filePath", config.logging.filePath);
+        assign_if_present(logging.value(), "structuredFileOutput", config.logging.structuredFileOutput);
+        assign_if_present(logging.value(), "structuredFilePath", config.logging.structuredFilePath);
+        assign_if_present(logging.value(), "captureDisplayEvents", config.logging.captureDisplayEvents);
         assign_if_present(logging.value(), "enableBacktrace", config.logging.enableBacktrace);
         assign_if_present(logging.value(), "backtraceSize", config.logging.backtraceSize);
         assign_if_present(logging.value(), "pattern", config.logging.pattern);
         assign_if_present(logging.value(), "level", log_level_from_string, config.logging.level);
+        const std::vector<std::string> categories = load_string_array(logging.value()["enabledCategories"]);
+        if (!categories.empty()) {
+            config.logging.enabledCategories = normalize_string_list(categories);
+        }
     }
     config.logging.filePath = expand_user_path(config.logging.filePath).string();
+    config.logging.structuredFilePath = expand_user_path(config.logging.structuredFilePath).string();
 
     const sol::optional<sol::table> security = root["security"];
     if (security.has_value()) {
@@ -1401,6 +1421,10 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.logPattern.has_value()) config.logging.pattern = overrides.logPattern.value();
     if (overrides.fileOutput.has_value()) config.logging.fileOutput = overrides.fileOutput.value();
     if (overrides.logFilePath.has_value()) config.logging.filePath = expand_user_path(overrides.logFilePath.value()).string();
+    if (overrides.structuredFileOutput.has_value()) config.logging.structuredFileOutput = overrides.structuredFileOutput.value();
+    if (overrides.structuredLogFilePath.has_value()) config.logging.structuredFilePath = expand_user_path(overrides.structuredLogFilePath.value()).string();
+    if (overrides.captureDisplayEvents.has_value()) config.logging.captureDisplayEvents = overrides.captureDisplayEvents.value();
+    if (!overrides.enabledLogCategories.empty()) config.logging.enabledCategories = normalize_string_list(overrides.enabledLogCategories);
     if (overrides.enableBacktrace.has_value()) config.logging.enableBacktrace = overrides.enableBacktrace.value();
     if (overrides.backtraceSize.has_value()) config.logging.backtraceSize = overrides.backtraceSize.value();
 
@@ -1531,6 +1555,14 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
         if (require_value(value)) overrides.logLevel = log_level_from_string(value);
         return true;
     }
+    if (argument == "--log-console") {
+        overrides.consoleOutput = true;
+        return true;
+    }
+    if (argument == "--no-log-console") {
+        overrides.consoleOutput = false;
+        return true;
+    }
     if (argument == "--verbose" || argument == "-v") {
         overrides.consoleOutput = true;
         return true;
@@ -1544,6 +1576,29 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
             overrides.fileOutput = true;
             overrides.logFilePath = value;
         }
+        return true;
+    }
+    if (argument == "--structured-log-file") {
+        if (require_value(value)) {
+            overrides.structuredFileOutput = true;
+            overrides.structuredLogFilePath = value;
+        }
+        return true;
+    }
+    if (argument == "--log-capture-display") {
+        overrides.captureDisplayEvents = true;
+        return true;
+    }
+    if (argument == "--no-log-capture-display") {
+        overrides.captureDisplayEvents = false;
+        return true;
+    }
+    if (argument == "--log-category") {
+        if (!require_value(value)) {
+            set_error("missing value for --log-category");
+            return true;
+        }
+        overrides.enabledLogCategories.push_back(to_lower(value));
         return true;
     }
     if (argument == "--backtrace") {

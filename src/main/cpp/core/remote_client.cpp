@@ -22,6 +22,18 @@ namespace {
 constexpr const char* REMOTE_UPLOAD_INSTALL_COMMAND = "__reqpack_upload_install__";
 constexpr const char* REMOTE_UPLOAD_PATH_PLACEHOLDER = "__REQPACK_REMOTE_UPLOAD_PATH__";
 
+DiagnosticMessage remote_client_input_diagnostic(const std::string& summary, const std::string& cause, const std::string& recommendation, const std::string& details = {}) {
+    return make_error_diagnostic(
+        "remote",
+        summary,
+        cause,
+        recommendation,
+        details,
+        "remote",
+        "client"
+    );
+}
+
 struct UploadInstallRequest {
     std::filesystem::path filePath;
     std::string filename;
@@ -409,14 +421,26 @@ int run_text_client_session(const RemoteProfile& profile, const std::vector<std:
         }
         const std::vector<std::string> tokens = tokenize_command_line(trimmed);
         if (tokens.empty()) {
-            std::cerr << "invalid command syntax\n";
+			Logger::instance().diagnostic(remote_client_input_diagnostic(
+				"invalid command syntax",
+				"Interactive remote command could not be tokenized.",
+				"Check shell quoting and command structure, then retry.",
+				trimmed
+			));
+			Logger::instance().flushSync();
             continue;
         }
 
         std::string uploadError;
         const std::optional<UploadInstallRequest> upload = detect_upload_install_request(tokens, uploadError);
         if (!uploadError.empty()) {
-            std::cerr << uploadError << '\n';
+			Logger::instance().diagnostic(remote_client_input_diagnostic(
+				uploadError,
+				"Interactive remote upload request is invalid.",
+				"Adjust local upload arguments and retry command.",
+				trimmed
+			));
+			Logger::instance().flushSync();
             continue;
         }
 

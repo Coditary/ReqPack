@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "core/manifest_loader.h"
+#include "output/diagnostic.h"
 #include "output/logger.h"
 
 namespace {
@@ -16,6 +17,58 @@ const std::string PROGRAM_NAME = "ReqPack";
 const std::string USAGE = "Usage: ReqPack <command> <system> [packages...] [additional systems/packages...] [flags...]";
 const std::string HELP_DESCRIPTION = "Displays this help";
 const std::string VERBOSE_DESCRIPTION = "Shows verbose command transcript and logger console output";
+
+DiagnosticMessage manifest_missing_diagnostic(const std::filesystem::path& manifestPath) {
+    return make_error_diagnostic(
+        "cli",
+        "Manifest not found: " + MANIFEST_FILENAME + " missing in '" + manifestPath.parent_path().string() + "'",
+        "Install command was given a directory path, but that directory does not contain a reqpack.lua manifest.",
+        "Create reqpack.lua in that directory or pass packages directly instead of a manifest path.",
+        {},
+        "cli",
+        "manifest",
+        {{"path", manifestPath.parent_path().string()}}
+    );
+}
+
+DiagnosticMessage manifest_load_diagnostic(const std::filesystem::path& manifestPath, const std::string& details) {
+    return make_error_diagnostic(
+        "cli",
+        "Manifest load failed: '" + manifestPath.string() + "'",
+        "Manifest file exists but could not be parsed or executed.",
+        "Check Lua syntax and manifest structure, then run command again.",
+        details,
+        "cli",
+        "manifest",
+        {{"path", manifestPath.string()}}
+    );
+}
+
+DiagnosticMessage manifest_empty_diagnostic(const std::filesystem::path& manifestPath) {
+    return make_error_diagnostic(
+        "cli",
+        "Manifest contains no packages: '" + manifestPath.string() + "'",
+        "reqpack.lua loaded successfully but returned no installable package entries.",
+        "Add entries under packages = { ... } or use direct package arguments.",
+        {},
+        "cli",
+        "manifest",
+        {{"path", manifestPath.string()}}
+    );
+}
+
+DiagnosticMessage mixed_local_and_package_diagnostic(const std::string& system) {
+    return make_error_diagnostic(
+        "cli",
+        "Install input is ambiguous for system '" + system + "'",
+        "Local path targets and package names were provided in same request for one system.",
+        "Use either package names or one local path per system in a single install command.",
+        {},
+        system,
+        "install",
+        {{"system", system}}
+    );
+}
 
 std::string to_lower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
@@ -347,9 +400,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
             }
 
             if (!std::filesystem::exists(manifestPath.value())) {
-                Logger::instance().err(
-                    "no " + MANIFEST_FILENAME + " found in '" + manifestPath->parent_path().string() + "'"
-                );
+                Logger::instance().diagnostic(manifest_missing_diagnostic(manifestPath.value()));
                 lastParseFailed_ = true;
                 return {};
             }
@@ -358,17 +409,13 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
             try {
                 entries = ManifestLoader::load(manifestPath.value());
             } catch (const std::exception& e) {
-                Logger::instance().err(
-                    "failed to load manifest '" + manifestPath->string() + "': " + e.what()
-                );
+                Logger::instance().diagnostic(manifest_load_diagnostic(manifestPath.value(), e.what()));
                 lastParseFailed_ = true;
                 return {};
             }
 
             if (entries.empty()) {
-                Logger::instance().err(
-                    "manifest '" + manifestPath->string() + "' contains no packages"
-                );
+                Logger::instance().diagnostic(manifest_empty_diagnostic(manifestPath.value()));
                 lastParseFailed_ = true;
                 return {};
             }
@@ -414,7 +461,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 
     auto assign_local_target = [&](Request& request, const std::string& system, const std::string& path) -> bool {
         if (!request.packages.empty() || (request.usesLocalTarget && request.localPath != path)) {
-            Logger::instance().err("install cannot mix local path and package names for system '" + system + "'");
+            Logger::instance().diagnostic(mixed_local_and_package_diagnostic(system));
             return false;
         }
         request.localPath = path;
@@ -531,10 +578,10 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
             continue;
         }
 
-        const std::optional<std::pair<std::string, std::string>> scoped_package = split_scoped_package(argument, known_systems);
-        if (scoped_package.has_value()) {            Request& request = ensure_request(scoped_package->first);
+		const std::optional<std::pair<std::string, std::string>> scoped_package = split_scoped_package(argument, known_systems);
+		if (scoped_package.has_value()) {            Request& request = ensure_request(scoped_package->first);
 			if (request.usesLocalTarget) {
-				Logger::instance().err("install cannot mix local path and package names for system '" + request.system + "'");
+				Logger::instance().diagnostic(mixed_local_and_package_diagnostic(request.system));
 				lastParseFailed_ = true;
 				return {};
 			}
@@ -566,7 +613,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 			continue;
 		}
 		if (request.usesLocalTarget) {
-			Logger::instance().err("install cannot mix local path and package names for system '" + current_system + "'");
+			Logger::instance().diagnostic(mixed_local_and_package_diagnostic(current_system));
 			lastParseFailed_ = true;
 			return {};
 		}
@@ -687,6 +734,7 @@ void Cli::print_help() {
         USAGE + "\n"
         "\nOptions:\n"
         "  -h,--help               " + HELP_DESCRIPTION + "\n"
+        "  -v,--verbose            " + VERBOSE_DESCRIPTION + "\n"
         "\nCommands:\n"
         "  install                 Installs requested packages\n"
         "  remove                  Removes requested packages\n"
@@ -708,6 +756,17 @@ void Cli::print_help() {
         "  --registry <path>       Loads registry sources from a custom path\n"
         "  --registry=<path>       Same as above\n"
         "  --archive-password <value> Password for encrypted archives\n"
+        "\nLogging:\n"
+        "  --log-level <name>      Sets logger level (trace/debug/info/warn/error/critical)\n"
+        "  --log-console           Forces logger console output on\n"
+        "  --no-log-console        Disables logger console output\n"
+        "  --log-pattern <value>   Sets spdlog text log pattern\n"
+        "  --log-file <path>       Writes text logs to file\n"
+        "  --structured-log-file <path> Writes structured JSONL logs to file\n"
+        "  --log-capture-display   Mirrors display events into structured logs\n"
+        "  --no-log-capture-display Stops mirroring display events into structured logs\n"
+        "  --log-category <name>   Restricts structured logs to named category (repeatable)\n"
+        "  --backtrace             Enables spdlog backtrace capture\n"
         "\nSBOM:\n"
         "  --format <name>         Uses table, json, or cyclonedx-json\n"
         "  --output <path>         Writes SBOM output to file\n"

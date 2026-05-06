@@ -83,6 +83,10 @@ struct LoggingConfig {
     bool consoleOutput{false};
     bool fileOutput{false};
     std::string filePath{"reqpack.log"};
+    bool structuredFileOutput{false};
+    std::string structuredFilePath{"reqpack.jsonl"};
+    bool captureDisplayEvents{true};
+    std::vector<std::string> enabledCategories{};
     bool enableBacktrace{false};
     std::size_t backtraceSize{32};
     std::string pattern{"[%^%l%$] %v"};
@@ -361,6 +365,10 @@ struct ReqPackConfigOverrides {
     std::optional<std::string> logPattern;
     std::optional<bool> fileOutput;
     std::optional<std::string> logFilePath;
+    std::optional<bool> structuredFileOutput;
+    std::optional<std::string> structuredLogFilePath;
+    std::optional<bool> captureDisplayEvents;
+    std::vector<std::string> enabledLogCategories{};
     std::optional<bool> enableBacktrace;
     std::optional<std::size_t> backtraceSize;
 

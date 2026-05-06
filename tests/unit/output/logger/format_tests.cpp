@@ -1,9 +1,13 @@
 #include <catch2/catch.hpp>
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <chrono>
 
 #include "output/ansi_color.h"
 #include "output/color_display.h"
+#include "output/diagnostic.h"
 #include "output/logger.h"
 #include "output/logger_core.h"
 #include "output/command_output.h"
@@ -110,6 +114,11 @@ std::string padRight(const std::string& text, size_t width) {
         return text;
     }
     return text + std::string(width - text.size(), ' ');
+}
+
+std::filesystem::path unique_temp_file(const std::string& prefix) {
+    return std::filesystem::temp_directory_path() /
+        (prefix + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".jsonl");
 }
 
 } // namespace
@@ -220,6 +229,91 @@ TEST_CASE("progress metric helpers normalize and humanize values", "[unit][logge
 TEST_CASE("logger render returns empty for flush and stop events", "[unit][logger][format]") {
     CHECK(logger_render_output_event(OutputEvent{.action = OutputAction::FLUSH}).empty());
     CHECK(logger_render_output_event(OutputEvent{.action = OutputAction::STOP}).empty());
+}
+
+TEST_CASE("logger renders diagnostics for display and structured json", "[unit][logger][diagnostic]") {
+    const DiagnosticMessage diagnostic = make_error_diagnostic(
+        "network",
+        "Download failed for https://example.invalid/pkg.tar.gz",
+        "Remote host could not be reached.",
+        "Check network access and URL.",
+        "timeout",
+        "downloader",
+        "install",
+        {{"url", "https://example.invalid/pkg.tar.gz"}}
+    );
+
+    CHECK(logger_render_display_message(diagnostic) ==
+          "Download failed for https://example.invalid/pkg.tar.gz\nCause: Remote host could not be reached.\nFix: Check network access and URL.\ntimeout");
+
+    const std::string json = logger_render_structured_event_json(OutputEvent{
+        .action = OutputAction::DIAGNOSTIC,
+        .context = OutputContext{
+            .level = diagnostic.severity,
+            .message = diagnostic.summary,
+            .category = diagnostic.category,
+            .cause = diagnostic.cause,
+            .recommendation = diagnostic.recommendation,
+            .details = diagnostic.details,
+            .source = diagnostic.source,
+            .scope = diagnostic.scope,
+            .contextFields = diagnostic.context,
+        },
+    });
+
+    CHECK(json.find("\"category\":\"network\"") != std::string::npos);
+    CHECK(json.find("\"summary\":\"Download failed for https://example.invalid/pkg.tar.gz\"") != std::string::npos);
+    CHECK(json.find("\"url\":\"https://example.invalid/pkg.tar.gz\"") != std::string::npos);
+}
+
+TEST_CASE("logger writes structured diagnostics and honors category filters", "[unit][logger][diagnostic]") {
+    Logger& logger = Logger::instance();
+    RecordingDisplay display;
+    const std::filesystem::path logPath = unique_temp_file("reqpack-logger");
+
+    logger.flushSync();
+    logger.setDisplay(&display);
+    logger.setConsoleOutput(false);
+    logger.setEnabledCategories({"network"});
+    logger.setCaptureDisplayEvents(true);
+    logger.setStructuredFileSink(logPath.string());
+
+    logger.diagnostic(make_error_diagnostic(
+        "network",
+        "Download failed",
+        "Host unreachable.",
+        "Check connection.",
+        {},
+        "downloader",
+        "install"
+    ));
+    logger.diagnostic(make_error_diagnostic(
+        "plugin",
+        "Plugin action failed",
+        "Plugin returned non-zero status.",
+        "Inspect plugin output.",
+        {},
+        "npm",
+        "install"
+    ));
+    logger.flushSync();
+
+    std::ifstream input(logPath);
+    REQUIRE(input.is_open());
+    std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+
+    CHECK(contents.find("\"category\":\"network\"") != std::string::npos);
+    CHECK(contents.find("\"category\":\"plugin\"") == std::string::npos);
+    REQUIRE_FALSE(display.messages.empty());
+    CHECK(display.messages.front().text == "Download failed");
+
+    logger.disableStructuredFileSink();
+    logger.setEnabledCategories({});
+    logger.setDisplay(nullptr);
+    logger.setConsoleOutput(true);
+    logger.flushSync();
+    std::error_code error;
+    std::filesystem::remove(logPath, error);
 }
 
 TEST_CASE("logger renders raw stdout log and display trace events", "[unit][logger][format]") {

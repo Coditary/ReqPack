@@ -7,9 +7,11 @@
 #include <optional>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 #include "core/history_manager.h"
 #include "core/snapshot_exporter.h"
+#include "output/logger.h"
 
 namespace {
 
@@ -78,6 +80,45 @@ std::string read_file(const std::filesystem::path& path) {
     buffer << input.rdbuf();
     return buffer.str();
 }
+
+class RecordingDisplay final : public IDisplay {
+public:
+    void onSessionBegin(DisplayMode, const std::vector<std::string>&) override {}
+    void onSessionEnd(bool, int, int, int) override {}
+    void onItemBegin(const std::string&, const std::string&) override {}
+    void onItemProgress(const std::string&, const DisplayProgressMetrics&) override {}
+    void onItemStep(const std::string&, const std::string&) override {}
+    void onItemSuccess(const std::string&) override {}
+    void onItemFailure(const std::string&, const std::string&) override {}
+    void onTableBegin(const std::vector<std::string>&) override {}
+    void onTableRow(const std::vector<std::string>&) override {}
+    void onTableEnd() override {}
+    void flush() override {}
+
+    void onMessage(const std::string& text, const std::string& source = {}) override {
+        messages.push_back(source.empty() ? text : ("[" + source + "] " + text));
+    }
+
+    std::vector<std::string> messages;
+};
+
+class ScopedLoggerDisplay {
+public:
+    explicit ScopedLoggerDisplay(IDisplay* display)
+        : logger_(Logger::instance()) {
+        logger_.flushSync();
+        logger_.setDisplay(display);
+    }
+
+    ~ScopedLoggerDisplay() {
+        logger_.flushSync();
+        logger_.setDisplay(nullptr);
+        logger_.flushSync();
+    }
+
+private:
+    Logger& logger_;
+};
 
 }  // namespace
 
@@ -360,4 +401,26 @@ TEST_CASE("snapshot exporter reads installed state from history database", "[uni
     CHECK(rendered.find("{ system = \"dnf\", name = \"ripgrep\", version = \"14.2\" }") != std::string::npos);
     CHECK(rendered.find("{ system = \"npm\", name = \"eslint\", version = \"9.0.0\" }") != std::string::npos);
     CHECK(rendered.find("system = \"dnf\"") < rendered.find("system = \"npm\""));
+}
+
+TEST_CASE("snapshot exporter reports file-open failure through logger diagnostics", "[unit][snapshot][history]") {
+    TempDir tempDir{"reqpack-snapshot-open-failure"};
+    const ReqPackConfig config = make_history_config(tempDir.path());
+    SnapshotExporter exporter(config);
+    Request request;
+    request.action = ActionType::SNAPSHOT;
+    request.outputPath = tempDir.path().string();
+    request.flags = {"force"};
+
+    RecordingDisplay display;
+    ScopedLoggerDisplay displayGuard(&display);
+
+    CHECK_FALSE(exporter.exportSnapshot(request));
+    Logger::instance().flushSync();
+    CHECK(std::any_of(display.messages.begin(), display.messages.end(), [&](const std::string& message) {
+        return message.find("snapshot: failed to open output path: " + tempDir.path().string()) != std::string::npos;
+    }));
+    CHECK(std::any_of(display.messages.begin(), display.messages.end(), [](const std::string& message) {
+        return message.find("Cause: ReqPack could not open requested snapshot output file for writing.") != std::string::npos;
+    }));
 }
