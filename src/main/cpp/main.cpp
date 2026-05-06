@@ -525,8 +525,10 @@ bool run_process(const std::vector<std::string>& arguments, const std::filesyste
     }
 
     bool ready = true;
-#if defined(__linux__)
-    ready = posix_spawn_file_actions_addchdir_np(&fileActions, workingDirectory.c_str()) == 0;
+#if defined(__linux__) || defined(__APPLE__)
+    if (!workingDirectory.empty()) {
+        ready = posix_spawn_file_actions_addchdir_np(&fileActions, workingDirectory.c_str()) == 0;
+    }
 #endif
     if (!ready) {
         posix_spawn_file_actions_destroy(&fileActions);

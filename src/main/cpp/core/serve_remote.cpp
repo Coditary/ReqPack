@@ -426,6 +426,19 @@ int active_connection_count(RemoteServerState& state) {
     return static_cast<int>(state.sessions.size());
 }
 
+void request_server_shutdown(RemoteServerState& state) {
+    int serverFd = -1;
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        serverFd = state.serverFd;
+        state.serverFd = -1;
+    }
+    if (serverFd != -1) {
+        ::shutdown(serverFd, SHUT_RDWR);
+        ::close(serverFd);
+    }
+}
+
 bool has_user_registry(const RemoteStateSnapshot& snapshot) {
     return !snapshot.users.empty();
 }
@@ -827,16 +840,6 @@ RemoteResponse execute_command(
 			return RemoteResponse{.ok = false, .output = command_output_message(DisplayMode::SERVE, "admin privileges required", false)};
         }
         state.shutdownRequested.store(true);
-        int serverFd = -1;
-        {
-            std::lock_guard<std::mutex> lock(state.mutex);
-            serverFd = state.serverFd;
-            state.serverFd = -1;
-        }
-        if (serverFd != -1) {
-            ::shutdown(serverFd, SHUT_RDWR);
-            ::close(serverFd);
-        }
 		return RemoteResponse{.ok = true, .output = command_output_message(DisplayMode::SERVE, "server shutting down"), .closeConnection = true};
     }
     if (commandTokens.size() == 2 && commandTokens[0] == "connections" && commandTokens[1] == "count") {
@@ -1108,6 +1111,9 @@ void handle_text_client(
             return;
         }
         if (response.closeConnection) {
+            if (state.shutdownRequested.load()) {
+                request_server_shutdown(state);
+            }
             return;
         }
     }
@@ -1169,6 +1175,9 @@ void handle_json_client(
             return;
         }
         if (response.closeConnection) {
+            if (state.shutdownRequested.load()) {
+                request_server_shutdown(state);
+            }
             return;
         }
     }
