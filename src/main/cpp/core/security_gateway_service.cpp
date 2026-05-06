@@ -18,12 +18,13 @@ std::string to_lower_copy(std::string value) {
 }
 
 std::string package_index_path_for_ecosystem(const ReqPackConfig& config, const std::string& ecosystem) {
-    std::string root = config.security.indexPath;
-    const SecurityConfig defaults;
-    if (root == defaults.indexPath && config.security.osvDatabasePath != defaults.osvDatabasePath) {
+    std::filesystem::path root = config.security.indexPath;
+    const std::filesystem::path defaultIndexPath = default_reqpack_security_index_path();
+    const std::filesystem::path defaultOsvDatabasePath = default_reqpack_osv_database_path();
+    if (root == defaultIndexPath && std::filesystem::path(config.security.osvDatabasePath) != defaultOsvDatabasePath) {
         root = config.security.osvDatabasePath;
     }
-    return (std::filesystem::path(root) / ecosystem).string();
+    return (root / ecosystem).string();
 }
 
 }  // namespace
