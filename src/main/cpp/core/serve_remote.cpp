@@ -115,7 +115,7 @@ public:
 
         struct sigaction action {};
         action.sa_handler = handle_remote_serve_signal;
-        ::sigemptyset(&action.sa_mask);
+        sigemptyset(&action.sa_mask);
 
         if (::sigaction(SIGTERM, &action, &oldTerm_) != 0) {
             return;
