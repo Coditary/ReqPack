@@ -518,7 +518,7 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
         make_context(bridge, config, {"--bridge-flag"}),
         {Package{.action = ActionType::INSTALL, .system = "bridge", .name = "demo"}}
     );
-    Logger::instance().flush();
+    Logger::instance().flushSync();
     const std::string output = capture.finish();
 
     REQUIRE(installed);
@@ -678,7 +678,7 @@ TEST_CASE("lua bridge allows declared exec and write scope usage under thin-laye
         make_context(bridge, config),
         {Package{.action = ActionType::INSTALL, .system = "policy", .name = "demo"}}
     );
-    Logger::instance().flush();
+    Logger::instance().flushSync();
     const std::string output = capture.finish();
 
     REQUIRE(installed);
