@@ -387,7 +387,7 @@ HostPlatformInfo detect_platform_info() {
         platform.arch = normalize_host_architecture(uts.machine);
     }
     if (platform.arch.empty()) {
-        platform.arch = normalize_host_architecture(exec_read_first_line("uname -m 2>/dev/null").value_or({}));
+        platform.arch = normalize_host_architecture(exec_read_first_line("uname -m 2>/dev/null").value_or(std::string{}));
     }
     if (platform.arch.empty()) {
         platform.arch = "unknown";
