@@ -80,7 +80,7 @@ DiagnosticMessage stdin_parse_diagnostic(std::size_t lineNumber, const std::stri
     return make_error_diagnostic(
         "cli",
         "stdin line " + std::to_string(lineNumber) + ": command could not be parsed",
-        "Parsed tokens did not form a valid ReqPack command.",
+        "Parsed tokens did not form a valid rqp command.",
         "Check command structure or run same command directly with --help.",
         commandText,
         "stdin",
@@ -93,8 +93,8 @@ DiagnosticMessage stdin_install_only_diagnostic(std::size_t lineNumber) {
     return make_error_diagnostic(
         "cli",
         "stdin line " + std::to_string(lineNumber) + ": only install commands are allowed here",
-        "`ReqPack install --stdin` accepts only install subcommands.",
-        "Use `ReqPack serve --stdin` for mixed commands, or keep stdin input to install commands only.",
+        "`rqp install --stdin` accepts only install subcommands.",
+        "Use `rqp serve --stdin` for mixed commands, or keep stdin input to install commands only.",
         {},
         "stdin",
         "batch",
@@ -107,7 +107,7 @@ DiagnosticMessage stdin_empty_batch_diagnostic() {
         "cli",
         "stdin contained no install commands",
         "Only comments or empty lines were provided to install batch mode.",
-        "Pipe at least one `install ...` command into ReqPack or use normal CLI arguments.",
+        "Pipe at least one `install ...` command into rqp or use normal CLI arguments.",
         {},
         "stdin",
         "batch"
@@ -785,7 +785,7 @@ bool build_self_update_binary(const ReqPackConfig& config, const std::string& co
     const std::filesystem::path repoPath(config.selfUpdate.repoPath);
     const std::filesystem::path buildPath = std::filesystem::path(config.selfUpdate.buildPath) / commit;
     const std::filesystem::path outputBinary = std::filesystem::path(config.selfUpdate.binaryDirectory) / binary_name_for_commit(commit);
-    const std::filesystem::path candidateBinary = buildPath / "ReqPack";
+    const std::filesystem::path candidateBinary = buildPath / "rqp";
 
     installedBinaryPath = outputBinary;
     if (std::filesystem::exists(outputBinary)) {
@@ -895,7 +895,7 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         logger.diagnostic(self_update_diagnostic(
             "Self-update is not configured",
             "No repository URL is configured for self-update.",
-            "Set selfUpdate.repoUrl in config before running `ReqPack update` without package arguments."
+            "Set selfUpdate.repoUrl in config before running `rqp update` without package arguments."
         ));
         return 1;
     }
@@ -957,7 +957,7 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
             "self-update",
             "Self-update completed, but host info cache could not be invalidated",
             "Old host metadata cache may remain until next refresh.",
-            "Run `ReqPack host refresh` if plugins still report stale host information.",
+            "Run `rqp host refresh` if plugins still report stale host information.",
             {},
             "self-update",
             "update"
@@ -1137,7 +1137,7 @@ int main(int argc, char* argv[]) {
                 "remote",
                 "Serve command is invalid",
                 "Remote or stdin serve options could not be parsed.",
-                "Check serve flags and values, then run `ReqPack serve --help`.",
+                "Check serve flags and values, then run `rqp serve --help`.",
                 serveError,
                 "serve",
                 "remote"
@@ -1171,7 +1171,7 @@ int main(int argc, char* argv[]) {
                 "remote",
                 "Remote command is invalid",
                 "Remote client invocation could not be parsed.",
-                "Check remote profile name and forwarded command syntax, then run `ReqPack remote --help`.",
+                "Check remote profile name and forwarded command syntax, then run `rqp remote --help`.",
                 remoteError,
                 "remote",
                 "client"

@@ -467,7 +467,7 @@ std::filesystem::path write_remote_users(const std::filesystem::path& root, cons
 
 std::string run_reqpack(const std::filesystem::path& workspace, const std::filesystem::path& configPath, const std::vector<std::string>& arguments) {
     std::string command = "cd " + escape_shell_arg(workspace.string()) +
-        " && " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " && " + escape_shell_arg((build_root() / "rqp").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
         command += " " + escape_shell_arg(argument);
@@ -487,7 +487,7 @@ std::string run_reqpack_with_home(
         " XDG_CONFIG_HOME=" + escape_shell_arg((homePath / ".config").string()) +
         " XDG_DATA_HOME=" + escape_shell_arg((homePath / ".local" / "share").string()) +
         " XDG_CACHE_HOME=" + escape_shell_arg((homePath / ".cache").string()) +
-        " " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " " + escape_shell_arg((build_root() / "rqp").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
         command += " " + escape_shell_arg(argument);
@@ -511,7 +511,7 @@ std::string run_reqpack_with_home_and_env(
     for (const auto& [key, value] : environment) {
         command += " " + key + "=" + escape_shell_arg(value);
     }
-    command += " " + escape_shell_arg((build_root() / "ReqPack").string()) +
+    command += " " + escape_shell_arg((build_root() / "rqp").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
         command += " " + escape_shell_arg(argument);
@@ -550,7 +550,8 @@ void write_self_update_source_tree(const std::filesystem::path& root, const std:
     write_file(root / "CMakeLists.txt",
         "cmake_minimum_required(VERSION 3.15)\n"
         "project(SelfUpdateStub LANGUAGES CXX)\n"
-        "add_executable(ReqPack src/main.cpp)\n");
+        "add_executable(ReqPack src/main.cpp)\n"
+        "set_target_properties(ReqPack PROPERTIES OUTPUT_NAME rqp)\n");
     write_file(root / "src" / "main.cpp",
         "#include <iostream>\n"
         "int main() { std::cout << \"" + versionLabel + "\\n\"; return 0; }\n");
@@ -613,7 +614,7 @@ std::string run_reqpack_with_stdin(
 ) {
     std::string command = "cd " + escape_shell_arg(workspace.string()) +
         " && printf %s " + escape_shell_arg(stdinContent) +
-        " | " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " | " + escape_shell_arg((build_root() / "rqp").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
         command += " " + escape_shell_arg(argument);
@@ -631,7 +632,7 @@ std::string run_reqpack_with_home_and_stdin(
 ) {
 	std::string innerCommand =
 		"printf %s " + escape_shell_arg(stdinContent) +
-		" | " + escape_shell_arg((build_root() / "ReqPack").string()) +
+		" | " + escape_shell_arg((build_root() / "rqp").string()) +
 		" --config " + escape_shell_arg(configPath.string());
 	for (const std::string& argument : arguments) {
 		innerCommand += " " + escape_shell_arg(argument);
@@ -666,7 +667,7 @@ public:
         }
 
         std::vector<std::string> argvStrings;
-        argvStrings.push_back((build_root() / "ReqPack").string());
+        argvStrings.push_back((build_root() / "rqp").string());
         argvStrings.push_back("--config");
         argvStrings.push_back(configPath.string());
         argvStrings.insert(argvStrings.end(), arguments.begin(), arguments.end());
@@ -834,7 +835,7 @@ std::string run_reqpack_with_home_and_status(
         " XDG_CONFIG_HOME=" + escape_shell_arg((homePath / ".config").string()) +
         " XDG_DATA_HOME=" + escape_shell_arg((homePath / ".local" / "share").string()) +
         " XDG_CACHE_HOME=" + escape_shell_arg((homePath / ".cache").string()) +
-        " " + escape_shell_arg((build_root() / "ReqPack").string()) +
+        " " + escape_shell_arg((build_root() / "rqp").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
         command += " " + escape_shell_arg(argument);
@@ -875,7 +876,7 @@ std::string run_reqpack_with_home_env_and_status(
     for (const auto& [key, value] : environment) {
         command += " " + key + "=" + escape_shell_arg(value);
     }
-    command += " " + escape_shell_arg((build_root() / "ReqPack").string()) +
+    command += " " + escape_shell_arg((build_root() / "rqp").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
         command += " " + escape_shell_arg(argument);

@@ -122,7 +122,7 @@ jobs:
         run: |
           mkdir -p release-artifacts
           # Nutze das vorhandene build-Verzeichnis
-          tar -czf release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C build ReqPack
+          tar -czf release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C build rqp
 
       - name: Upload release bundle
         uses: actions/upload-artifact@v4

@@ -8,7 +8,7 @@
 namespace {
 
 std::string run_reqpack_case(const std::string& prompt) {
-    const std::filesystem::path binary = build_root() / "ReqPack";
+    const std::filesystem::path binary = build_root() / "rqp";
     const std::filesystem::path pluginDir = repo_root() / "tests" / "plugins";
 
     const std::string inner =
@@ -23,7 +23,7 @@ std::string run_reqpack_case(const std::string& prompt) {
 }
 
 std::string run_reqpack_case_verbose(const std::string& prompt) {
-    const std::filesystem::path binary = build_root() / "ReqPack";
+    const std::filesystem::path binary = build_root() / "rqp";
     const std::filesystem::path pluginDir = repo_root() / "tests" / "plugins";
 
     const std::string inner =

@@ -13,8 +13,8 @@
 
 namespace {
 
-const std::string PROGRAM_NAME = "ReqPack";
-const std::string USAGE = "Usage: ReqPack <command> <system> [packages...] [additional systems/packages...] [flags...]";
+const std::string PROGRAM_NAME = "rqp";
+const std::string USAGE = "Usage: rqp <command> <system> [packages...] [additional systems/packages...] [flags...]";
 const std::string HELP_DESCRIPTION = "Displays this help";
 const std::string VERBOSE_DESCRIPTION = "Shows verbose command transcript and logger console output";
 
@@ -774,7 +774,7 @@ void Cli::print_help() {
         "  --format <name>         Uses table, json, cyclonedx-vex-json, or sarif\n"
         "  --output <path>         Writes audit output to file\n"
         "  --force                 Overwrites existing output file without prompting\n"
-        "\nRun 'ReqPack <command> -h' for command-specific help.\n";
+        "\nRun 'rqp <command> -h' for command-specific help.\n";
     std::cout.flush();
 }
 
@@ -783,17 +783,17 @@ void Cli::print_command_help(ActionType action) {
     switch (action) {
         case ActionType::INSTALL:
             help =
-                "Usage: ReqPack install <system> [<package>...] [options]\n"
-                "       ReqPack install <system> <local-path> [options]\n"
-                "       ReqPack install <system1>:<package> <system2>:<package> [options]\n"
-                "       ReqPack install <dir-path> [options]\n"
-                "       ReqPack install --stdin [options]\n"
+                "Usage: rqp install <system> [<package>...] [options]\n"
+                "       rqp install <system> <local-path> [options]\n"
+                "       rqp install <system1>:<package> <system2>:<package> [options]\n"
+                "       rqp install <dir-path> [options]\n"
+                "       rqp install --stdin [options]\n"
                 "\n"
                 "Install packages for one or more package managers.\n"
                 "When a directory path is given (e.g. '.', './myproject', '/abs/path'),\n"
-                "ReqPack reads a reqpack.lua manifest from that directory and installs\n"
+                "rqp reads a reqpack.lua manifest from that directory and installs\n"
                 "all packages declared in it.\n"
-                "When --stdin is given, ReqPack reads full install commands from stdin\n"
+                "When --stdin is given, rqp reads full install commands from stdin\n"
                 "until EOF, then executes them as one combined install batch.\n"
                 "\n"
                 "Arguments:\n"
@@ -828,19 +828,19 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack install apt curl git\n"
-                "  ReqPack install npm express lodash brew jq\n"
-                "  ReqPack install apt:curl npm:express\n"
-                "  ReqPack install brew ./my-formula.rb\n"
-                "  ReqPack install .\n"
-                "  ReqPack install ./myproject\n"
-                "  ReqPack install /absolute/path/to/project\n"
-                "  printf 'install dnf curl\\ninstall npm express\\n' | ReqPack install --stdin\n";
+                "  rqp install apt curl git\n"
+                "  rqp install npm express lodash brew jq\n"
+                "  rqp install apt:curl npm:express\n"
+                "  rqp install brew ./my-formula.rb\n"
+                "  rqp install .\n"
+                "  rqp install ./myproject\n"
+                "  rqp install /absolute/path/to/project\n"
+                "  printf 'install dnf curl\\ninstall npm express\\n' | rqp install --stdin\n";
             break;
         case ActionType::REMOVE:
             help =
-                "Usage: ReqPack remove <system> [<package>...] [options]\n"
-                "       ReqPack remove <system1>:<package> <system2>:<package> [options]\n"
+                "Usage: rqp remove <system> [<package>...] [options]\n"
+                "       rqp remove <system1>:<package> <system2>:<package> [options]\n"
                 "\n"
                 "Remove packages from one or more package managers.\n"
                 "\n"
@@ -856,22 +856,22 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack remove apt curl\n"
-                "  ReqPack remove npm express brew jq\n"
-                "  ReqPack remove apt:curl npm:lodash\n";
+                "  rqp remove apt curl\n"
+                "  rqp remove npm express brew jq\n"
+                "  rqp remove apt:curl npm:lodash\n";
             break;
         case ActionType::UPDATE:
             help =
-                "Usage: ReqPack update [options]\n"
-                "       ReqPack update <system> [<package>...] [options]\n"
-                "       ReqPack update <system1>:<package> <system2>:<package> [options]\n"
+                "Usage: rqp update [options]\n"
+                "       rqp update <system> [<package>...] [options]\n"
+                "       rqp update <system1>:<package> <system2>:<package> [options]\n"
                 "\n"
                 "Update ReqPack itself, plugin wrappers, or packages for one or more package managers.\n"
                 "Without a system argument, ReqPack performs a self-update from its configured Git repository.\n"
                 "With a system argument and no package list, ReqPack refreshes that plugin wrapper to its newest tagged version when the source is Git-backed.\n"
                 "Use '--all' with a system to update all packages for that system instead.\n"
-                "Use 'ReqPack update --all' to refresh all known plugin wrappers.\n"
-                "To update a package-manager binary itself through ReqPack's wrapper layer, use 'ReqPack update sys <tool>'.\n"
+                "Use 'rqp update --all' to refresh all known plugin wrappers.\n"
+                "To update a package-manager binary itself through ReqPack's wrapper layer, use 'rqp update sys <tool>'.\n"
                 "\n"
                 "Arguments:\n"
                 "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
@@ -890,18 +890,18 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack update\n"
-                "  ReqPack update --all\n"
-                "  ReqPack update pip\n"
-                "  ReqPack update pip --all\n"
-                "  ReqPack update apt\n"
-                "  ReqPack update npm express brew\n"
-                "  ReqPack update sys pip\n"
-                "  ReqPack update apt:curl npm:express\n";
+                "  rqp update\n"
+                "  rqp update --all\n"
+                "  rqp update pip\n"
+                "  rqp update pip --all\n"
+                "  rqp update apt\n"
+                "  rqp update npm express brew\n"
+                "  rqp update sys pip\n"
+                "  rqp update apt:curl npm:express\n";
             break;
         case ActionType::SEARCH:
             help =
-                "Usage: ReqPack search <system> <query> [options]\n"
+                "Usage: rqp search <system> <query> [options]\n"
                 "\n"
                 "Search for packages in a package manager.\n"
                 "\n"
@@ -916,15 +916,15 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack search apt curl\n"
-                "  ReqPack search npm react\n"
-                "  ReqPack search brew \"json tool\"\n"
-                "  ReqPack search dnf python3 --arch noarch --arch x86_64\n"
-                "  ReqPack search dnf python3 --type doc --type devel\n";
+                "  rqp search apt curl\n"
+                "  rqp search npm react\n"
+                "  rqp search brew \"json tool\"\n"
+                "  rqp search dnf python3 --arch noarch --arch x86_64\n"
+                "  rqp search dnf python3 --type doc --type devel\n";
             break;
         case ActionType::LIST:
             help =
-                "Usage: ReqPack list [<system>] [options]\n"
+                "Usage: rqp list [<system>] [options]\n"
                 "\n"
                 "List installed packages for a package manager.\n"
                 "If no system is specified, all known primary systems are queried.\n"
@@ -939,16 +939,16 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack list\n"
-                "  ReqPack list apt\n"
-                "  ReqPack list npm\n"
-                "  ReqPack list brew\n"
-                "  ReqPack list dnf --arch x86_64\n"
-                "  ReqPack list dnf --type doc --type devel\n";
+                "  rqp list\n"
+                "  rqp list apt\n"
+                "  rqp list npm\n"
+                "  rqp list brew\n"
+                "  rqp list dnf --arch x86_64\n"
+                "  rqp list dnf --type doc --type devel\n";
             break;
         case ActionType::INFO:
             help =
-                "Usage: ReqPack info <system> <package> [options]\n"
+                "Usage: rqp info <system> <package> [options]\n"
                 "\n"
                 "Show detailed information about a package.\n"
                 "\n"
@@ -961,13 +961,13 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack info apt curl\n"
-                "  ReqPack info npm express\n"
-                "  ReqPack info brew jq\n";
+                "  rqp info apt curl\n"
+                "  rqp info npm express\n"
+                "  rqp info brew jq\n";
             break;
         case ActionType::ENSURE:
             help =
-                "Usage: ReqPack ensure [<system>...] [options]\n"
+                "Usage: rqp ensure [<system>...] [options]\n"
                 "\n"
                 "Ensure plugin requirements are installed for one or more systems.\n"
                 "If no systems are specified, all known systems are checked.\n"
@@ -982,12 +982,12 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack ensure\n"
-                "  ReqPack ensure apt brew\n";
+                "  rqp ensure\n"
+                "  rqp ensure apt brew\n";
             break;
         case ActionType::SBOM:
             help =
-                "Usage: ReqPack sbom [<system>...] [options]\n"
+                "Usage: rqp sbom [<system>...] [options]\n"
                 "\n"
                 "Export a Software Bill of Materials (SBOM) for installed packages.\n"
                 "If no systems are specified, all known systems are included.\n"
@@ -1006,21 +1006,21 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack sbom\n"
-                "  ReqPack sbom apt npm\n"
-                "  ReqPack sbom --format json\n"
-                "  ReqPack sbom --format cyclonedx-json --output sbom.json\n";
+                "  rqp sbom\n"
+                "  rqp sbom apt npm\n"
+                "  rqp sbom --format json\n"
+                "  rqp sbom --format cyclonedx-json --output sbom.json\n";
             break;
         case ActionType::AUDIT:
             help =
-                "Usage: ReqPack audit [<system>...] [options]\n"
-                "       ReqPack audit <system1>:<package> <system2>:<package> [options]\n"
-                "       ReqPack audit <dir-path> [options]\n"
-                "       ReqPack audit <manifest-path>/reqpack.lua [options]\n"
+                "Usage: rqp audit [<system>...] [options]\n"
+                "       rqp audit <system1>:<package> <system2>:<package> [options]\n"
+                "       rqp audit <dir-path> [options]\n"
+                "       rqp audit <manifest-path>/reqpack.lua [options]\n"
                 "\n"
                 "Audit planned packages for vulnerabilities and export findings.\n"
                 "If no system is specified, all known primary systems are included.\n"
-                "If a system is given without explicit packages, ReqPack audits installed packages reported by that system.\n"
+                "If a system is given without explicit packages, rqp audits installed packages reported by that system.\n"
                 "Directory and direct reqpack.lua manifest input are supported.\n"
                 "Without --output, audit prints a table and returns exit code 1 when findings exist.\n"
                 "With --output, findings are exported but do not change the exit code.\n"
@@ -1035,17 +1035,17 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack audit\n"
-                "  ReqPack audit npm react\n"
-                "  ReqPack audit npm:react maven:org.junit:junit\n"
-                "  ReqPack audit .\n"
-                "  ReqPack audit ./reqpack.lua\n"
-                "  ReqPack audit --format cyclonedx-vex-json --output audit.json\n"
-                "  ReqPack audit --format sarif --output audit.sarif\n";
+                "  rqp audit\n"
+                "  rqp audit npm react\n"
+                "  rqp audit npm:react maven:org.junit:junit\n"
+                "  rqp audit .\n"
+                "  rqp audit ./reqpack.lua\n"
+                "  rqp audit --format cyclonedx-vex-json --output audit.json\n"
+                "  rqp audit --format sarif --output audit.sarif\n";
             break;
         case ActionType::OUTDATED:
             help =
-                "Usage: ReqPack outdated [<system>] [options]\n"
+                "Usage: rqp outdated [<system>] [options]\n"
                 "\n"
                 "Show packages that have newer versions available.\n"
                 "If no system is specified, all known primary systems are queried.\n"
@@ -1060,15 +1060,15 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack outdated\n"
-                "  ReqPack outdated dnf\n"
-                "  ReqPack outdated maven\n"
-                "  ReqPack outdated dnf --arch noarch\n"
-                "  ReqPack outdated dnf --type doc\n";
+                "  rqp outdated\n"
+                "  rqp outdated dnf\n"
+                "  rqp outdated maven\n"
+                "  rqp outdated dnf --arch noarch\n"
+                "  rqp outdated dnf --type doc\n";
             break;
         case ActionType::HOST:
             help =
-                "Usage: ReqPack host refresh\n"
+                "Usage: rqp host refresh\n"
                 "\n"
                 "Refresh the cached host system snapshot used by plugins via context.host and reqpack.host.\n"
                 "This forces a live probe and rewrites the cache file under XDG cache.\n"
@@ -1077,14 +1077,14 @@ void Cli::print_command_help(ActionType action) {
                 "  refresh                 Force a live refresh of host metadata cache\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack host refresh\n";
+                "  rqp host refresh\n";
             break;
         case ActionType::SNAPSHOT:
             help =
-                "Usage: ReqPack snapshot [options]\n"
+                "Usage: rqp snapshot [options]\n"
                 "\n"
                 "Snapshot all currently installed packages (tracked by ReqPack history)\n"
-                "into a reqpack.lua manifest. Use 'ReqPack install .' to restore on\n"
+                "into a reqpack.lua manifest. Use 'rqp install .' to restore on\n"
                 "another machine.\n"
                 "\n"
                 "Options:\n"
@@ -1093,14 +1093,14 @@ void Cli::print_command_help(ActionType action) {
                 "  --force                 Overwrite existing file without prompting\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack snapshot\n"
-                "  ReqPack snapshot --output reqpack.lua\n"
-                "  ReqPack snapshot --output reqpack.lua --force\n";
+                "  rqp snapshot\n"
+                "  rqp snapshot --output reqpack.lua\n"
+                "  rqp snapshot --output reqpack.lua --force\n";
             break;
         case ActionType::SERVE:
             help =
-                "Usage: ReqPack serve --stdin [options]\n"
-                "       ReqPack serve --remote [--json|--http|--https] [options]\n"
+                "Usage: rqp serve --stdin [options]\n"
+                "       rqp serve --remote [--json|--http|--https] [options]\n"
                 "\n"
                 "Serve ReqPack commands either from stdin or over a remote socket.\n"
                 "stdin mode executes one command per line until EOF.\n"
@@ -1127,22 +1127,22 @@ void Cli::print_command_help(ActionType action) {
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
-                "  printf 'install dnf curl\\nlist dnf\\n' | ReqPack serve --stdin\n"
-                "  ReqPack serve --remote --bind 127.0.0.1 --port 4545 --token secret\n"
-                "  ReqPack serve --remote --json --readonly --max-connections 4\n";
+                "  printf 'install dnf curl\\nlist dnf\\n' | rqp serve --stdin\n"
+                "  rqp serve --remote --bind 127.0.0.1 --port 4545 --token secret\n"
+                "  rqp serve --remote --json --readonly --max-connections 4\n";
             break;
         case ActionType::REMOTE:
             help =
-                "Usage: ReqPack remote <profile> [<command>...]\n"
+                "Usage: rqp remote <profile> [<command>...]\n"
                 "\n"
                 "Connect to remote profile from $XDG_CONFIG_HOME/reqpack/remote.lua or ~/.config/reqpack/remote.lua.\n"
                 "With forwarded command, execute once and exit. Without command, start interactive text session.\n"
-                "Forwarded install of local file uploads it to text/auto remotes: ReqPack remote <profile> install <system> <local-file>.\n"
+                "Forwarded install of local file uploads it to text/auto remotes: rqp remote <profile> install <system> <local-file>.\n"
                 "JSON remotes reject file uploads.\n"
                 "\n"
                 "Arguments:\n"
                 "  <profile>               Profile name defined in $XDG_CONFIG_HOME/reqpack/remote.lua\n"
-                "  <command>               Optional forwarded ReqPack command\n"
+                "  <command>               Optional forwarded rqp command\n"
                 "\n"
                 "Profile fields:\n"
                 "  host/url                Remote host or IPv4 address\n"
@@ -1152,8 +1152,8 @@ void Cli::print_command_help(ActionType action) {
                 "  username/password       Basic auth for text/json remotes\n"
                 "\n"
                 "Examples:\n"
-                "  ReqPack remote dev list apply\n"
-                "  ReqPack remote prod\n";
+                "  rqp remote dev list apply\n"
+                "  rqp remote prod\n";
             break;
         default:
             print_help();

@@ -144,6 +144,7 @@ set(SOURCES
 )
 
 add_executable(ReqPack ${SOURCES})
+set_target_properties(ReqPack PROPERTIES OUTPUT_NAME rqp)
 
 add_executable(exec_rules_unit_tests
     tests/cpp/test_main.cpp

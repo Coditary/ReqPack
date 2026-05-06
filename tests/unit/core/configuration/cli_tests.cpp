@@ -731,7 +731,7 @@ TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli
         std::ostringstream capture;
         std::streambuf* previous = std::cout.rdbuf(capture.rdbuf());
 
-        char arg0[] = "ReqPack";
+        char arg0[] = "rqp";
         char arg1[] = "remote";
         char arg2[] = "--help";
         char* argv[] = {arg0, arg1, arg2};
@@ -741,7 +741,7 @@ TEST_CASE("cli recognizes remote command and prints dedicated help", "[unit][cli
         std::cout.rdbuf(previous);
 
         CHECK(handled);
-        CHECK(capture.str().find("Usage: ReqPack remote <profile>") != std::string::npos);
+        CHECK(capture.str().find("Usage: rqp remote <profile>") != std::string::npos);
         CHECK(capture.str().find("$XDG_CONFIG_HOME/reqpack/remote.lua") != std::string::npos);
         CHECK(capture.str().find("~/.config/reqpack/remote.lua") != std::string::npos);
     }
@@ -752,7 +752,7 @@ TEST_CASE("cli general help documents logging flags", "[unit][cli][help]") {
     std::ostringstream capture;
     std::streambuf* previous = std::cout.rdbuf(capture.rdbuf());
 
-    char arg0[] = "ReqPack";
+    char arg0[] = "rqp";
     char arg1[] = "--help";
     char* argv[] = {arg0, arg1};
 

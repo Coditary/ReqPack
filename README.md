@@ -8,8 +8,7 @@
 ReqPack is universal package-manager orchestrator.
 It gives you one CLI for installing, updating, auditing, snapshotting, and inspecting packages across multiple ecosystems while keeping real package-manager work inside dedicated plugins.
 
-Examples in this README use `ReqPack`, because that is built binary name.
-If you prefer `rqp`, create a symlink and use that instead.
+Examples in this README use `rqp`, because that is built binary name.
 
 ## What ReqPack Does Well
 
@@ -24,15 +23,15 @@ If you prefer `rqp`, create a symlink and use that instead.
 ## Quick Start
 
 ```bash
-ReqPack install apt curl git
-ReqPack install npm express
-ReqPack install apt:curl npm:express
-ReqPack update --all
-ReqPack list apt
-ReqPack outdated
-ReqPack audit .
-ReqPack sbom --format cyclonedx-json --output sbom.json
-ReqPack snapshot --output reqpack.lua
+rqp install apt curl git
+rqp install npm express
+rqp install apt:curl npm:express
+rqp update --all
+rqp list apt
+rqp outdated
+rqp audit .
+rqp sbom --format cyclonedx-json --output sbom.json
+rqp snapshot --output reqpack.lua
 ```
 
 ## Requirements
@@ -55,7 +54,7 @@ ReqPack core currently targets:
 - Git for self-update and Git-backed plugin refresh.
 
 Self-update note:
-`ReqPack update` without package-manager arguments rebuilds ReqPack from configured Git repository.
+`rqp update` without package-manager arguments rebuilds ReqPack from configured Git repository.
 That means release-binary users still need local build toolchain if they want self-update to work.
 
 ## Installation
@@ -63,16 +62,16 @@ That means release-binary users still need local build toolchain if they want se
 ### Option 1: Use Release Binary
 
 Tagged releases publish archives named `rqp-<tag>-<target>.tar.gz`.
-Each archive currently contains `ReqPack` binary and `SHA256SUMS` is published alongside release assets.
+Each archive currently contains `rqp` binary and `SHA256SUMS` is published alongside release assets.
 
 ```bash
 tar -xzf "rqp-vX.Y.Z-x86_64-linux.tar.gz"
-chmod +x ReqPack
+chmod +x rqp
 mkdir -p ~/.local/bin
-ln -sf "$(pwd)/ReqPack" ~/.local/bin/rqp
+ln -sf "$(pwd)/rqp" ~/.local/bin/rqp
 ```
 
-If you want command name to stay `ReqPack`, move binary somewhere on your `PATH` instead of symlinking it to `rqp`.
+Move `rqp` somewhere on your `PATH`, for example `~/.local/bin/rqp`.
 
 ### Option 2: Build From Source On Ubuntu Or Debian
 
@@ -94,7 +93,7 @@ ctest --test-dir build --output-on-failure
 Run binary with:
 
 ```bash
-./build/ReqPack --help
+./build/rqp --help
 ```
 
 ### Option 3: Build From Source On macOS
@@ -129,74 +128,74 @@ ctest --test-dir build --output-on-failure
 
 | Command | Purpose | Example |
 | --- | --- | --- |
-| `install` | Install packages, local targets, or manifest contents | `ReqPack install apt curl git` |
-| `remove` | Remove packages | `ReqPack remove npm express` |
-| `update` | Self-update, refresh plugin wrappers, or update packages | `ReqPack update --all` |
-| `search` | Search available packages | `ReqPack search apt curl` |
-| `list` | List installed packages | `ReqPack list dnf` |
-| `info` | Show package metadata | `ReqPack info brew jq` |
-| `outdated` | Show packages with newer versions | `ReqPack outdated` |
-| `ensure` | Ensure plugin requirements are installed | `ReqPack ensure apt brew` |
-| `audit` | Audit packages or manifests for vulnerabilities | `ReqPack audit .` |
-| `sbom` | Export SBOM for installed packages | `ReqPack sbom --format cyclonedx-json --output sbom.json` |
-| `snapshot` | Write installed-package state to `reqpack.lua` | `ReqPack snapshot --output reqpack.lua` |
-| `host refresh` | Refresh cached host metadata | `ReqPack host refresh` |
-| `serve` | Run stdin or remote command server | `ReqPack serve --remote --token secret` |
-| `remote` | Connect to configured remote profile | `ReqPack remote dev list apt` |
+| `install` | Install packages, local targets, or manifest contents | `rqp install apt curl git` |
+| `remove` | Remove packages | `rqp remove npm express` |
+| `update` | Self-update, refresh plugin wrappers, or update packages | `rqp update --all` |
+| `search` | Search available packages | `rqp search apt curl` |
+| `list` | List installed packages | `rqp list dnf` |
+| `info` | Show package metadata | `rqp info brew jq` |
+| `outdated` | Show packages with newer versions | `rqp outdated` |
+| `ensure` | Ensure plugin requirements are installed | `rqp ensure apt brew` |
+| `audit` | Audit packages or manifests for vulnerabilities | `rqp audit .` |
+| `sbom` | Export SBOM for installed packages | `rqp sbom --format cyclonedx-json --output sbom.json` |
+| `snapshot` | Write installed-package state to `reqpack.lua` | `rqp snapshot --output reqpack.lua` |
+| `host refresh` | Refresh cached host metadata | `rqp host refresh` |
+| `serve` | Run stdin or remote command server | `rqp serve --remote --token secret` |
+| `remote` | Connect to configured remote profile | `rqp remote dev list apt` |
 
 ### Install Packages
 
 ```bash
-ReqPack install apt curl git
-ReqPack install npm express lodash brew jq
-ReqPack install apt:curl npm:express
-ReqPack install brew ./my-formula.rb
+rqp install apt curl git
+rqp install npm express lodash brew jq
+rqp install apt:curl npm:express
+rqp install brew ./my-formula.rb
 ```
 
 ReqPack also supports manifest installs from current directory or any directory containing `reqpack.lua`:
 
 ```bash
-ReqPack install .
-ReqPack install ./myproject
-ReqPack install /absolute/path/to/project
+rqp install .
+rqp install ./myproject
+rqp install /absolute/path/to/project
 ```
 
 Batch mode from stdin is useful for automation:
 
 ```bash
-printf 'install dnf curl\ninstall npm express\n' | ReqPack install --stdin
+printf 'install dnf curl\ninstall npm express\n' | rqp install --stdin
 ```
 
 ### Remove And Update
 
 ```bash
-ReqPack remove apt curl
-ReqPack remove apt:curl npm:lodash
+rqp remove apt curl
+rqp remove apt:curl npm:lodash
 
-ReqPack update
-ReqPack update --all
-ReqPack update pip
-ReqPack update pip --all
-ReqPack update sys pip
-ReqPack update apt:curl npm:express
+rqp update
+rqp update --all
+rqp update pip
+rqp update pip --all
+rqp update sys pip
+rqp update apt:curl npm:express
 ```
 
 Update behavior is worth knowing:
 
-- `ReqPack update` rebuilds ReqPack itself from configured Git repository.
-- `ReqPack update --all` refreshes all known plugin wrappers.
-- `ReqPack update <system>` without package names refreshes that plugin wrapper.
-- `ReqPack update <system> --all` updates all packages for that system.
-- `ReqPack update sys <tool>` updates package-manager binary itself through ReqPack wrapper layer.
+- `rqp update` rebuilds ReqPack itself from configured Git repository.
+- `rqp update --all` refreshes all known plugin wrappers.
+- `rqp update <system>` without package names refreshes that plugin wrapper.
+- `rqp update <system> --all` updates all packages for that system.
+- `rqp update sys <tool>` updates package-manager binary itself through ReqPack wrapper layer.
 
 ### Search, List, Info, Outdated
 
 ```bash
-ReqPack search dnf python3 --arch noarch --arch x86_64
-ReqPack list
-ReqPack list apt
-ReqPack info npm express
-ReqPack outdated dnf --type doc
+rqp search dnf python3 --arch noarch --arch x86_64
+rqp list
+rqp list apt
+rqp info npm express
+rqp outdated dnf --type doc
 ```
 
 `search`, `list`, and `outdated` support repeatable `--arch` and `--type` filters where plugin supports them.
@@ -222,8 +221,8 @@ you can also provide archive password through `REQPACK_ARCHIVE_PASSWORD`.
 `snapshot` writes packages tracked in ReqPack history into portable `reqpack.lua` manifest.
 
 ```bash
-ReqPack snapshot --output reqpack.lua
-ReqPack install .
+rqp snapshot --output reqpack.lua
+rqp install .
 ```
 
 ### Audit
@@ -231,13 +230,13 @@ ReqPack install .
 ReqPack can audit installed packages, explicit package lists, or manifests.
 
 ```bash
-ReqPack audit
-ReqPack audit npm react
-ReqPack audit npm:react maven:org.junit:junit
-ReqPack audit .
-ReqPack audit ./reqpack.lua
-ReqPack audit --format cyclonedx-vex-json --output audit.json
-ReqPack audit --format sarif --output audit.sarif
+rqp audit
+rqp audit npm react
+rqp audit npm:react maven:org.junit:junit
+rqp audit .
+rqp audit ./reqpack.lua
+rqp audit --format cyclonedx-vex-json --output audit.json
+rqp audit --format sarif --output audit.sarif
 ```
 
 Audit behavior:
@@ -251,10 +250,10 @@ Audit behavior:
 ReqPack can export installed-package inventory as terminal table, JSON, or CycloneDX JSON.
 
 ```bash
-ReqPack sbom
-ReqPack sbom apt npm
-ReqPack sbom --format json
-ReqPack sbom --format cyclonedx-json --output sbom.json
+rqp sbom
+rqp sbom apt npm
+rqp sbom --format json
+rqp sbom --format cyclonedx-json --output sbom.json
 ```
 
 SBOM output formats:
@@ -274,8 +273,8 @@ Useful SBOM flags:
 
 ReqPack has two remote pieces:
 
-- `ReqPack serve --remote` starts remote TCP command server.
-- `ReqPack remote <profile>` connects to profile from `remote.lua`.
+- `rqp serve --remote` starts remote TCP command server.
+- `rqp remote <profile>` connects to profile from `remote.lua`.
 
 Today, text and JSON protocols are usable.
 `--http` and `--https` are reserved for future server mode and should not be documented as production-ready yet.
@@ -303,10 +302,10 @@ users = {
 Examples:
 
 ```bash
-ReqPack serve --remote --bind 127.0.0.1 --port 4545 --token secret
-ReqPack serve --remote --json --readonly --max-connections 4
-ReqPack remote dev list apt
-ReqPack remote dev install apt curl
+rqp serve --remote --bind 127.0.0.1 --port 4545 --token secret
+rqp serve --remote --json --readonly --max-connections 4
+rqp remote dev list apt
+rqp remote dev install apt curl
 ```
 
 ## Manifest Example
@@ -396,7 +395,7 @@ Binary link:
 Registry notes:
 
 - default registry remote: `https://github.com/Coditary/rqp-registry.git`
-- local workspace `plugins/` directory is auto-used when you run ReqPack from repo root and no custom plugin directory is configured
+- local workspace `plugins/` directory is auto-used when you run `rqp` from repo root and no custom plugin directory is configured
 
 Bundled or checked-in plugin examples in this repository:
 

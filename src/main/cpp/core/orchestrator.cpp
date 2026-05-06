@@ -232,9 +232,9 @@ bool resolve_local_target(
     const std::string ext = file_extension(request.localPath);
     if (errorMessage != nullptr) {
         if (ext.empty()) {
-            *errorMessage = "cannot determine system for local target: " + request.localPath + "\nUse: ReqPack install <system> <path>";
+            *errorMessage = "cannot determine system for local target: " + request.localPath + "\nUse: rqp install <system> <path>";
         } else {
-            *errorMessage = "no plugin found for file extension '" + ext + "': " + request.localPath + "\nUse: ReqPack install <system> <path>";
+            *errorMessage = "no plugin found for file extension '" + ext + "': " + request.localPath + "\nUse: rqp install <system> <path>";
         }
     }
     return false;
@@ -507,7 +507,7 @@ int Orchestrator::run() {
 					"orchestrator",
 					"Local target could not be resolved",
 					"ReqPack could not infer plugin or install target details from provided local path.",
-					"Specify system explicitly, for example `ReqPack install <system> <path>`.",
+					"Specify system explicitly, for example `rqp install <system> <path>`.",
 					errorMessage,
 					request.system.empty() ? "install" : request.system,
 					"local-target",

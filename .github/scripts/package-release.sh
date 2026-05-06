@@ -10,7 +10,7 @@ build_dir="$1"
 tag="$2"
 target="$3"
 output_dir="$4"
-binary_path="${build_dir%/}/ReqPack"
+binary_path="${build_dir%/}/rqp"
 archive_root="rqp-${tag}-${target}"
 
 if [ ! -f "$binary_path" ]; then
