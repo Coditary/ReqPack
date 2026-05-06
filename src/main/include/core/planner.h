@@ -33,7 +33,7 @@ class Planner {
 
 	Graph* buildDag(const std::vector<Request>& requests) const;
 	Graph* buildDependencyDag(const std::vector<Package>& dependencies) const;
-	void addRequestToGraph(Graph& graph, const Request& request, bool includeDependencies) const;
+	void addRequestToGraph(Graph& graph, const Request& request, bool includeDependencies, bool directRequest = true) const;
 	void addPackageToGraph(Graph& graph, const Package& package) const;
 	Package makeRequestedPackage(const Request& request, const std::string& packageSpecifier) const;
 	Package makeLocalRequestedPackage(const Request& request) const;

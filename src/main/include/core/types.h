@@ -50,6 +50,7 @@ struct Package {
 	std::string sourcePath;
 	bool localTarget{false};
 	std::vector<std::string> flags;
+	bool directRequest{false};
 };
 
 struct PackageInfo {

@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string_view>
 
@@ -189,8 +190,45 @@ std::string serialize_installed_entry(const InstalledEntry& entry) {
     stream << "name=" << escape_field(entry.name) << '\n';
     stream << "version=" << escape_field(entry.version) << '\n';
     stream << "system=" << escape_field(entry.system) << '\n';
-    stream << "installedAt=" << escape_field(entry.installedAt);
+    stream << "installedAt=" << escape_field(entry.installedAt) << '\n';
+    stream << "installMethod=" << escape_field(entry.installMethod);
+    for (const std::string& owner : entry.owners) {
+        stream << '\n' << "owner=" << escape_field(owner);
+    }
     return stream.str();
+}
+
+std::vector<std::string> normalize_owners(std::vector<std::string> owners) {
+    owners.erase(std::remove_if(owners.begin(), owners.end(), [](const std::string& owner) {
+        return owner.empty();
+    }), owners.end());
+    std::sort(owners.begin(), owners.end());
+    owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+    return owners;
+}
+
+bool owner_has_prefix(const std::string& owner, std::string_view prefix) {
+    return starts_with(owner, std::string(prefix) + "\n");
+}
+
+std::string install_method_from_owners(const std::vector<std::string>& owners) {
+    const bool hasExplicit = std::any_of(owners.begin(), owners.end(), [](const std::string& owner) {
+        return owner_has_prefix(owner, "root");
+    });
+    const bool hasDependency = std::any_of(owners.begin(), owners.end(), [](const std::string& owner) {
+        return owner_has_prefix(owner, "pkg");
+    });
+
+    if (hasExplicit && hasDependency) {
+        return "explicit+dependency";
+    }
+    if (hasExplicit) {
+        return "explicit";
+    }
+    if (hasDependency) {
+        return "dependency";
+    }
+    return "unknown";
 }
 
 std::optional<InstalledEntry> deserialize_installed_entry(const std::string& payload) {
@@ -213,11 +251,19 @@ std::optional<InstalledEntry> deserialize_installed_entry(const std::string& pay
             entry.system = value;
         } else if (key == "installedAt") {
             entry.installedAt = value;
+        } else if (key == "installMethod") {
+            entry.installMethod = value;
+        } else if (key == "owner") {
+            entry.owners.push_back(value);
         }
     }
 
     if (entry.name.empty() || entry.system.empty()) {
         return std::nullopt;
+    }
+    entry.owners = normalize_owners(std::move(entry.owners));
+    if (entry.installMethod.empty()) {
+        entry.installMethod = install_method_from_owners(entry.owners);
     }
     return entry;
 }
@@ -392,6 +438,71 @@ bool delete_keys(MDB_txn* transaction, MDB_dbi dbi, const std::vector<std::strin
     return true;
 }
 
+std::vector<InstalledEntry> load_entries_for_keys(
+    MDB_txn* transaction,
+    MDB_dbi dbi,
+    const std::vector<std::string>& keys
+) {
+    std::vector<InstalledEntry> entries;
+    entries.reserve(keys.size());
+    for (const std::string& key : keys) {
+        const std::optional<std::string> payload = read_value(transaction, dbi, key);
+        if (!payload.has_value()) {
+            continue;
+        }
+        if (const std::optional<InstalledEntry> entry = deserialize_installed_entry(payload.value())) {
+            entries.push_back(entry.value());
+        }
+    }
+    return entries;
+}
+
+std::optional<std::pair<std::string, InstalledEntry>> find_installed_state_entry(
+    MDB_txn* transaction,
+    MDB_dbi dbi,
+    const std::string& system,
+    const std::string& name,
+    const std::string& version
+) {
+    const std::vector<std::string> keys = collect_keys_with_prefix(transaction, dbi, installed_state_name_prefix(system, name));
+    if (keys.empty()) {
+        return std::nullopt;
+    }
+
+    const std::vector<InstalledEntry> entries = load_entries_for_keys(transaction, dbi, keys);
+    if (!version.empty()) {
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            if (entries[index].version == version) {
+                return std::make_pair(keys[index], entries[index]);
+            }
+        }
+    }
+
+    if (entries.size() == 1) {
+        return std::make_pair(keys.front(), entries.front());
+    }
+
+    return std::nullopt;
+}
+
+std::optional<InstalledEntry> select_existing_entry_for_replace(
+    const std::map<std::string, InstalledEntry>& existingByIdentity,
+    const std::map<std::string, std::vector<InstalledEntry>>& existingByName,
+    const InstalledEntry& candidate
+) {
+    const auto identity = existingByIdentity.find(installed_state_identity(candidate));
+    if (identity != existingByIdentity.end()) {
+        return identity->second;
+    }
+
+    const auto sameName = existingByName.find(candidate.name);
+    if (sameName != existingByName.end() && sameName->second.size() == 1) {
+        return sameName->second.front();
+    }
+
+    return std::nullopt;
+}
+
 bool ensure_legacy_installed_state_imported(
     const InstalledStateEnvironment& environment,
     const std::filesystem::path& legacyPath
@@ -562,6 +673,7 @@ bool replace_installed_state_database(
 
     const std::vector<std::string> existingKeys = collect_keys_with_prefix(transaction, environment.dbi, installed_state_system_prefix(system));
     std::map<std::string, InstalledEntry> existingByIdentity;
+    std::map<std::string, std::vector<InstalledEntry>> existingByName;
     for (const std::string& key : existingKeys) {
         const std::optional<std::string> payload = read_value(transaction, environment.dbi, key);
         if (!payload.has_value()) {
@@ -569,6 +681,7 @@ bool replace_installed_state_database(
         }
         if (const auto entry = deserialize_installed_entry(payload.value())) {
             existingByIdentity[installed_state_identity(entry.value())] = entry.value();
+            existingByName[entry->name].push_back(entry.value());
         }
     }
 
@@ -585,15 +698,121 @@ bool replace_installed_state_database(
         }
 
         entry.system = system;
+        const std::optional<InstalledEntry> existing = select_existing_entry_for_replace(existingByIdentity, existingByName, entry);
         if (entry.installedAt.empty()) {
-            const auto existing = existingByIdentity.find(installed_state_identity(entry));
-            entry.installedAt = existing != existingByIdentity.end() ? existing->second.installedAt : syncedAt;
+            entry.installedAt = existing.has_value() ? existing->installedAt : syncedAt;
+        }
+        if (entry.owners.empty() && existing.has_value()) {
+            entry.owners = existing->owners;
+        }
+        entry.owners = normalize_owners(std::move(entry.owners));
+        if (entry.installMethod.empty() || entry.installMethod == "unknown") {
+            entry.installMethod = existing.has_value() && !existing->installMethod.empty()
+                ? existing->installMethod
+                : install_method_from_owners(entry.owners);
         }
 
         if (!put_value(transaction, environment.dbi, installed_state_key(entry.system, entry.name, entry.version), serialize_installed_entry(entry))) {
             mdb_txn_abort(transaction);
             return false;
         }
+    }
+
+    return mdb_txn_commit(transaction) == MDB_SUCCESS;
+}
+
+bool merge_installed_ownership_database(
+    const std::filesystem::path& dbDirectory,
+    const std::filesystem::path& legacyPath,
+    const Package& package,
+    const std::vector<std::string>& ownerIds,
+    bool directRequest
+) {
+    InstalledStateEnvironment environment = open_installed_state_environment(dbDirectory, true);
+    if (!environment) {
+        return false;
+    }
+    if (!ensure_legacy_installed_state_imported(environment, legacyPath)) {
+        return false;
+    }
+
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(environment.env, nullptr, 0, &transaction) != MDB_SUCCESS) {
+        return false;
+    }
+
+    const std::optional<std::pair<std::string, InstalledEntry>> existing = find_installed_state_entry(
+        transaction,
+        environment.dbi,
+        package.system,
+        package.name,
+        package.version
+    );
+    if (!existing.has_value()) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
+    InstalledEntry merged = existing->second;
+    merged.owners.insert(merged.owners.end(), ownerIds.begin(), ownerIds.end());
+    merged.owners = normalize_owners(std::move(merged.owners));
+    merged.installMethod = install_method_from_owners(merged.owners);
+    if (directRequest && merged.installMethod == "unknown") {
+        merged.installMethod = "explicit";
+    }
+
+    if (!put_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY), "1") ||
+        !put_value(transaction, environment.dbi, existing->first, serialize_installed_entry(merged))) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
+    return mdb_txn_commit(transaction) == MDB_SUCCESS;
+}
+
+bool subtract_installed_ownership_database(
+    const std::filesystem::path& dbDirectory,
+    const std::filesystem::path& legacyPath,
+    const Package& package,
+    const std::vector<std::string>& ownerIds
+) {
+    InstalledStateEnvironment environment = open_installed_state_environment(dbDirectory, true);
+    if (!environment) {
+        return false;
+    }
+    if (!ensure_legacy_installed_state_imported(environment, legacyPath)) {
+        return false;
+    }
+
+    MDB_txn* transaction = nullptr;
+    if (mdb_txn_begin(environment.env, nullptr, 0, &transaction) != MDB_SUCCESS) {
+        return false;
+    }
+
+    const std::optional<std::pair<std::string, InstalledEntry>> existing = find_installed_state_entry(
+        transaction,
+        environment.dbi,
+        package.system,
+        package.name,
+        package.version
+    );
+    if (!existing.has_value()) {
+        mdb_txn_abort(transaction);
+        return false;
+    }
+
+    std::set<std::string> removedOwners(ownerIds.begin(), ownerIds.end());
+    InstalledEntry updated = existing->second;
+    updated.owners.erase(std::remove_if(updated.owners.begin(), updated.owners.end(), [&](const std::string& owner) {
+        return removedOwners.contains(owner);
+    }), updated.owners.end());
+    updated.owners = normalize_owners(std::move(updated.owners));
+    updated.installMethod = install_method_from_owners(updated.owners);
+
+    if (!put_value(transaction, environment.dbi, std::string(INSTALLED_STATE_INITIALIZED_KEY), "1") ||
+        !put_value(transaction, environment.dbi, existing->first, serialize_installed_entry(updated))) {
+        mdb_txn_abort(transaction);
+        return false;
     }
 
     return mdb_txn_commit(transaction) == MDB_SUCCESS;
@@ -830,6 +1049,30 @@ bool HistoryManager::replaceInstalledState(const std::string& system, const std:
 
     std::lock_guard<std::mutex> lock(mutex);
     return replace_installed_state_database(installedStateDatabasePath(), legacyInstalledStatePath(), system, entries);
+}
+
+bool HistoryManager::mergeInstalledOwnership(const Package& package, const std::vector<std::string>& ownerIds, bool directRequest) const {
+    if (!config.history.trackInstalled) {
+        return true;
+    }
+    if (package.system.empty() || package.name.empty()) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex);
+    return merge_installed_ownership_database(installedStateDatabasePath(), legacyInstalledStatePath(), package, ownerIds, directRequest);
+}
+
+bool HistoryManager::subtractInstalledOwnership(const Package& package, const std::vector<std::string>& ownerIds) const {
+    if (!config.history.trackInstalled) {
+        return true;
+    }
+    if (package.system.empty() || package.name.empty()) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex);
+    return subtract_installed_ownership_database(installedStateDatabasePath(), legacyInstalledStatePath(), package, ownerIds);
 }
 
 bool HistoryManager::record(const HistoryEntry& entry) const {

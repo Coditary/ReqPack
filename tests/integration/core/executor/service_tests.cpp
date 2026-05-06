@@ -515,6 +515,99 @@ end
 function plugin.shutdown() return true end
 )";
 
+const char* OWNER_CHAIN_PLUGIN = R"(
+plugin = {}
+
+local function shell_quote(value)
+  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function installed_path(dir)
+  return dir .. "/installed.txt"
+end
+
+local function load_installed(dir)
+  local installed = {}
+  local result = reqpack.exec.run("test -f " .. shell_quote(installed_path(dir)) .. " && cat " .. shell_quote(installed_path(dir)))
+  if result.success and result.stdout ~= nil then
+    for line in string.gmatch(result.stdout, "[^\r\n]+") do
+      installed[line] = true
+    end
+  end
+  return installed
+end
+
+local function save_installed(dir, installed)
+  local names = {}
+  for name, present in pairs(installed) do
+    if present then
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  local content = table.concat(names, "\n")
+  if #content > 0 then
+    content = content .. "\n"
+  end
+  reqpack.exec.run("mkdir -p " .. shell_quote(dir))
+  reqpack.exec.run("printf '%s' " .. shell_quote(content) .. " > " .. shell_quote(installed_path(dir)))
+end
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getCategories() return { "pkg", "owner" } end
+function plugin.getRequirements()
+  if REQPACK_PLUGIN_ID == "app" or REQPACK_PLUGIN_ID == "other" then
+    return { { system = "dep", name = "maven" } }
+  end
+  return {}
+end
+function plugin.getMissingPackages(packages)
+  local installed = load_installed(REQPACK_PLUGIN_DIR)
+  local missing = {}
+  for _, package in ipairs(packages) do
+    if not installed[package.name] then
+      missing[#missing + 1] = package
+    end
+  end
+  return missing
+end
+function plugin.install(context, packages)
+  local installed = load_installed(context.plugin.dir)
+  for _, package in ipairs(packages) do
+    installed[package.name] = true
+  end
+  save_installed(context.plugin.dir, installed)
+  return true
+end
+function plugin.installLocal(context, path) return false end
+function plugin.remove(context, packages)
+  local installed = load_installed(context.plugin.dir)
+  for _, package in ipairs(packages) do
+    installed[package.name] = nil
+  end
+  save_installed(context.plugin.dir, installed)
+  return true
+end
+function plugin.update(context, packages) return plugin.install(context, packages) end
+function plugin.list(context)
+  local items = {}
+  for name, _ in pairs(load_installed(context.plugin.dir)) do
+    items[#items + 1] = { name = name, version = "1.0.0", description = REQPACK_PLUGIN_ID }
+  end
+  table.sort(items, function(left, right) return left.name < right.name end)
+  return items
+end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package)
+  if load_installed(REQPACK_PLUGIN_DIR)[package] then
+    return { name = package, version = "1.0.0", description = REQPACK_PLUGIN_ID }
+  end
+  return { name = package, version = "unknown", description = "missing" }
+end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("executor list dispatches flags and plugin context", "[integration][executor][service]") {
@@ -1044,4 +1137,85 @@ TEST_CASE("executor refreshes history snapshot from authoritative plugin list", 
     CHECK(find_installed(entries, "history", "actual", "1.2.3") != nullptr);
     CHECK(find_installed(entries, "history", "tool", "1.0.0") != nullptr);
     CHECK(find_installed(entries, "history", "tool", "2.0.0") != nullptr);
+}
+
+TEST_CASE("executor keeps shared dependency installed until last owner is removed", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-owner-shared"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.execution.useTransactionDb = false;
+
+    add_plugin_script(tempDir.path() / "plugins", "app", OWNER_CHAIN_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "other", OWNER_CHAIN_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "dep", OWNER_CHAIN_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Graph installGraph = make_linear_graph({
+        Package{.action = ActionType::INSTALL, .system = "dep", .name = "maven"},
+        Package{.action = ActionType::INSTALL, .system = "app", .name = "alpha", .directRequest = true},
+        Package{.action = ActionType::INSTALL, .system = "other", .name = "beta", .directRequest = true},
+    });
+    executer.setRequestedItemCount(2, false);
+    executer.execute(&installGraph);
+
+    std::vector<InstalledEntry> entries = HistoryManager(config).loadInstalledState();
+    const InstalledEntry* dep = find_installed(entries, "dep", "maven", "1.0.0");
+    REQUIRE(dep != nullptr);
+    CHECK(dep->installMethod == "dependency");
+    CHECK(dep->owners == std::vector<std::string>{
+        installed_package_owner_id("app", "alpha"),
+        installed_package_owner_id("other", "beta"),
+    });
+
+    Graph removeOneGraph = make_linear_graph({
+        Package{.action = ActionType::REMOVE, .system = "app", .name = "alpha", .directRequest = true},
+    });
+    executer.setRequestedItemCount(1, false);
+    executer.execute(&removeOneGraph);
+
+    entries = HistoryManager(config).loadInstalledState();
+    dep = find_installed(entries, "dep", "maven", "1.0.0");
+    REQUIRE(dep != nullptr);
+    CHECK(dep->owners == std::vector<std::string>{installed_package_owner_id("other", "beta")});
+
+    Graph removeLastGraph = make_linear_graph({
+        Package{.action = ActionType::REMOVE, .system = "other", .name = "beta", .directRequest = true},
+    });
+    executer.setRequestedItemCount(1, false);
+    executer.execute(&removeLastGraph);
+
+    entries = HistoryManager(config).loadInstalledState();
+    CHECK(find_installed(entries, "dep", "maven", "1.0.0") == nullptr);
+}
+
+TEST_CASE("executor records explicit owner for already installed direct request", "[integration][executor][service]") {
+    TempDir tempDir{"reqpack-executor-owner-explicit"};
+    ReqPackConfig config = make_executor_test_config(tempDir.path());
+    config.execution.useTransactionDb = false;
+
+    add_plugin_script(tempDir.path() / "plugins", "dep", OWNER_CHAIN_PLUGIN);
+
+    Registry registry(config);
+    registry.scanDirectory(config.registry.pluginDirectory);
+    Executer executer(&registry, config);
+
+    Graph firstInstall = make_linear_graph({
+        Package{.action = ActionType::INSTALL, .system = "dep", .name = "maven", .directRequest = true},
+    });
+    executer.setRequestedItemCount(1, false);
+    executer.execute(&firstInstall);
+
+    Graph secondInstall = make_linear_graph({
+        Package{.action = ActionType::INSTALL, .system = "dep", .name = "maven", .directRequest = true},
+    });
+    executer.setRequestedItemCount(1, false);
+    executer.execute(&secondInstall);
+
+    const std::vector<InstalledEntry> entries = HistoryManager(config).loadInstalledState();
+    const InstalledEntry* dep = find_installed(entries, "dep", "maven", "1.0.0");
+    REQUIRE(dep != nullptr);
+    CHECK(dep->installMethod == "explicit");
+    CHECK(dep->owners == std::vector<std::string>{installed_root_owner_id("dep", "maven")});
 }

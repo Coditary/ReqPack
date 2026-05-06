@@ -65,6 +65,10 @@ class Executer {
 	bool syncInstalledStateForSystem(const std::string& system, bool allowEmpty) const;
 	std::set<std::string> refreshInstalledState(const std::vector<TransactionRecord>& records) const;
 	void recordHistory(const std::vector<TransactionRecord>& records) const;
+	std::vector<Package> normalizedRequirements(const Package& package) const;
+	std::vector<TransactionRecord> removeOrphanedDependencies(const std::vector<InstalledEntry>& installedState, const std::vector<TransactionRecord>& records) const;
+	void subtractDependencyOwnership(const std::vector<TransactionRecord>& records) const;
+	void reconcileInstalledOwnership(const std::vector<TaskGroup>& allTaskGroups, const std::vector<TaskGroup>& plannedTaskGroups, const std::vector<TransactionRecord>& records) const;
 	std::vector<Package> orderedPackages(const Graph& graph) const;
 	std::vector<TaskGroup> systemWideTaskGroups() const;
 	bool dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const;

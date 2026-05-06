@@ -31,6 +31,7 @@ Graph::vertex_descriptor findOrAddPackageVertex(Graph& graph, const Package& pac
 	auto [vertex, vertexEnd] = boost::vertices(graph);
 	for (; vertex != vertexEnd; ++vertex) {
 		if (planner_same_package(graph[*vertex], package)) {
+			graph[*vertex].directRequest = graph[*vertex].directRequest || package.directRequest;
 			return *vertex;
 		}
 	}
@@ -84,7 +85,6 @@ Graph* Planner::plan(const std::vector<Request>& requests) {
 
 	return graph;
 }
-
 std::vector<Request> Planner::expandProxies(const std::vector<Request>& requests) const {
 	return planner_expand_proxies(requests, this->config.planner.systemAliases);
 }
@@ -206,6 +206,10 @@ std::vector<Request> Planner::filterRequestedPackages(const std::vector<Request>
 		}
 
 		const std::vector<Package> missingPackages = plugin->getMissingPackages(requestedPackages);
+		if (missingPackages.empty()) {
+			filteredRequests.push_back(request);
+			continue;
+		}
 		const std::optional<Request> filteredRequest = planner_filter_install_request(request, missingPackages);
 		if (!filteredRequest.has_value()) {
 			continue;
@@ -343,10 +347,11 @@ Graph* Planner::buildDependencyDag(const std::vector<Package>& dependencies) con
 	return graph;
 }
 
-void Planner::addRequestToGraph(Graph& graph, const Request& request, bool includeDependencies) const {
+void Planner::addRequestToGraph(Graph& graph, const Request& request, bool includeDependencies, bool directRequest) const {
 	if (request.packages.empty()) {
 		if (request.usesLocalTarget) {
-			const Package package = this->makeLocalRequestedPackage(request);
+			Package package = this->makeLocalRequestedPackage(request);
+			package.directRequest = directRequest;
 			if (includeDependencies) {
 				this->addPackageToGraph(graph, package);
 				return;
@@ -357,7 +362,8 @@ void Planner::addRequestToGraph(Graph& graph, const Request& request, bool inclu
 	}
 
 	for (const std::string& packageName : request.packages) {
-		const Package package = this->makeRequestedPackage(request, packageName);
+		Package package = this->makeRequestedPackage(request, packageName);
+		package.directRequest = directRequest;
 		if (includeDependencies) {
 			this->addPackageToGraph(graph, package);
 			continue;
@@ -392,7 +398,9 @@ void Planner::addPackageToGraph(Graph& graph, const Package& package) const {
 		if (plugin != nullptr) {
 			std::vector<Package> normalizedDependencies;
 			for (Package dependency : plugin->getRequirements()) {
-				normalizedDependencies.push_back(resolveDependencySystem(planner_normalize_dependency(std::move(dependency), currentPackage.system), this->registry));
+				Package normalizedDependency = resolveDependencySystem(planner_normalize_dependency(std::move(dependency), currentPackage.system), this->registry);
+				normalizedDependency.directRequest = false;
+				normalizedDependencies.push_back(std::move(normalizedDependency));
 			}
 
 			for (const Package& missingDependency : this->filterMissingDependencies(normalizedDependencies)) {

@@ -4,7 +4,7 @@
 #include <filesystem>
 
 bool planner_same_package(const Package& left, const Package& right) {
-    return left.action == right.action && left.system == right.system && left.name == right.name && left.version == right.version;
+    return left.action == right.action && left.system == right.system && left.name == right.name && left.version == right.version && left.localTarget == right.localTarget && left.sourcePath == right.sourcePath;
 }
 
 bool planner_contains_only_action(const std::vector<Request>& requests, ActionType action) {
@@ -63,6 +63,7 @@ Package planner_make_requested_package(
     package.action = request.action;
     package.system = resolvedSystem;
     package.flags = request.flags;
+    package.directRequest = true;
 
     const std::size_t versionSeparator = packageSpecifier.rfind('@');
     if (versionSeparator == std::string::npos || versionSeparator == 0 || versionSeparator == packageSpecifier.size() - 1) {
@@ -86,6 +87,7 @@ Package planner_make_local_requested_package(
     package.sourcePath = request.localPath;
     package.localTarget = true;
     package.flags = request.flags;
+    package.directRequest = true;
     return package;
 }
 

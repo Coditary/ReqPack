@@ -25,7 +25,43 @@ struct InstalledEntry {
     std::string version;
     std::string system;
     std::string installedAt;    // ISO-8601 UTC timestamp of last install/update
+    std::string installMethod;  // "explicit" | "dependency" | "explicit+dependency" | "unknown"
+    std::vector<std::string> owners;
 };
+
+inline std::string installed_owner_token(
+    const std::string& prefix,
+    const std::string& system,
+    const std::string& name
+) {
+    return prefix + '\n' + system + '\n' + name;
+}
+
+inline std::string installed_package_owner_id(const std::string& system, const std::string& name, const std::string& version = {}) {
+    (void)version;
+    return installed_owner_token("pkg", system, name);
+}
+
+inline std::string installed_package_owner_id(const Package& package) {
+    return installed_package_owner_id(package.system, package.name, package.version);
+}
+
+inline std::string installed_package_owner_id(const InstalledEntry& entry) {
+    return installed_package_owner_id(entry.system, entry.name, entry.version);
+}
+
+inline std::string installed_root_owner_id(const std::string& system, const std::string& name, const std::string& version = {}) {
+    (void)version;
+    return installed_owner_token("root", system, name);
+}
+
+inline std::string installed_root_owner_id(const Package& package) {
+    return installed_root_owner_id(package.system, package.name, package.version);
+}
+
+inline std::string installed_root_owner_id(const InstalledEntry& entry) {
+    return installed_root_owner_id(entry.system, entry.name, entry.version);
+}
 
 // Manages XDG data history.jsonl (append-only event log, guarded by history.enabled)
 // and an LMDB-backed installed-state snapshot under XDG data history/ (guarded by history.trackInstalled).
@@ -63,6 +99,12 @@ public:
 
     // Replace one system snapshot with authoritative installed-state data.
     bool replaceInstalledState(const std::string& system, const std::vector<InstalledEntry>& entries) const;
+
+    // Attach direct/dependency ownership metadata to an already-installed package entry.
+    bool mergeInstalledOwnership(const Package& package, const std::vector<std::string>& ownerIds, bool directRequest) const;
+
+    // Remove ownership metadata from an already-installed package entry.
+    bool subtractInstalledOwnership(const Package& package, const std::vector<std::string>& ownerIds) const;
 
     // Convenience: fill timestamp, then call appendEvent + updateInstalledState
     // according to the respective config flags.

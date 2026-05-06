@@ -250,6 +250,83 @@ TEST_CASE("history manager replaces system snapshot from authoritative installed
     CHECK_FALSE(find_entry(entries, "demo", "stale").has_value());
 }
 
+TEST_CASE("history manager stores install method and owner references", "[unit][history][installed_state]") {
+    TempDir tempDir{"reqpack-history-owners"};
+    const ReqPackConfig config = make_history_config(tempDir.path());
+    HistoryManager history(config);
+
+    REQUIRE(history.updateInstalledState(HistoryEntry{
+        .timestamp = "2026-04-29T16:00:00Z",
+        .action = "install",
+        .packageName = "maven",
+        .packageVersion = "3.9.9",
+        .system = "sys",
+        .status = "success"
+    }));
+
+    Package directRequest{.action = ActionType::INSTALL, .system = "sys", .name = "maven", .version = "3.9.9", .directRequest = true};
+    REQUIRE(history.mergeInstalledOwnership(
+        directRequest,
+        {installed_root_owner_id(directRequest), installed_package_owner_id(directRequest)},
+        true
+    ));
+
+    Package dependentPackage{.action = ActionType::INSTALL, .system = "maven", .name = "org.example:demo", .version = "1.0.0", .directRequest = true};
+    REQUIRE(history.mergeInstalledOwnership(
+        directRequest,
+        {installed_package_owner_id(dependentPackage)},
+        false
+    ));
+
+    const std::vector<InstalledEntry> entries = history.loadInstalledState();
+    const std::optional<InstalledEntry> maven = find_entry_version(entries, "sys", "maven", "3.9.9");
+    REQUIRE(maven.has_value());
+    CHECK(maven->installMethod == "explicit+dependency");
+    CHECK(maven->owners == std::vector<std::string>{
+        installed_package_owner_id(dependentPackage),
+        installed_package_owner_id(directRequest),
+        installed_root_owner_id(directRequest),
+    });
+}
+
+TEST_CASE("history manager subtracts owner references without deleting installed entry", "[unit][history][installed_state]") {
+    TempDir tempDir{"reqpack-history-owner-subtract"};
+    const ReqPackConfig config = make_history_config(tempDir.path());
+    HistoryManager history(config);
+
+    REQUIRE(history.updateInstalledState(HistoryEntry{
+        .timestamp = "2026-04-29T16:05:00Z",
+        .action = "install",
+        .packageName = "maven",
+        .packageVersion = "3.9.9",
+        .system = "sys",
+        .status = "success"
+    }));
+
+    Package directRequest{.action = ActionType::INSTALL, .system = "sys", .name = "maven", .version = "3.9.9", .directRequest = true};
+    Package dependentPackage{.action = ActionType::INSTALL, .system = "maven", .name = "org.example:demo", .version = "1.0.0", .directRequest = true};
+    REQUIRE(history.mergeInstalledOwnership(
+        directRequest,
+        {
+            installed_root_owner_id(directRequest),
+            installed_package_owner_id(directRequest),
+            installed_package_owner_id(dependentPackage),
+        },
+        true
+    ));
+
+    REQUIRE(history.subtractInstalledOwnership(directRequest, {installed_package_owner_id(dependentPackage)}));
+
+    const std::vector<InstalledEntry> entries = history.loadInstalledState();
+    const std::optional<InstalledEntry> maven = find_entry_version(entries, "sys", "maven", "3.9.9");
+    REQUIRE(maven.has_value());
+    CHECK(maven->installMethod == "explicit+dependency");
+    CHECK(maven->owners == std::vector<std::string>{
+        installed_package_owner_id(directRequest),
+        installed_root_owner_id(directRequest),
+    });
+}
+
 TEST_CASE("snapshot exporter reads installed state from history database", "[unit][snapshot][history]") {
     TempDir tempDir{"reqpack-snapshot-history"};
     const ReqPackConfig config = make_history_config(tempDir.path());
