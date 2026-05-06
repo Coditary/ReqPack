@@ -17,7 +17,7 @@ std::string run_reqpack_case(const std::string& prompt) {
         " --plugin-dir " + escape_shell_arg(pluginDir.string()) +
         " 2>&1";
 
-    const std::string command = "zsh -lc " + escape_shell_arg(inner);
+    const std::string command = "sh -lc " + escape_shell_arg(inner);
 
     return run_command_capture(command);
 }
@@ -33,7 +33,7 @@ std::string run_reqpack_case_verbose(const std::string& prompt) {
         " --plugin-dir " + escape_shell_arg(pluginDir.string()) +
         " 2>&1";
 
-    const std::string command = "zsh -lc " + escape_shell_arg(inner);
+    const std::string command = "sh -lc " + escape_shell_arg(inner);
 
     return run_command_capture(command);
 }

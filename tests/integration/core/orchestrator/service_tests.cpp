@@ -482,7 +482,10 @@ std::string run_reqpack_with_home(
     const std::vector<std::string>& arguments
 ) {
     std::string command = "cd " + escape_shell_arg(workspace.string()) +
-        " && HOME=" + escape_shell_arg(homePath.string()) +
+        " && env HOME=" + escape_shell_arg(homePath.string()) +
+        " XDG_CONFIG_HOME=" + escape_shell_arg((homePath / ".config").string()) +
+        " XDG_DATA_HOME=" + escape_shell_arg((homePath / ".local" / "share").string()) +
+        " XDG_CACHE_HOME=" + escape_shell_arg((homePath / ".cache").string()) +
         " " + escape_shell_arg((build_root() / "ReqPack").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
@@ -500,7 +503,10 @@ std::string run_reqpack_with_home_and_env(
     const std::vector<std::string>& arguments
 ) {
     std::string command = "cd " + escape_shell_arg(workspace.string()) +
-        " && HOME=" + escape_shell_arg(homePath.string());
+        " && env HOME=" + escape_shell_arg(homePath.string()) +
+        " XDG_CONFIG_HOME=" + escape_shell_arg((homePath / ".config").string()) +
+        " XDG_DATA_HOME=" + escape_shell_arg((homePath / ".local" / "share").string()) +
+        " XDG_CACHE_HOME=" + escape_shell_arg((homePath / ".cache").string());
     for (const auto& [key, value] : environment) {
         command += " " + key + "=" + escape_shell_arg(value);
     }
@@ -798,7 +804,10 @@ std::string run_reqpack_with_home_and_status(
     int& status
 ) {
     std::string command = "cd " + escape_shell_arg(workspace.string()) +
-        " && HOME=" + escape_shell_arg(homePath.string()) +
+        " && env HOME=" + escape_shell_arg(homePath.string()) +
+        " XDG_CONFIG_HOME=" + escape_shell_arg((homePath / ".config").string()) +
+        " XDG_DATA_HOME=" + escape_shell_arg((homePath / ".local" / "share").string()) +
+        " XDG_CACHE_HOME=" + escape_shell_arg((homePath / ".cache").string()) +
         " " + escape_shell_arg((build_root() / "ReqPack").string()) +
         " --config " + escape_shell_arg(configPath.string());
     for (const std::string& argument : arguments) {
@@ -833,7 +842,10 @@ std::string run_reqpack_with_home_env_and_status(
     int& status
 ) {
     std::string command = "cd " + escape_shell_arg(workspace.string()) +
-        " && env HOME=" + escape_shell_arg(homePath.string());
+        " && env HOME=" + escape_shell_arg(homePath.string()) +
+        " XDG_CONFIG_HOME=" + escape_shell_arg((homePath / ".config").string()) +
+        " XDG_DATA_HOME=" + escape_shell_arg((homePath / ".local" / "share").string()) +
+        " XDG_CACHE_HOME=" + escape_shell_arg((homePath / ".cache").string());
     for (const auto& [key, value] : environment) {
         command += " " + key + "=" + escape_shell_arg(value);
     }
@@ -1185,10 +1197,12 @@ TEST_CASE("orchestrator dnf list normalizes metadata and filters architecture", 
     write_file(fakeBin / "dnf",
         "#!/bin/sh\n"
         "if [ \"$1\" = \"repoquery\" ] && [ \"$2\" = \"--installed\" ]; then\n"
-        "  case \"$4\" in\n"
-        "    *'%{summary}'*) printf 'ripgrep.x86_64\\tFast line-oriented search tool\\nripgrep.noarch\\tFast line-oriented search tool\\n' ; exit 0 ;;&\n"
-        "    *) printf 'ripgrep.x86_64\\t14.1.1-1.fc43\\nripgrep.noarch\\t14.1.1-1.fc43\\n' ; exit 0 ;;&\n"
-        "  esac\n"
+        "  if printf '%s' \"$*\" | grep -F -- '%{summary}' >/dev/null 2>&1; then\n"
+        "    printf 'ripgrep.x86_64\\tFast line-oriented search tool\\nripgrep.noarch\\tFast line-oriented search tool\\n'\n"
+        "    exit 0\n"
+        "  fi\n"
+        "  printf 'ripgrep.x86_64\\t14.1.1-1.fc43\\nripgrep.noarch\\t14.1.1-1.fc43\\n'\n"
+        "  exit 0\n"
         "fi\n"
         "exit 0\n");
     REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "dnf").string())).c_str()) == 0);

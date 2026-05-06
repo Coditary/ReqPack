@@ -235,8 +235,8 @@ function plugin.update(context, packages)
 end
 
 function plugin.list(context)
-    local result = context.exec.run("dnf repoquery --installed --qf $'%{name}.%{arch}\\t%{version}-%{release}\\n'")
-    local summaryResult = context.exec.run("dnf repoquery --installed --qf $'%{name}.%{arch}\\t%{summary}\\n'")
+    local result = context.exec.run("dnf repoquery --installed --qf '%{name}.%{arch}\\t%{version}-%{release}\\n'")
+    local summaryResult = context.exec.run("dnf repoquery --installed --qf '%{name}.%{arch}\\t%{summary}\\n'")
     local summaries = {}
     for line in (summaryResult.stdout or ""):gmatch("[^\r\n]+") do
         local qualifiedName, summary = line:match("^(.-)\t(.+)$")
@@ -311,7 +311,7 @@ end
 
 function plugin.search(context, prompt)
     local result = context.exec.run("dnf search " .. shell_quote(prompt) .. " --quiet")
-    local versionResult = context.exec.run("dnf repoquery --qf $'%{name}.%{arch}\\t%{version}-%{release}\\n' " .. shell_quote(prompt) .. " 2>/dev/null")
+    local versionResult = context.exec.run("dnf repoquery --qf '%{name}.%{arch}\\t%{version}-%{release}\\n' " .. shell_quote(prompt) .. " 2>/dev/null")
     local versions = {}
     for line in (versionResult.stdout or ""):gmatch("[^\r\n]+") do
         local qualifiedName, version = line:match("^(.-)\t(.+)$")

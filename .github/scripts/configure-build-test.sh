@@ -10,5 +10,11 @@ build_dir="$1"
 shift
 
 cmake -Wno-dev -S . -B "$build_dir" -DCMAKE_BUILD_TYPE=Release "$@"
-cmake --build "$build_dir" --parallel --target ReqPack core_unit_tests core_integration_tests exec_rules_unit_tests exec_rules_integration_tests
+cmake --build "$build_dir" --parallel --target ReqPack reqpack_test_targets
+
+if ctest --test-dir "$build_dir" -N 2>&1 | grep -F '_NOT_BUILT-' >/dev/null; then
+    echo "error: discovered tests contain _NOT_BUILT_ placeholders" >&2
+    exit 1
+fi
+
 ctest --test-dir "$build_dir" --output-on-failure

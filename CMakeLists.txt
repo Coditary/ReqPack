@@ -238,6 +238,14 @@ add_executable(core_unit_tests
     src/main/cpp/output/command_output.cpp
 )
 
+add_custom_target(reqpack_test_targets
+    DEPENDS
+        core_unit_tests
+        core_integration_tests
+        exec_rules_unit_tests
+        exec_rules_integration_tests
+)
+
 target_include_directories(ReqPack PRIVATE 
     ${SOL2_INCLUDE_DIR}
     ${LUA_INCLUDE_DIR}
