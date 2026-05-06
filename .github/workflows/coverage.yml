@@ -1,0 +1,85 @@
+name: Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      SOL2_VERSION: v3.3.0
+      COVERAGE_BUILD_DIR: build/coverage
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates cmake curl git pkg-config python3 \
+            libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
+            liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+
+      - name: Install sol2 headers
+        run: |
+          git clone --depth 1 -b "${SOL2_VERSION}" https://github.com/ThePhD/sol2.git
+          echo "SOL2_INCLUDE_DIR=${GITHUB_WORKSPACE}/sol2/include" >> "$GITHUB_ENV"
+
+      - name: Configure coverage build
+        run: |
+          cmake -S . -B "${COVERAGE_BUILD_DIR}" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DREQPACK_ENABLE_COVERAGE=ON \
+            -DSOL2_INCLUDE_DIR="${SOL2_INCLUDE_DIR}"
+
+      - name: Build coverage targets
+        run: cmake --build "${COVERAGE_BUILD_DIR}" --parallel --target ReqPack reqpack_test_targets
+
+      - name: Run tests
+        run: ctest --test-dir "${COVERAGE_BUILD_DIR}" --output-on-failure
+
+      - name: Generate CTest coverage report
+        run: ctest --test-dir "${COVERAGE_BUILD_DIR}" -T Coverage
+
+      - name: Summarize coverage
+        run: |
+          python3 tests/coverage_summary.py "${COVERAGE_BUILD_DIR}" . --badge-json .github/badges/coverage.json | tee coverage-summary.txt
+          {
+            echo "## Coverage"
+            echo
+            echo '```text'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            .github/badges/coverage.json
+            coverage-summary.txt
+            build/coverage/Testing
+
+      - name: Commit coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs: update coverage badge [skip ci]"
+          file_pattern: .github/badges/coverage.json

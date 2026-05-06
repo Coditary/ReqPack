@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -35,10 +36,36 @@ def child_float(element: ET.Element, *names: str) -> float | None:
     return None
 
 
+def badge_color(coverage: float) -> str:
+    if coverage >= 90.0:
+        return "brightgreen"
+    if coverage >= 80.0:
+        return "green"
+    if coverage >= 70.0:
+        return "yellowgreen"
+    if coverage >= 60.0:
+        return "yellow"
+    if coverage >= 50.0:
+        return "orange"
+    return "red"
+
+
+def write_badge_json(path: Path, coverage: float) -> None:
+    payload = {
+        "schemaVersion": 1,
+        "label": "coverage",
+        "message": f"{coverage:.2f}%",
+        "color": badge_color(coverage),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Summarize CTest coverage for ReqPack sources")
     parser.add_argument("build_dir", type=Path)
     parser.add_argument("source_dir", type=Path)
+    parser.add_argument("--badge-json", type=Path, help="Write Shields endpoint JSON badge to this path")
     args = parser.parse_args()
 
     build_dir = args.build_dir.resolve()
@@ -102,6 +129,9 @@ def main() -> int:
 
     rows.sort(key=lambda row: (row[0], str(row[3])))
     overall = (total_tested / total_count) * 100.0 if total_count else 0.0
+
+    if args.badge_json is not None:
+        write_badge_json(args.badge_json.resolve(), overall)
 
     print(f"Coverage summary: {overall:.2f}% ({total_tested}/{total_count} lines) across {len(rows)} source files")
     print(f"Coverage XML: {coverage_xml}")
