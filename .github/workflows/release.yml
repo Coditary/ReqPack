@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 defaults:
   run:
@@ -33,9 +33,6 @@ jobs:
           - target: x86_64-linux
             runner: ubuntu-latest
             family: linux
-          - target: x86_64-darwin
-            runner: macos-13
-            family: macos
           - target: aarch64-linux
             runner: ubuntu-24.04-arm
             family: linux
@@ -75,16 +72,18 @@ jobs:
             echo "BREW_PREFIX=$(brew --prefix)"
             echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)"
             echo "LUA_PREFIX=$(brew --prefix lua@5.4)"
+            echo "ZSTD_PREFIX=$(brew --prefix zstd)"
           } >> "$GITHUB_ENV"
 
       - name: Install sol2 headers
         run: |
-          git clone https://github.com/ThePhD/sol2.git
-          sudo cp -r sol2/include/sol /usr/local/include/
+          git clone --depth 1 -b ${{ env.SOL2_VERSION }} https://github.com/ThePhD/sol2.git
+          echo "SOL2_INCLUDE_DIR=${{ github.workspace }}/sol2/include" >> "$GITHUB_ENV"
 
       - name: Fix C++ optional ambiguity in tests
         run: |
-          find tests -type f -name "*.cpp" -exec sed -i 's/value_or({})/value_or("")/g' {} +
+          # Fix: Verwende xargs für bessere Kompatibilität und Vermeidung des {} + Fehlers
+          find tests -type f -name "*.cpp" -print0 | xargs -0 sed -i 's/value_or({})/value_or("")/g'
 
       - name: Prepare compiler cache
         run: |
@@ -98,31 +97,36 @@ jobs:
           rm -rf build
           mkdir build
           cd build
-          cmake .. -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake .. \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}"
           make -j$(nproc)
           ctest --output-on-failure
 
       - name: Build and test macOS targets
         if: matrix.family == 'macos'
         run: |
-          export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig:${LUA_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+          export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig:${LUA_PREFIX}/lib/pkgconfig:${ZSTD_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
           rm -rf build
           mkdir build
           cd build
           cmake .. \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX}" \
+            -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX};${ZSTD_PREFIX}" \
             -DOPENSSL_ROOT_DIR="${OPENSSL_PREFIX}" \
+            -DREQPACK_ZSTD_LIBRARY="${ZSTD_PREFIX}/lib/libzstd.dylib" \
+            -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
             -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
-            -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua5.4.dylib"
+            -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.5.4.dylib"
           make -j$(sysctl -n hw.ncpu)
           ctest --output-on-failure
 
       - name: Package release
         run: |
           mkdir -p release-artifacts
-          # Nutze das vorhandene build-Verzeichnis
+          # Verpackt das Binärprogramm aus dem build Ordner
           tar -czf release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C build rqp
 
       - name: Upload release bundle
