@@ -1,7 +1,7 @@
 [![CI](https://github.com/Coditary/ReqPack/actions/workflows/ci.yml/badge.svg)](https://github.com/Coditary/ReqPack/actions/workflows/ci.yml)
 [![Release](https://github.com/Coditary/ReqPack/actions/workflows/release.yml/badge.svg)](https://github.com/Coditary/ReqPack/actions/workflows/release.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Coditary/ReqPack/main/.github/badges/coverage.json)](https://github.com/Coditary/ReqPack/actions/workflows/coverage.yml)
-[![License: 0BSD](https://img.shields.io/badge/license-0BSD-blue.svg)](./LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 # ReqPack
 
@@ -51,11 +51,11 @@ ReqPack core currently targets:
 - zstd.
 - LMDB.
 - sol2 headers.
-- Git for self-update and Git-backed plugin refresh.
+- Git for Git-backed plugin refresh.
 
 Self-update note:
-`rqp update` without package-manager arguments rebuilds ReqPack from configured Git repository.
-That means release-binary users still need local build toolchain if they want self-update to work.
+`rqp update` without package-manager arguments downloads matching release binary from configured release source.
+Release-binary users no longer need local build toolchain for self-update.
 
 ## Installation
 
@@ -65,13 +65,19 @@ Tagged releases publish archives named `rqp-<tag>-<target>.tar.gz`.
 Each archive currently contains `rqp` binary and `SHA256SUMS` is published alongside release assets.
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/Coditary/ReqPack/main/install.sh | sh
+```
+
+`install.sh` detects OS and architecture, downloads matching release binary, installs it to `~/.local/bin/rqp`, writes default self-update config if missing, then runs initial `rqp update --all` and `rqp host refresh`.
+
+If you prefer manual asset installation:
+
+```bash
 tar -xzf "rqp-vX.Y.Z-x86_64-linux.tar.gz"
 chmod +x rqp
 mkdir -p ~/.local/bin
-ln -sf "$(pwd)/rqp" ~/.local/bin/rqp
+cp rqp ~/.local/bin/rqp
 ```
-
-Move `rqp` somewhere on your `PATH`, for example `~/.local/bin/rqp`.
 
 ### Option 2: Build From Source On Ubuntu Or Debian
 
@@ -183,7 +189,7 @@ rqp update apt:curl npm:express
 
 Update behavior is worth knowing:
 
-- `rqp update` rebuilds ReqPack itself from configured Git repository.
+- `rqp update` downloads ReqPack release binary for current host from configured release source.
 - `rqp update --all` refreshes all known plugin wrappers.
 - `rqp update <system>` without package names refreshes that plugin wrapper.
 - `rqp update <system> --all` updates all packages for that system.
@@ -408,7 +414,8 @@ return {
     remoteUrl = "https://github.com/Coditary/rqp-registry.git",
   },
   selfUpdate = {
-    branch = "main",
+    releaseApiBaseUrl = "https://api.github.com",
+    releaseTag = "latest",
     linkPath = "~/.local/bin/rqp",
   },
 }
@@ -420,7 +427,7 @@ Useful config areas for daily use:
 - `execution.jobs` and `execution.jobsMode`
 - `security.onUnsafe`, `security.severityThreshold`, `security.scoreThreshold`
 - `registry.remoteUrl`, `registry.pluginDirectory`, `registry.sources`
-- `selfUpdate.repoUrl`, `selfUpdate.branch`, `selfUpdate.linkPath`
+- `selfUpdate.repoUrl`, `selfUpdate.releaseApiBaseUrl`, `selfUpdate.releaseTag`, `selfUpdate.linkPath`
 - `sbom.defaultFormat`, `sbom.defaultOutputPath`
 
 ## Config And File Locations
@@ -440,8 +447,6 @@ Data:
 - `$XDG_DATA_HOME/reqpack/registry`
 - `$XDG_DATA_HOME/reqpack/history`
 - `$XDG_DATA_HOME/reqpack/rqp/state`
-- `$XDG_DATA_HOME/reqpack/self/repo`
-- `$XDG_DATA_HOME/reqpack/self/build`
 - `$XDG_DATA_HOME/reqpack/self/bin`
 - `$XDG_DATA_HOME/reqpack/security/index`
 - `$XDG_DATA_HOME/reqpack/security/osv`

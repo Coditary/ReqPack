@@ -874,7 +874,7 @@ void Cli::print_command_help(ActionType action) {
                 "       rqp update <system1>:<package> <system2>:<package> [options]\n"
                 "\n"
                 "Update ReqPack itself, plugin wrappers, or packages for one or more package managers.\n"
-                "Without a system argument, ReqPack performs a self-update from its configured Git repository.\n"
+                "Without a system argument, ReqPack downloads matching release binary from its configured release source.\n"
                 "With a system argument and no package list, ReqPack refreshes that plugin wrapper to its newest tagged version when the source is Git-backed.\n"
                 "Use '--all' with a system to update all packages for that system instead.\n"
                 "Use 'rqp update --all' to refresh all known plugin wrappers.\n"

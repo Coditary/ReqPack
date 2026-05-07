@@ -557,6 +557,45 @@ void write_self_update_source_tree(const std::filesystem::path& root, const std:
         "int main() { std::cout << \"" + versionLabel + "\\n\"; return 0; }\n");
 }
 
+void write_self_update_release_api_response(
+    const std::filesystem::path& apiRoot,
+    const std::string& owner,
+    const std::string& repo,
+    const std::string& tag,
+    const std::string& target,
+    const std::filesystem::path& assetPath
+) {
+    const std::filesystem::path latestPath = apiRoot / "repos" / owner / repo / "releases" / "latest";
+    write_file(latestPath,
+        "{\n"
+        "  \"tag_name\": \"" + tag + "\",\n"
+        "  \"assets\": [\n"
+        "    {\n"
+        "      \"name\": \"rqp-" + tag + "-" + target + ".tar.gz\",\n"
+        "      \"browser_download_url\": \"file://" + assetPath.string() + "\"\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+}
+
+std::filesystem::path create_self_update_release_archive(
+    const std::filesystem::path& root,
+    const std::string& versionLabel,
+    const std::string& tag,
+    const std::string& target
+) {
+    const std::filesystem::path sourceRoot = root / ("release-src-" + versionLabel);
+    const std::filesystem::path archivePath = root / ("rqp-" + tag + "-" + target + ".tar.gz");
+    write_file(sourceRoot / "rqp", "#!/bin/sh\nprintf '%s\\n' '" + versionLabel + "'\n");
+    require_command_success("chmod +x " + escape_shell_arg((sourceRoot / "rqp").string()));
+    require_command_success(
+        "tar -C " + escape_shell_arg(sourceRoot.string()) +
+        " -czf " + escape_shell_arg(archivePath.string()) +
+        " rqp"
+    );
+    return archivePath;
+}
+
 void commit_self_update_source(const std::filesystem::path& repoPath, const std::string& message, const std::string& versionLabel) {
     write_self_update_source_tree(repoPath, versionLabel);
     require_command_success(
@@ -2356,11 +2395,12 @@ TEST_CASE("orchestrator update rqp package installs newer repository version", "
     CHECK(read_file(stateDir / "installed.txt") == "hello-v2");
 }
 
-TEST_CASE("wrapper self-update builds latest git commit and swaps local symlink", "[integration][orchestrator][service][self-update]") {
+TEST_CASE("wrapper self-update downloads latest release binary and swaps local symlink", "[integration][orchestrator][service][self-update]") {
     TempDir tempDir{"reqpack-wrapper-self-update"};
     const std::filesystem::path workspace = tempDir.path() / "workspace";
     const std::filesystem::path homePath = tempDir.path() / "home";
-    const std::filesystem::path originPath = tempDir.path() / "origin";
+    const std::filesystem::path releaseApiRoot = tempDir.path() / "release-api";
+    const std::filesystem::path releaseAssetRoot = tempDir.path() / "release-assets";
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
     const std::filesystem::path fakeBinDirectory = tempDir.path() / "fake-bin";
     const std::filesystem::path configPath = tempDir.path() / "config.lua";
@@ -2368,8 +2408,14 @@ TEST_CASE("wrapper self-update builds latest git commit and swaps local symlink"
     std::filesystem::create_directories(homePath);
     std::filesystem::create_directories(fakeBinDirectory);
 
-    init_git_repository(originPath);
-    commit_self_update_source(originPath, "initial", "v1");
+    const std::string owner = "coditary";
+    const std::string repo = "ReqPack";
+    const std::string target = HostInfoService::currentSnapshot()->platform.target;
+    REQUIRE((target == "x86_64-linux" || target == "aarch64-linux" || target == "x86_64-darwin" || target == "aarch64-darwin"));
+    const std::string firstTag = "v1.0.0";
+    const std::string secondTag = "v2.0.0";
+    const std::filesystem::path firstArchive = create_self_update_release_archive(releaseAssetRoot, "v1", firstTag, target);
+    write_self_update_release_api_response(releaseApiRoot, owner, repo, firstTag, target, firstArchive);
     copy_repo_plugin(pluginDirectory, "sys");
     write_file(fakeBinDirectory / "fake-apt", "#!/bin/sh\nprintf '%s\n' \"$@\" >> \"$REQPACK_TEST_SYS_LOG\"\nexit 0\n");
     require_command_success("chmod +x " + escape_shell_arg((fakeBinDirectory / "fake-apt").string()));
@@ -2392,38 +2438,36 @@ TEST_CASE("wrapper self-update builds latest git commit and swaps local symlink"
         "    interactive = false,\n"
         "  },\n"
         "  selfUpdate = {\n"
-        "    repoUrl = '" + originPath.string() + "',\n"
-        "    branch = 'main',\n"
-        "    repoPath = '" + (homePath / ".local/share/reqpack/self/repo").string() + "',\n"
-        "    buildPath = '" + (homePath / ".local/share/reqpack/self/build").string() + "',\n"
+        "    repoUrl = 'https://git.example.test/" + owner + "/" + repo + ".git',\n"
+        "    releaseApiBaseUrl = 'file://" + releaseApiRoot.string() + "',\n"
+        "    releaseTag = 'latest',\n"
         "    binaryDirectory = '" + (homePath / ".local/share/reqpack/self/bin").string() + "',\n"
         "    linkPath = '" + (homePath / ".local/bin/rqp").string() + "',\n"
         "  },\n"
         "}\n");
 
-    const std::string firstCommit = git_head_commit(originPath);
     const std::string firstOutput = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
     INFO(firstOutput);
-    CHECK(firstOutput.find("self-update: clone repository") != std::string::npos);
-    CHECK(firstOutput.find("self-update: configure build") != std::string::npos);
-    CHECK(firstOutput.find("self-update: build binary") != std::string::npos);
-    CHECK(firstOutput.find("self-update complete: now on commit " + firstCommit) != std::string::npos);
+    CHECK(firstOutput.find("self-update: fetch release metadata") != std::string::npos);
+    CHECK(firstOutput.find("self-update: download release archive") != std::string::npos);
+    CHECK(firstOutput.find("self-update: extract release archive") != std::string::npos);
+    CHECK(firstOutput.find("self-update complete: now on release " + firstTag) != std::string::npos);
 
     const std::filesystem::path linkPath = homePath / ".local/bin/rqp";
-    const std::filesystem::path binaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + firstCommit);
+    const std::filesystem::path binaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + firstTag + "-" + target);
     REQUIRE(std::filesystem::exists(binaryPath));
     REQUIRE(std::filesystem::is_symlink(linkPath));
     CHECK(std::filesystem::read_symlink(linkPath) == binaryPath);
 
-    commit_self_update_source(originPath, "second", "v2");
-    const std::string secondCommit = git_head_commit(originPath);
+    const std::filesystem::path secondArchive = create_self_update_release_archive(releaseAssetRoot, "v2", secondTag, target);
+    write_self_update_release_api_response(releaseApiRoot, owner, repo, secondTag, target, secondArchive);
     const std::string secondOutput = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
     INFO(secondOutput);
-    CHECK(secondOutput.find("self-update: checkout branch") != std::string::npos);
-    CHECK(secondOutput.find("self-update: pull latest commit") != std::string::npos);
-    CHECK(secondOutput.find("self-update complete: now on commit " + secondCommit) != std::string::npos);
+    CHECK(secondOutput.find("self-update: fetch release metadata") != std::string::npos);
+    CHECK(secondOutput.find("self-update: download release archive") != std::string::npos);
+    CHECK(secondOutput.find("self-update complete: now on release " + secondTag) != std::string::npos);
 
-    const std::filesystem::path secondBinaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + secondCommit);
+    const std::filesystem::path secondBinaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + secondTag + "-" + target);
     REQUIRE(std::filesystem::exists(secondBinaryPath));
     CHECK(std::filesystem::read_symlink(linkPath) == secondBinaryPath);
 

@@ -891,8 +891,6 @@ ReqPackConfig::ReqPackConfig()
           .statePath = default_reqpack_rqp_state_path().string(),
       }),
       selfUpdate(SelfUpdateConfig{
-          .repoPath = default_reqpack_self_update_repo_path().string(),
-          .buildPath = default_reqpack_self_update_build_path().string(),
           .binaryDirectory = default_reqpack_self_update_binary_directory().string(),
           .linkPath = default_reqpack_self_update_link_path().string(),
       }),
@@ -951,14 +949,6 @@ std::filesystem::path default_reqpack_transaction_path() {
 
 std::filesystem::path default_reqpack_rqp_state_path() {
     return reqpack_data_directory() / "rqp" / "state";
-}
-
-std::filesystem::path default_reqpack_self_update_repo_path() {
-    return reqpack_data_directory() / "self" / "repo";
-}
-
-std::filesystem::path default_reqpack_self_update_build_path() {
-    return reqpack_data_directory() / "self" / "build";
 }
 
 std::filesystem::path default_reqpack_self_update_binary_directory() {
@@ -1351,17 +1341,10 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
     const sol::optional<sol::table> selfUpdate = root["selfUpdate"];
     if (selfUpdate.has_value()) {
         assign_if_present(selfUpdate.value(), "repoUrl", config.selfUpdate.repoUrl);
-        assign_if_present(selfUpdate.value(), "branch", config.selfUpdate.branch);
-        assign_if_present(selfUpdate.value(), "repoPath", config.selfUpdate.repoPath);
-        assign_if_present(selfUpdate.value(), "buildPath", config.selfUpdate.buildPath);
+        assign_if_present(selfUpdate.value(), "releaseApiBaseUrl", config.selfUpdate.releaseApiBaseUrl);
+        assign_if_present(selfUpdate.value(), "releaseTag", config.selfUpdate.releaseTag);
         assign_if_present(selfUpdate.value(), "binaryDirectory", config.selfUpdate.binaryDirectory);
         assign_if_present(selfUpdate.value(), "linkPath", config.selfUpdate.linkPath);
-    }
-    if (!config.selfUpdate.repoPath.empty()) {
-        config.selfUpdate.repoPath = expand_user_path(config.selfUpdate.repoPath).string();
-    }
-    if (!config.selfUpdate.buildPath.empty()) {
-        config.selfUpdate.buildPath = expand_user_path(config.selfUpdate.buildPath).string();
     }
     if (!config.selfUpdate.binaryDirectory.empty()) {
         config.selfUpdate.binaryDirectory = expand_user_path(config.selfUpdate.binaryDirectory).string();

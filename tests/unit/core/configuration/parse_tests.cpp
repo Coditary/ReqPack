@@ -85,8 +85,6 @@ TEST_CASE("configuration resolves XDG directories with standard fallbacks", "[un
     CHECK(default_reqpack_repo_cache_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "repos");
     CHECK(default_reqpack_history_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "history");
     CHECK(default_reqpack_rqp_state_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "rqp" / "state");
-    CHECK(default_reqpack_self_update_repo_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "self" / "repo");
-    CHECK(default_reqpack_self_update_build_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "self" / "build");
     CHECK(default_reqpack_self_update_binary_directory() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "self" / "bin");
     CHECK(default_reqpack_self_update_link_path() == tempDir.path() / "home" / ".local" / "bin" / "rqp");
     CHECK(default_reqpack_security_index_path() == tempDir.path() / "home" / ".local" / "share" / "reqpack" / "security" / "index");
@@ -113,8 +111,6 @@ TEST_CASE("configuration honors explicit XDG directories", "[unit][configuration
     CHECK(config.registry.remotePluginsPath == "registry");
     CHECK(std::filesystem::path(config.history.historyPath) == tempDir.path() / "data" / "reqpack" / "history");
     CHECK(std::filesystem::path(config.rqp.statePath) == tempDir.path() / "data" / "reqpack" / "rqp" / "state");
-    CHECK(std::filesystem::path(config.selfUpdate.repoPath) == tempDir.path() / "data" / "reqpack" / "self" / "repo");
-    CHECK(std::filesystem::path(config.selfUpdate.buildPath) == tempDir.path() / "data" / "reqpack" / "self" / "build");
     CHECK(std::filesystem::path(config.selfUpdate.binaryDirectory) == tempDir.path() / "data" / "reqpack" / "self" / "bin");
     CHECK(std::filesystem::path(config.selfUpdate.linkPath) == reqpack_user_home() / ".local" / "bin" / "rqp");
     CHECK(std::filesystem::path(config.security.indexPath) == tempDir.path() / "data" / "reqpack" / "security" / "index");
@@ -427,9 +423,8 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
             },
             selfUpdate = {
                 repoUrl = "https://example.test/ReqPack.git",
-                branch = "stable",
-                repoPath = "~/self/repo",
-                buildPath = "~/self/build",
+                releaseApiBaseUrl = "https://api.example.test",
+                releaseTag = "v9.9.9",
                 binaryDirectory = "~/self/bin",
                 linkPath = "~/bin/rqp",
             },
@@ -502,9 +497,8 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     });
     CHECK(std::filesystem::path(config.rqp.statePath) == home / "rqp-state");
     CHECK(config.selfUpdate.repoUrl == "https://example.test/ReqPack.git");
-    CHECK(config.selfUpdate.branch == "stable");
-    CHECK(std::filesystem::path(config.selfUpdate.repoPath) == home / "self/repo");
-    CHECK(std::filesystem::path(config.selfUpdate.buildPath) == home / "self/build");
+    CHECK(config.selfUpdate.releaseApiBaseUrl == "https://api.example.test");
+    CHECK(config.selfUpdate.releaseTag == "v9.9.9");
     CHECK(std::filesystem::path(config.selfUpdate.binaryDirectory) == home / "self/bin");
     CHECK(std::filesystem::path(config.selfUpdate.linkPath) == home / "bin/rqp");
 }

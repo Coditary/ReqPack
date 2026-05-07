@@ -1,5 +1,6 @@
 #include "cli/cli.h"
 #include "core/configuration.h"
+#include "core/downloader.h"
 #include "core/host_info.h"
 #include "core/orchestrator.h"
 #include "core/plugin_test_runner.h"
@@ -10,28 +11,33 @@
 #include "output/logger.h"
 #include "plugins/lua_bridge.h"
 
+#include <boost/property_tree/json_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 #include <curl/curl.h>
 
+#include <array>
 #include <cctype>
 #include <cerrno>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
-#include <fcntl.h>
 #include <set>
 #include <spawn.h>
 #include <sstream>
 #include <string_view>
 #include <sys/wait.h>
-#include <unistd.h>
 
 extern char** environ;
 
 namespace {
 
 constexpr const char* DEFAULT_MAIN_REGISTRY_URL = "https://github.com/Coditary/rqp-registry.git";
+constexpr const char* DEFAULT_SELF_UPDATE_RELEASE_API_BASE_URL = "https://api.github.com";
+
+using boost::property_tree::ptree;
 
 void configure_logger_from_config(Logger& logger, const ReqPackConfig& config) {
     logger.setLevel(to_string(config.logging.level));
@@ -144,6 +150,14 @@ std::string trim_copy(const std::string& value) {
     }
     const std::size_t last = value.find_last_not_of(" \t\r\n");
     return value.substr(first, last - first + 1);
+}
+
+std::optional<std::string> trim_line(const std::string& value) {
+    const std::string trimmed = trim_copy(value);
+    if (trimmed.empty()) {
+        return std::nullopt;
+    }
+    return trimmed;
 }
 
 std::vector<StdinCommand> read_stdin_commands(std::istream& input) {
@@ -518,100 +532,6 @@ std::vector<std::string> merged_stream_command_arguments(
     return merged;
 }
 
-std::string escape_shell_arg(const std::string& value) {
-    std::string escaped{"'"};
-    for (char c : value) {
-        if (c == '\'') {
-            escaped += "'\\''";
-        } else {
-            escaped.push_back(c);
-        }
-    }
-    escaped.push_back('\'');
-    return escaped;
-}
-
-int normalize_exit_code(const int status) {
-    if (status == -1) {
-        return -1;
-    }
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
-    if (WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
-    }
-    return status;
-}
-
-struct ProcessResult {
-    int exitCode{-1};
-    std::string output;
-};
-
-ProcessResult run_command_capture_status(const std::string& command) {
-    int outputPipe[2];
-    if (::pipe(outputPipe) != 0) {
-        return {};
-    }
-
-    const int devNull = ::open("/dev/null", O_RDONLY);
-    if (devNull < 0) {
-        (void)::close(outputPipe[0]);
-        (void)::close(outputPipe[1]);
-        return {};
-    }
-
-    const pid_t child = ::fork();
-    if (child < 0) {
-        (void)::close(devNull);
-        (void)::close(outputPipe[0]);
-        (void)::close(outputPipe[1]);
-        return {};
-    }
-
-    if (child == 0) {
-        (void)::dup2(devNull, STDIN_FILENO);
-        (void)::dup2(outputPipe[1], STDOUT_FILENO);
-        (void)::dup2(outputPipe[1], STDERR_FILENO);
-        (void)::close(devNull);
-        (void)::close(outputPipe[0]);
-        (void)::close(outputPipe[1]);
-        ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
-        _exit(127);
-    }
-
-    (void)::close(devNull);
-    (void)::close(outputPipe[1]);
-
-    std::string output;
-    char buffer[4096];
-    while (true) {
-        const ssize_t bytesRead = ::read(outputPipe[0], buffer, sizeof(buffer));
-        if (bytesRead > 0) {
-            output.append(buffer, static_cast<std::size_t>(bytesRead));
-            continue;
-        }
-        if (bytesRead == 0) {
-            break;
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        break;
-    }
-    (void)::close(outputPipe[0]);
-
-    int status = -1;
-    while (::waitpid(child, &status, 0) < 0) {
-        if (errno != EINTR) {
-            break;
-        }
-    }
-
-    return ProcessResult{.exitCode = normalize_exit_code(status), .output = std::move(output)};
-}
-
 bool run_process(const std::vector<std::string>& arguments, const std::filesystem::path& workingDirectory) {
     if (arguments.empty()) {
         return false;
@@ -655,24 +575,6 @@ bool run_process(const std::vector<std::string>& arguments, const std::filesyste
     }
 
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-}
-
-std::optional<std::string> trim_line(const std::string& value) {
-    const std::string trimmed = trim_copy(value);
-    if (trimmed.empty()) {
-        return std::nullopt;
-    }
-    return trimmed;
-}
-
-std::optional<std::string> git_current_commit(const std::filesystem::path& repoPath) {
-    const ProcessResult result = run_command_capture_status(
-        "git -C " + escape_shell_arg(repoPath.string()) + " rev-parse --verify HEAD"
-    );
-    if (result.exitCode != 0) {
-        return std::nullopt;
-    }
-    return trim_line(result.output);
 }
 
 bool ensure_directory(const std::filesystem::path& path) {
@@ -726,130 +628,221 @@ bool replace_symlink_atomically(const std::filesystem::path& target, const std::
     return !error;
 }
 
-std::string binary_name_for_commit(const std::string& commit) {
-    return "rqp-" + commit;
-}
-
-bool sync_self_update_repository(const SelfUpdateConfig& config, Logger& logger) {
-    const std::filesystem::path repoPath(config.repoPath);
-    if (!ensure_directory(repoPath.parent_path())) {
-        logger.diagnostic(self_update_diagnostic(
-            "Self-update setup failed",
-            "ReqPack could not create parent directory for self-update repository checkout.",
-            "Verify filesystem permissions and that parent path exists and is writable.",
-            repoPath.parent_path().string()
-        ));
-        return false;
-    }
-
-    const std::filesystem::path gitDirectory = repoPath / ".git";
-    if (!std::filesystem::exists(gitDirectory)) {
-        logger.stdout("self-update: clone repository");
-        if (!run_process({
-                "git", "clone", "--branch", config.branch, "--single-branch", config.repoUrl, repoPath.string()
-            }, std::filesystem::current_path())) {
-            logger.diagnostic(self_update_diagnostic(
-                "Self-update repository clone failed",
-                "Git could not clone configured ReqPack repository.",
-                "Check repository URL, network access, and local git setup.",
-                config.repoUrl
-            ));
-            return false;
+std::string sanitize_release_identifier(std::string value) {
+    for (char& ch : value) {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        if (!(std::isalnum(c) || ch == '.' || ch == '-' || ch == '_')) {
+            ch = '_';
         }
-        return true;
     }
-
-    logger.stdout("self-update: checkout branch");
-    if (!run_process({"git", "checkout", config.branch}, repoPath)) {
-        logger.diagnostic(self_update_diagnostic(
-            "Self-update branch checkout failed",
-            "Configured branch could not be checked out in local self-update repository.",
-            "Verify branch name and repository state, then retry self-update.",
-            config.branch
-        ));
-        return false;
-    }
-    logger.stdout("self-update: pull latest commit");
-    if (!run_process({"git", "pull", "--ff-only", "origin", config.branch}, repoPath)) {
-        logger.diagnostic(self_update_diagnostic(
-            "Self-update fetch failed",
-            "ReqPack could not fast-forward local self-update repository to configured branch.",
-            "Check remote access, branch protection, and whether local repo has divergent changes.",
-            config.branch
-        ));
-        return false;
-    }
-    return true;
+    return value;
 }
 
-bool build_self_update_binary(const ReqPackConfig& config, const std::string& commit, std::filesystem::path& installedBinaryPath, Logger& logger) {
-    const std::filesystem::path repoPath(config.selfUpdate.repoPath);
-    const std::filesystem::path buildPath = std::filesystem::path(config.selfUpdate.buildPath) / commit;
-    const std::filesystem::path outputBinary = std::filesystem::path(config.selfUpdate.binaryDirectory) / binary_name_for_commit(commit);
-    const std::filesystem::path candidateBinary = buildPath / "rqp";
-
-    installedBinaryPath = outputBinary;
-    if (std::filesystem::exists(outputBinary)) {
-        logger.stdout("self-update: binary already built for commit " + commit);
-        return true;
+std::string normalized_self_update_release_api_base_url(const SelfUpdateConfig& config) {
+    std::string value = trim_copy(config.releaseApiBaseUrl);
+    if (value.empty()) {
+        value = DEFAULT_SELF_UPDATE_RELEASE_API_BASE_URL;
     }
-
-    if (!ensure_directory(buildPath) || !ensure_directory(outputBinary.parent_path())) {
-        logger.diagnostic(self_update_diagnostic(
-            "Self-update build directory setup failed",
-            "ReqPack could not create build or install directories for new binary.",
-            "Check disk permissions and free space in self-update paths.",
-            buildPath.string()
-        ));
-        return false;
+    while (!value.empty() && value.back() == '/') {
+        value.pop_back();
     }
+    return value;
+}
 
-    logger.stdout("self-update: configure build");
-    if (!run_process({
-            "cmake",
-            "-S", repoPath.string(),
-            "-B", buildPath.string(),
-            "-DCMAKE_BUILD_TYPE=Release"
-        }, repoPath)) {
-        logger.diagnostic(self_update_diagnostic(
-            "Self-update configure step failed",
-            "CMake could not configure ReqPack build from self-update repository.",
-            "Check build dependencies and inspect CMake output above for missing packages or flags.",
-            buildPath.string()
-        ));
-        return false;
+std::string release_tag_for_config(const SelfUpdateConfig& config) {
+    const std::string configured = trim_copy(config.releaseTag);
+    return configured.empty() ? std::string{"latest"} : configured;
+}
+
+std::optional<std::pair<std::string, std::string>> parse_release_owner_repo(const std::string& repoUrl) {
+    const std::string trimmed = trim_copy(repoUrl);
+    if (trimmed.empty()) {
+        return std::nullopt;
     }
 
-    logger.stdout("self-update: build binary");
-    if (!run_process({"cmake", "--build", buildPath.string(), "--target", "ReqPack"}, repoPath)) {
-        logger.diagnostic(self_update_diagnostic(
-            "Self-update build step failed",
-            "ReqPack source fetched successfully, but compilation of new binary failed.",
-            "Inspect compiler output above and ensure required build dependencies are installed.",
-            buildPath.string()
-        ));
-        return false;
+    auto normalize_path = [](std::string path) {
+        while (!path.empty() && path.front() == '/') {
+            path.erase(path.begin());
+        }
+        while (!path.empty() && path.back() == '/') {
+            path.pop_back();
+        }
+        if (path.size() > 4 && path.substr(path.size() - 4) == ".git") {
+            path.erase(path.size() - 4);
+        }
+        return path;
+    };
+
+    std::string path = trimmed;
+    if (const std::size_t schemePos = path.find("://"); schemePos != std::string::npos) {
+        const std::size_t hostEnd = path.find('/', schemePos + 3);
+        if (hostEnd == std::string::npos) {
+            return std::nullopt;
+        }
+        path = path.substr(hostEnd + 1);
+    } else if (const std::size_t colon = path.find(':'); colon != std::string::npos && path.find('@') != std::string::npos) {
+        path = path.substr(colon + 1);
     }
 
-    if (!std::filesystem::exists(candidateBinary)) {
-        logger.diagnostic(self_update_diagnostic(
-            "Self-update build produced no binary",
-            "Build command completed, but expected ReqPack binary was not found.",
-            "Inspect build directory and build target configuration, then retry self-update.",
-            candidateBinary.string()
-        ));
+    path = normalize_path(path);
+    const std::size_t lastSlash = path.rfind('/');
+    if (lastSlash == std::string::npos) {
+        return std::nullopt;
+    }
+    const std::size_t secondLastSlash = path.rfind('/', lastSlash - 1);
+    const std::size_t ownerStart = secondLastSlash == std::string::npos ? 0 : secondLastSlash + 1;
+    const std::string owner = path.substr(ownerStart, lastSlash - ownerStart);
+    const std::string repo = path.substr(lastSlash + 1);
+    if (!owner.empty() && !repo.empty()) {
+        return std::make_pair(owner, repo);
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::string> self_update_release_target(const HostInfoSnapshot& snapshot) {
+    if (!snapshot.platform.target.empty()) {
+        if (snapshot.platform.target == "x86_64-linux" || snapshot.platform.target == "aarch64-linux" ||
+            snapshot.platform.target == "x86_64-darwin" || snapshot.platform.target == "aarch64-darwin") {
+            return snapshot.platform.target;
+        }
+    }
+    return std::nullopt;
+}
+
+std::string self_update_release_api_url(const SelfUpdateConfig& config, const std::string& owner, const std::string& repo) {
+    const std::string base = normalized_self_update_release_api_base_url(config);
+    const std::string tag = release_tag_for_config(config);
+    if (tag == "latest") {
+        return base + "/repos/" + owner + "/" + repo + "/releases/latest";
+    }
+    return base + "/repos/" + owner + "/" + repo + "/releases/tags/" + tag;
+}
+
+std::optional<ptree> load_json_tree(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    if (!input) {
+        return std::nullopt;
+    }
+
+    try {
+        ptree tree;
+        boost::property_tree::read_json(input, tree);
+        return tree;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::optional<std::pair<std::string, std::string>> resolve_self_update_asset(
+    const SelfUpdateConfig& config,
+    const std::string& owner,
+    const std::string& repo,
+    const std::string& releaseTarget,
+    const std::filesystem::path& metadataPath
+) {
+    const std::optional<ptree> tree = load_json_tree(metadataPath);
+    if (!tree.has_value()) {
+        return std::nullopt;
+    }
+
+    const std::string tagName = trim_copy(tree->get<std::string>("tag_name", {}));
+    if (tagName.empty()) {
+        return std::nullopt;
+    }
+
+    const boost::optional<const ptree&> assets = tree->get_child_optional("assets");
+    if (!assets) {
+        return std::nullopt;
+    }
+
+    const std::string expectedAssetName = "rqp-" + tagName + "-" + releaseTarget + ".tar.gz";
+    for (const auto& child : assets.get()) {
+        const std::string assetName = trim_copy(child.second.get<std::string>("name", {}));
+        if (assetName != expectedAssetName) {
+            continue;
+        }
+
+        std::string assetUrl = trim_copy(child.second.get<std::string>("browser_download_url", {}));
+        if (assetUrl.empty()) {
+            assetUrl = "https://github.com/" + owner + "/" + repo + "/releases/download/" + tagName + "/" + assetName;
+        }
+        return std::make_pair(tagName, assetUrl);
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::filesystem::path> create_self_update_temp_directory() {
+    std::error_code error;
+    const std::filesystem::path tempDirectory = std::filesystem::temp_directory_path(error);
+    if (error) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path base = tempDirectory / "reqpack-self-update";
+    std::filesystem::create_directories(base, error);
+    if (error) {
+        return std::nullopt;
+    }
+
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const std::filesystem::path candidate = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(std::rand()));
+        error.clear();
+        if (std::filesystem::create_directory(candidate, error)) {
+            return candidate;
+        }
+        if (error && error != std::errc::file_exists) {
+            return std::nullopt;
+        }
+    }
+
+    return std::nullopt;
+}
+
+bool remove_path_quietly(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::remove_all(path, error);
+    return !error;
+}
+
+bool extract_release_archive(const std::filesystem::path& archivePath, const std::filesystem::path& destinationPath) {
+    if (!ensure_directory(destinationPath)) {
         return false;
     }
-    if (!copy_file_with_mode(candidateBinary, outputBinary)) {
-        logger.diagnostic(self_update_diagnostic(
-            "Self-update binary install failed",
-            "Compiled binary could not be copied into configured self-update binary directory.",
-            "Check filesystem permissions for self-update binary directory.",
-            outputBinary.string()
-        ));
-        return false;
+    return run_process({"tar", "-xzf", archivePath.string(), "-C", destinationPath.string()}, std::filesystem::current_path());
+}
+
+std::optional<std::filesystem::path> locate_extracted_binary(const std::filesystem::path& directory) {
+    std::error_code error;
+    for (auto it = std::filesystem::recursive_directory_iterator(directory, error); it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+        if (error) {
+            return std::nullopt;
+        }
+        if (!it->is_regular_file()) {
+            continue;
+        }
+        if (it->path().filename() == "rqp") {
+            return it->path();
+        }
     }
-    return true;
+    return std::nullopt;
+}
+
+std::optional<std::string> current_link_target_name(const std::filesystem::path& linkPath) {
+    std::error_code error;
+    if (!std::filesystem::exists(linkPath, error) || error) {
+        return std::nullopt;
+    }
+    if (!std::filesystem::is_symlink(linkPath, error) || error) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path target = std::filesystem::read_symlink(linkPath, error);
+    if (error || target.empty()) {
+        return std::nullopt;
+    }
+    return target.filename().string();
 }
 
 bool is_self_update_command(const std::vector<std::string>& arguments) {
@@ -912,59 +905,165 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         ));
         return 1;
     }
-    if (config.selfUpdate.branch.empty()) {
+
+    const std::optional<std::pair<std::string, std::string>> ownerRepo = parse_release_owner_repo(config.selfUpdate.repoUrl);
+    if (!ownerRepo.has_value()) {
         logger.diagnostic(self_update_diagnostic(
-            "Self-update branch is missing",
-            "ReqPack does not know which branch to pull for self-update.",
-            "Set selfUpdate.branch in config before running self-update."
+            "Self-update repository is unsupported",
+            "Configured self-update repository could not be mapped to a release owner and repository name.",
+            "Use repository URL that ends with `/<owner>/<repo>.git` so release API path can be derived.",
+            config.selfUpdate.repoUrl
         ));
         return 1;
     }
-    if (config.selfUpdate.repoPath.empty() || config.selfUpdate.buildPath.empty() ||
-        config.selfUpdate.binaryDirectory.empty() || config.selfUpdate.linkPath.empty()) {
+
+    if (config.selfUpdate.binaryDirectory.empty() || config.selfUpdate.linkPath.empty()) {
         logger.diagnostic(self_update_diagnostic(
             "Self-update paths are incomplete",
             "One or more required self-update paths are missing from configuration.",
-            "Configure repoPath, buildPath, binaryDirectory, and linkPath before running self-update."
+            "Configure binaryDirectory and linkPath before running self-update."
         ));
         return 1;
     }
 
-    const std::filesystem::path repoPath(config.selfUpdate.repoPath);
-    const std::optional<std::string> previousCommit = std::filesystem::exists(repoPath / ".git")
-        ? git_current_commit(repoPath)
-        : std::nullopt;
-
-    if (!sync_self_update_repository(config.selfUpdate, logger)) {
-        return 1;
-    }
-
-    const std::optional<std::string> currentCommit = git_current_commit(repoPath);
-    if (!currentCommit.has_value()) {
+    const std::shared_ptr<const HostInfoSnapshot> snapshot = HostInfoService::currentSnapshot();
+    const std::optional<std::string> releaseTarget = self_update_release_target(*snapshot);
+    if (!releaseTarget.has_value()) {
         logger.diagnostic(self_update_diagnostic(
-            "Self-update commit lookup failed",
-            "Local self-update repository does not have a readable current commit.",
-            "Verify repository checkout under selfUpdate.repoPath and rerun self-update.",
-            repoPath.string()
+            "Self-update target is unsupported",
+            "ReqPack does not have a matching release target for this host architecture.",
+            "Use a supported release target or install ReqPack manually for this platform.",
+            snapshot->platform.target.empty() ? (snapshot->platform.arch + "-" + snapshot->platform.osFamily) : snapshot->platform.target
         ));
         return 1;
     }
 
-    std::filesystem::path installedBinaryPath;
-    if (!build_self_update_binary(config, currentCommit.value(), installedBinaryPath, logger)) {
+    const std::optional<std::filesystem::path> tempDirectory = create_self_update_temp_directory();
+    if (!tempDirectory.has_value()) {
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update workspace setup failed",
+            "ReqPack could not create a temporary working directory for release download.",
+            "Check temporary-directory permissions and free space, then retry self-update."
+        ));
+        return 1;
+    }
+
+    const std::filesystem::path tempPath = tempDirectory.value();
+    const std::filesystem::path metadataPath = tempPath / "release.json";
+    const std::filesystem::path archivePath = tempPath / "rqp.tar.gz";
+    const std::filesystem::path extractPath = tempPath / "extract";
+    const std::filesystem::path linkPath(config.selfUpdate.linkPath);
+    const std::filesystem::path binaryDirectory(config.selfUpdate.binaryDirectory);
+    const std::optional<std::string> previousLinkTargetName = current_link_target_name(linkPath);
+    Downloader downloader(nullptr, config);
+
+    const auto cleanup = [&tempPath]() {
+        (void)remove_path_quietly(tempPath);
+    };
+
+    logger.stdout("self-update: fetch release metadata");
+    if (!downloader.download(
+            self_update_release_api_url(config.selfUpdate, ownerRepo->first, ownerRepo->second),
+            metadataPath.string())) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update metadata download failed",
+            "ReqPack could not read release metadata from configured release API.",
+            "Check network access, releaseApiBaseUrl, repository visibility, and selected release tag."
+        ));
+        return 1;
+    }
+
+    const std::optional<std::pair<std::string, std::string>> asset = resolve_self_update_asset(
+        config.selfUpdate,
+        ownerRepo->first,
+        ownerRepo->second,
+        releaseTarget.value(),
+        metadataPath
+    );
+    if (!asset.has_value()) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update release asset is missing",
+            "Configured release does not contain a binary archive for this host target.",
+            "Publish asset `rqp-<tag>-" + releaseTarget.value() + ".tar.gz` or choose a different release tag.",
+            releaseTarget.value()
+        ));
+        return 1;
+    }
+
+    logger.stdout("self-update: download release archive");
+    if (!downloader.download(asset->second, archivePath.string())) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update archive download failed",
+            "ReqPack found matching release metadata, but binary archive download failed.",
+            "Check release asset availability and network access, then retry self-update.",
+            asset->second
+        ));
+        return 1;
+    }
+
+    logger.stdout("self-update: extract release archive");
+    if (!extract_release_archive(archivePath, extractPath)) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update archive extraction failed",
+            "Downloaded release archive could not be extracted on this system.",
+            "Ensure `tar` is available and the release asset is a valid `.tar.gz` archive.",
+            archivePath.string()
+        ));
+        return 1;
+    }
+
+    const std::optional<std::filesystem::path> extractedBinary = locate_extracted_binary(extractPath);
+    if (!extractedBinary.has_value()) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update archive is invalid",
+            "Release archive was extracted, but no `rqp` binary was found inside it.",
+            "Republish release archive with `rqp` binary at archive root."
+        ));
+        return 1;
+    }
+
+    if (!ensure_directory(binaryDirectory)) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update install directory setup failed",
+            "ReqPack could not create binary install directory for downloaded release.",
+            "Check write permissions for selfUpdate.binaryDirectory.",
+            binaryDirectory.string()
+        ));
+        return 1;
+    }
+
+    const std::filesystem::path installedBinaryPath = binaryDirectory /
+        ("rqp-" + sanitize_release_identifier(asset->first) + "-" + releaseTarget.value());
+    if (!copy_file_with_mode(extractedBinary.value(), installedBinaryPath)) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update binary install failed",
+            "Downloaded ReqPack binary could not be copied into configured self-update binary directory.",
+            "Check filesystem permissions for selfUpdate.binaryDirectory.",
+            installedBinaryPath.string()
+        ));
         return 1;
     }
 
     logger.stdout("self-update: update local symlink");
-    if (!replace_symlink_atomically(installedBinaryPath, std::filesystem::path(config.selfUpdate.linkPath))) {
+    if (!replace_symlink_atomically(installedBinaryPath, linkPath)) {
+        cleanup();
         logger.diagnostic(self_update_diagnostic(
             "Self-update symlink update failed",
-            "New binary was built, but ReqPack could not update configured executable symlink.",
+            "New binary was downloaded, but ReqPack could not update configured executable symlink.",
             "Check write permissions for configured link path and parent directory.",
             config.selfUpdate.linkPath
         ));
         return 1;
     }
+
+    cleanup();
     if (!HostInfoService::invalidateCache()) {
         logger.diagnostic(make_warning_diagnostic(
             "self-update",
@@ -977,10 +1076,10 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         ));
     }
 
-    if (previousCommit.has_value() && previousCommit.value() == currentCommit.value()) {
-        logger.stdout("self-update complete: already on latest commit " + currentCommit.value());
+    if (previousLinkTargetName.has_value() && previousLinkTargetName.value() == installedBinaryPath.filename().string()) {
+        logger.stdout("self-update complete: already on release " + asset->first);
     } else {
-        logger.stdout("self-update complete: now on commit " + currentCommit.value());
+        logger.stdout("self-update complete: now on release " + asset->first);
     }
     logger.stdout("self-update link: " + config.selfUpdate.linkPath);
     return 0;
