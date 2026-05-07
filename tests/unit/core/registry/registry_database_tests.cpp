@@ -54,10 +54,12 @@ TEST_CASE("registry database normalizes git source url and strips query fragment
     CHECK(registry_database_git_source_url("git+https://github.com/org/repo.git") == "https://github.com/org/repo.git");
     CHECK(registry_database_git_source_url("https://github.com/org/repo.git") == "https://github.com/org/repo.git");
     CHECK(registry_database_git_source_url("https://github.com/org/repo?ref=main") == "https://github.com/org/repo");
+    CHECK(registry_database_git_source_url("git+https://github.com/org/repo.git@main") == "https://github.com/org/repo.git");
     CHECK(registry_database_strip_query_fragment("https://github.com/org/repo.git?ref=main#frag") == "https://github.com/org/repo.git");
     CHECK(registry_database_git_source_ref("git+https://github.com/org/repo.git?ref=v1.2.3") == "v1.2.3");
     CHECK(registry_database_git_source_ref("https://github.com/org/repo.git#v2.0.0") == "v2.0.0");
     CHECK(registry_database_git_source_ref("https://github.com/org/repo?ref=v1.2.3") == "v1.2.3");
+    CHECK(registry_database_git_source_ref("git+https://github.com/org/repo.git@main") == "main");
     CHECK(registry_database_git_source_with_ref("git+https://github.com/org/repo.git", "v1.2.3") == "git+https://github.com/org/repo.git?ref=v1.2.3");
     CHECK(registry_database_git_source_with_ref("https://github.com/org/repo", "v1.2.3") == "https://github.com/org/repo?ref=v1.2.3");
 }

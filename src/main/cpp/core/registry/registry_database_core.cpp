@@ -273,7 +273,16 @@ bool registry_database_is_git_source(const std::string& source) {
 
 std::string registry_database_git_source_url(const std::string& source) {
     const std::string raw = starts_with(source, "git+") ? source.substr(4) : source;
-    return registry_database_strip_query_fragment(raw);
+    const std::string stripped = registry_database_strip_query_fragment(raw);
+    const std::size_t schemeEnd = stripped.find("://");
+    const std::size_t at = stripped.rfind('@');
+    if (schemeEnd != std::string::npos && at != std::string::npos && at > schemeEnd + 2) {
+        const std::size_t slashAfterAuthority = stripped.find('/', schemeEnd + 3);
+        if (slashAfterAuthority != std::string::npos && at > slashAfterAuthority) {
+            return stripped.substr(0, at);
+        }
+    }
+    return stripped;
 }
 
 std::string registry_database_git_source_ref(const std::string& source) {
@@ -295,6 +304,16 @@ std::string registry_database_git_source_ref(const std::string& source) {
 
     if (fragmentStart != std::string::npos && fragmentStart + 1 < raw.size()) {
         return raw.substr(fragmentStart + 1);
+    }
+
+    const std::string stripped = registry_database_strip_query_fragment(raw);
+    const std::size_t schemeEnd = stripped.find("://");
+    const std::size_t at = stripped.rfind('@');
+    if (schemeEnd != std::string::npos && at != std::string::npos && at > schemeEnd + 2) {
+        const std::size_t slashAfterAuthority = stripped.find('/', schemeEnd + 3);
+        if (slashAfterAuthority != std::string::npos && at > slashAfterAuthority && at + 1 < stripped.size()) {
+            return stripped.substr(at + 1);
+        }
     }
 
     return {};

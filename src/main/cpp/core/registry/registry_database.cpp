@@ -2,12 +2,15 @@
 #include "core/registry/registry_database_core.h"
 #include "core/registry/registry_json_parser.h"
 #include "core/common/version_compare.h"
+#include "output/diagnostic.h"
+#include "output/logger.h"
 
 #include <curl/curl.h>
 
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <fcntl.h>
@@ -25,6 +28,12 @@
 extern char** environ;
 
 namespace {
+
+struct ProcessResult {
+    int exitCode{1};
+    std::string stdoutText{};
+    std::string stderrText{};
+};
 
 constexpr std::string_view META_SEPARATOR = "\n---\n";
 constexpr unsigned int LMDB_MAX_DATABASES = 4;
@@ -261,23 +270,53 @@ std::uint64_t fnv1a_hash(std::string_view value) {
     return hash;
 }
 
-bool run_process_quiet(const std::vector<std::string>& arguments) {
+ProcessResult run_process_capture(const std::vector<std::string>& arguments) {
+    ProcessResult result;
     if (arguments.empty()) {
-        return false;
+        result.stderrText = "empty command";
+        return result;
+    }
+
+    int stdoutPipe[2];
+    if (::pipe(stdoutPipe) != 0) {
+        result.stderrText = std::string{"pipe(stdout) failed: "} + std::strerror(errno);
+        return result;
+    }
+
+    int stderrPipe[2];
+    if (::pipe(stderrPipe) != 0) {
+        result.stderrText = std::string{"pipe(stderr) failed: "} + std::strerror(errno);
+        (void)::close(stdoutPipe[0]);
+        (void)::close(stdoutPipe[1]);
+        return result;
     }
 
     posix_spawn_file_actions_t fileActions;
     if (posix_spawn_file_actions_init(&fileActions) != 0) {
-        return false;
+        result.stderrText = "posix_spawn_file_actions_init failed";
+        (void)::close(stdoutPipe[0]);
+        (void)::close(stdoutPipe[1]);
+        (void)::close(stderrPipe[0]);
+        (void)::close(stderrPipe[1]);
+        return result;
     }
 
     const bool actionsReady =
         posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0 &&
-        posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0 &&
-        posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0;
+        posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe[1], STDOUT_FILENO) == 0 &&
+        posix_spawn_file_actions_adddup2(&fileActions, stderrPipe[1], STDERR_FILENO) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[0]) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[1]) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, stderrPipe[0]) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, stderrPipe[1]) == 0;
     if (!actionsReady) {
         posix_spawn_file_actions_destroy(&fileActions);
-        return false;
+        result.stderrText = "failed to configure process pipes";
+        (void)::close(stdoutPipe[0]);
+        (void)::close(stdoutPipe[1]);
+        (void)::close(stderrPipe[0]);
+        (void)::close(stderrPipe[1]);
+        return result;
     }
 
     std::vector<char*> argv;
@@ -290,72 +329,20 @@ bool run_process_quiet(const std::vector<std::string>& arguments) {
     pid_t pid = 0;
     const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), ::environ);
     posix_spawn_file_actions_destroy(&fileActions);
+    (void)::close(stdoutPipe[1]);
+    (void)::close(stderrPipe[1]);
     if (spawnResult != 0) {
-        return false;
+        result.stderrText = std::string{"spawn failed: "} + std::strerror(spawnResult);
+        (void)::close(stdoutPipe[0]);
+        (void)::close(stderrPipe[0]);
+        return result;
     }
 
-    int status = 0;
-    while (waitpid(pid, &status, 0) == -1) {
-        if (errno != EINTR) {
-            return false;
-        }
-    }
-
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-}
-
-std::optional<std::string> run_process_capture_stdout(const std::vector<std::string>& arguments) {
-    if (arguments.empty()) {
-        return std::nullopt;
-    }
-
-    int outputPipe[2];
-    if (::pipe(outputPipe) != 0) {
-        return std::nullopt;
-    }
-
-    posix_spawn_file_actions_t fileActions;
-    if (posix_spawn_file_actions_init(&fileActions) != 0) {
-        (void)::close(outputPipe[0]);
-        (void)::close(outputPipe[1]);
-        return std::nullopt;
-    }
-
-    bool actionsReady =
-        posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0 &&
-        posix_spawn_file_actions_adddup2(&fileActions, outputPipe[1], STDOUT_FILENO) == 0 &&
-        posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0 &&
-        posix_spawn_file_actions_addclose(&fileActions, outputPipe[0]) == 0 &&
-        posix_spawn_file_actions_addclose(&fileActions, outputPipe[1]) == 0;
-    if (!actionsReady) {
-        posix_spawn_file_actions_destroy(&fileActions);
-        (void)::close(outputPipe[0]);
-        (void)::close(outputPipe[1]);
-        return std::nullopt;
-    }
-
-    std::vector<char*> argv;
-    argv.reserve(arguments.size() + 1);
-    for (const std::string& argument : arguments) {
-        argv.push_back(const_cast<char*>(argument.c_str()));
-    }
-    argv.push_back(nullptr);
-
-    pid_t pid = 0;
-    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), ::environ);
-    posix_spawn_file_actions_destroy(&fileActions);
-    (void)::close(outputPipe[1]);
-    if (spawnResult != 0) {
-        (void)::close(outputPipe[0]);
-        return std::nullopt;
-    }
-
-    std::string output;
     char buffer[4096];
     while (true) {
-        const ssize_t bytesRead = ::read(outputPipe[0], buffer, sizeof(buffer));
+        const ssize_t bytesRead = ::read(stdoutPipe[0], buffer, sizeof(buffer));
         if (bytesRead > 0) {
-            output.append(buffer, static_cast<std::size_t>(bytesRead));
+            result.stdoutText.append(buffer, static_cast<std::size_t>(bytesRead));
             continue;
         }
         if (bytesRead == 0) {
@@ -364,22 +351,64 @@ std::optional<std::string> run_process_capture_stdout(const std::vector<std::str
         if (errno == EINTR) {
             continue;
         }
+        result.stderrText += std::string{"read(stdout) failed: "} + std::strerror(errno);
         break;
     }
-    (void)::close(outputPipe[0]);
+    (void)::close(stdoutPipe[0]);
+
+    while (true) {
+        const ssize_t bytesRead = ::read(stderrPipe[0], buffer, sizeof(buffer));
+        if (bytesRead > 0) {
+            result.stderrText.append(buffer, static_cast<std::size_t>(bytesRead));
+            continue;
+        }
+        if (bytesRead == 0) {
+            break;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        result.stderrText += std::string{"read(stderr) failed: "} + std::strerror(errno);
+        break;
+    }
+    (void)::close(stderrPipe[0]);
 
     int status = 0;
     while (waitpid(pid, &status, 0) == -1) {
         if (errno != EINTR) {
-            return std::nullopt;
+            result.stderrText += std::string{"waitpid failed: "} + std::strerror(errno);
+            return result;
         }
     }
 
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return std::nullopt;
+    if (WIFEXITED(status)) {
+        result.exitCode = WEXITSTATUS(status);
+        return result;
     }
 
-    return output;
+    if (WIFSIGNALED(status)) {
+        result.exitCode = 128 + WTERMSIG(status);
+        if (!result.stderrText.empty() && result.stderrText.back() != '\n') {
+            result.stderrText.push_back('\n');
+        }
+        result.stderrText += "terminated by signal " + std::to_string(WTERMSIG(status));
+        return result;
+    }
+
+    result.stderrText += "process ended unexpectedly";
+    return result;
+}
+
+bool run_process_quiet(const std::vector<std::string>& arguments) {
+    return run_process_capture(arguments).exitCode == 0;
+}
+
+std::optional<std::string> run_process_capture_stdout(const std::vector<std::string>& arguments) {
+    const ProcessResult result = run_process_capture(arguments);
+    if (result.exitCode != 0) {
+        return std::nullopt;
+    }
+    return result.stdoutText;
 }
 
 std::string trim_copy(const std::string& value) {
@@ -451,59 +480,136 @@ std::optional<std::string> latest_git_tag_for_source(const std::string& source) 
     return bestTag;
 }
 
-bool sync_git_repository(const ReqPackConfig& config, const std::string& source, const std::string& pluginName) {
+bool sync_git_repository(const ReqPackConfig& config, const std::string& source, const std::string& pluginName, std::string* errorDetails = nullptr) {
     const std::filesystem::path repositoryPath = registry_database_git_repository_cache_path(config, source, pluginName);
     const std::string repositoryUrl = registry_database_git_source_url(source);
     const std::string requestedRef = registry_database_git_source_ref(source);
 
+    const auto set_error = [&](const std::string& step, const ProcessResult& processResult) {
+        if (errorDetails == nullptr) {
+            return;
+        }
+        std::ostringstream message;
+        message << step << " failed for source '" << source << "'";
+        if (!repositoryUrl.empty()) {
+            message << "\nurl: " << repositoryUrl;
+        }
+        if (!requestedRef.empty()) {
+            message << "\nref: " << requestedRef;
+        }
+        message << "\nexit code: " << processResult.exitCode;
+        if (!trim_copy(processResult.stdoutText).empty()) {
+            message << "\nstdout:\n" << trim_copy(processResult.stdoutText);
+        }
+        if (!trim_copy(processResult.stderrText).empty()) {
+            message << "\nstderr:\n" << trim_copy(processResult.stderrText);
+        }
+        *errorDetails = message.str();
+    };
+
     std::error_code directoryError;
     std::filesystem::create_directories(repositoryPath.parent_path(), directoryError);
     if (directoryError) {
+        if (errorDetails != nullptr) {
+            *errorDetails = "create_directories failed for '" + repositoryPath.parent_path().string() + "': " + directoryError.message();
+        }
         return false;
     }
 
     const std::filesystem::path gitDirectory = repositoryPath / ".git";
     if (std::filesystem::exists(gitDirectory)) {
         if (requestedRef.empty()) {
-            if (run_process_quiet({"git", "-C", repositoryPath.string(), "pull", "--ff-only", "--quiet"})) {
+            const ProcessResult pullResult = run_process_capture({"git", "-C", repositoryPath.string(), "pull", "--ff-only", "--quiet"});
+            if (pullResult.exitCode == 0) {
                 return true;
             }
+            set_error("git pull", pullResult);
         } else {
-            const bool fetched = run_process_quiet({"git", "-C", repositoryPath.string(), "fetch", "--tags", "--quiet", "origin"});
-            const bool checkedOut = fetched &&
-                (run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef}) ||
-                 run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", "origin/" + requestedRef}));
+            const ProcessResult fetchResult = run_process_capture({"git", "-C", repositoryPath.string(), "fetch", "--tags", "--quiet", "origin"});
+            const bool fetched = fetchResult.exitCode == 0;
+            ProcessResult checkoutResult;
+            ProcessResult checkoutOriginResult;
+            bool checkedOut = false;
+            if (fetched) {
+                checkoutResult = run_process_capture({"git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef});
+                checkedOut = checkoutResult.exitCode == 0;
+                if (!checkedOut) {
+                    checkoutOriginResult = run_process_capture({"git", "-C", repositoryPath.string(), "checkout", "--quiet", "origin/" + requestedRef});
+                    checkedOut = checkoutOriginResult.exitCode == 0;
+                }
+            }
             if (checkedOut) {
                 if (run_process_quiet({"git", "-C", repositoryPath.string(), "rev-parse", "--verify", "--quiet", "origin/" + requestedRef})) {
                     (void)run_process_quiet({"git", "-C", repositoryPath.string(), "reset", "--hard", "origin/" + requestedRef});
                 }
                 return true;
             }
+            if (!fetched) {
+                set_error("git fetch", fetchResult);
+            } else if (checkoutResult.exitCode != 0) {
+                set_error("git checkout", checkoutResult);
+                if (checkoutOriginResult.exitCode != 0 && errorDetails != nullptr) {
+                    *errorDetails += "\norigin checkout exit code: " + std::to_string(checkoutOriginResult.exitCode);
+                    if (!trim_copy(checkoutOriginResult.stderrText).empty()) {
+                        *errorDetails += "\norigin checkout stderr:\n" + trim_copy(checkoutOriginResult.stderrText);
+                    }
+                }
+            }
         }
 
         std::error_code removeError;
         std::filesystem::remove_all(repositoryPath, removeError);
         if (removeError) {
+            if (errorDetails != nullptr) {
+                *errorDetails = "remove_all failed for stale repository '" + repositoryPath.string() + "': " + removeError.message();
+            }
             return false;
         }
     } else if (std::filesystem::exists(repositoryPath)) {
         std::error_code removeError;
         std::filesystem::remove_all(repositoryPath, removeError);
         if (removeError) {
+            if (errorDetails != nullptr) {
+                *errorDetails = "remove_all failed for existing path '" + repositoryPath.string() + "': " + removeError.message();
+            }
             return false;
         }
     }
 
-    return run_process_quiet({
+    const ProcessResult cloneResult = run_process_capture({
         "git",
         "clone",
         "--quiet",
         repositoryUrl,
         repositoryPath.string()
-    }) && (requestedRef.empty() || (
-        run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef}) ||
-        run_process_quiet({"git", "-C", repositoryPath.string(), "checkout", "--quiet", "origin/" + requestedRef})
-    ));
+    });
+    if (cloneResult.exitCode != 0) {
+        set_error("git clone", cloneResult);
+        return false;
+    }
+
+    if (requestedRef.empty()) {
+        return true;
+    }
+
+    const ProcessResult checkoutResult = run_process_capture({"git", "-C", repositoryPath.string(), "checkout", "--quiet", requestedRef});
+    if (checkoutResult.exitCode == 0) {
+        return true;
+    }
+
+    const ProcessResult checkoutOriginResult = run_process_capture({"git", "-C", repositoryPath.string(), "checkout", "--quiet", "origin/" + requestedRef});
+    if (checkoutOriginResult.exitCode == 0) {
+        return true;
+    }
+
+    set_error("git checkout", checkoutResult);
+    if (errorDetails != nullptr) {
+        *errorDetails += "\norigin checkout exit code: " + std::to_string(checkoutOriginResult.exitCode);
+        if (!trim_copy(checkoutOriginResult.stderrText).empty()) {
+            *errorDetails += "\norigin checkout stderr:\n" + trim_copy(checkoutOriginResult.stderrText);
+        }
+    }
+    return false;
 }
 
 std::optional<std::pair<std::string, std::string>> read_plugin_repository(const std::filesystem::path& repositoryPath, const std::string& pluginName) {
@@ -541,7 +647,19 @@ std::optional<std::pair<std::string, std::string>> fetch_git_plugin_payload(
     const std::string& source,
     const std::string& pluginName
 ) {
-    if (!sync_git_repository(config, source, pluginName)) {
+    std::string errorDetails;
+    if (!sync_git_repository(config, source, pluginName, &errorDetails)) {
+        if (!errorDetails.empty()) {
+            Logger::instance().diagnostic(make_error_diagnostic(
+                "registry",
+                "Plugin source sync failed for '" + pluginName + "'",
+                "ReqPack could not clone, fetch, or checkout plugin source repository.",
+                "Check plugin source URL and ref in registry, then retry.",
+                errorDetails,
+                pluginName,
+                "plugin-source"
+            ));
+        }
         return std::nullopt;
     }
 

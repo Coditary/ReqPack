@@ -2,15 +2,38 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "cli/cli.h"
 #include "core/config/configuration.h"
+#include "core/registry/registry_database.h"
 #include "test_helpers.h"
 
 namespace {
+
+class TempDir {
+public:
+    explicit TempDir(const std::string& prefix)
+        : path_(std::filesystem::temp_directory_path() /
+            (prefix + "-" + std::to_string(std::filesystem::file_time_type::clock::now().time_since_epoch().count()))) {
+        std::filesystem::create_directories(path_);
+    }
+
+    ~TempDir() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    const std::filesystem::path& path() const {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
 
 std::filesystem::path reqpack_user_home() {
     const char* home = std::getenv("HOME");
@@ -103,6 +126,38 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK_FALSE(config.sbom.prettyPrint);
     CHECK_FALSE(config.sbom.includeDependencyEdges);
     CHECK(config.sbom.skipMissingPackages);
+}
+
+TEST_CASE("cli update --all discovers plugins from registry database", "[unit][configuration][cli]") {
+    TempDir tempDir{"reqpack-cli-update-all-registry"};
+    const std::filesystem::path databasePath = tempDir.path() / "registry-db";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+
+    ReqPackConfig config;
+    config.registry.databasePath = databasePath.string();
+    config.registry.pluginDirectory = pluginDirectory.string();
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    RegistrySourceMap sources;
+    sources["dnf"].source = "git+https://github.com/Matographo/dnf.git?ref=main";
+    sources["maven"].source = "git+https://github.com/Matographo/maven.git?ref=main";
+    sources["sys"].source = "git+https://github.com/Coditary/ReqPack.git?ref=main";
+    REQUIRE(database.write_records(sources));
+
+    Cli cli;
+    const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "--all"}, config);
+
+    REQUIRE(requests.size() == 2);
+    CHECK(requests[0].action == ActionType::UPDATE);
+    CHECK(requests[1].action == ActionType::UPDATE);
+    CHECK(requests[0].flags.end() != std::find(requests[0].flags.begin(), requests[0].flags.end(), "all"));
+    CHECK(requests[1].flags.end() != std::find(requests[1].flags.begin(), requests[1].flags.end(), "all"));
+    CHECK(requests[0].flags.end() != std::find(requests[0].flags.begin(), requests[0].flags.end(), "__reqpack-internal-plugin-refresh-all"));
+    CHECK(requests[1].flags.end() != std::find(requests[1].flags.begin(), requests[1].flags.end(), "__reqpack-internal-plugin-refresh-all"));
+    CHECK(((requests[0].system == "dnf" && requests[1].system == "maven") ||
+           (requests[0].system == "maven" && requests[1].system == "dnf")));
 }
 
 TEST_CASE("configuration consumes CLI flags with positional and inline values", "[unit][configuration][cli]") {
