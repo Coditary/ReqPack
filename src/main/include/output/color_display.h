@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/configuration.h"
+#include "core/config/configuration.h"
 #include "output/plain_display.h"
 
 #include <string>
@@ -11,7 +11,7 @@
 // Inherits all formatting logic from PlainDisplay.  Overrides every decorate*
 // hook to wrap the text with the corresponding ANSI spec from the scheme.
 //
-// DisplayColorScheme is defined in core/configuration.h so it can be loaded
+// DisplayColorScheme is defined in core/config/configuration.h so it can be loaded
 // from the Lua config and passed straight through to this class.
 // ─────────────────────────────────────────────────────────────────────────────
 class ColorDisplay : public PlainDisplay {

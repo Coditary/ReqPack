@@ -1,11 +1,11 @@
 #include "plugins/rq_plugin.h"
 
-#include "core/archive_resolver.h"
-#include "core/registry_database.h"
-#include "core/rq_package.h"
-#include "core/rq_repository.h"
-#include "core/rqp_state_store.h"
-#include "core/version_compare.h"
+#include "core/archive/archive_resolver.h"
+#include "core/registry/registry_database.h"
+#include "core/packages/rq_package.h"
+#include "core/packages/rq_repository.h"
+#include "core/state/rqp_state_store.h"
+#include "core/common/version_compare.h"
 
 #include "output/logger.h"
 #include "plugins/exec_rules.h"

@@ -7,8 +7,8 @@
 #include <atomic>
 #include <functional>
 
-#include "core/configuration.h"
-#include "core/types.h"
+#include "core/config/configuration.h"
+#include "core/common/types.h"
 #include "output/logger.h"
 #include "plugins/iplugin.h"
 

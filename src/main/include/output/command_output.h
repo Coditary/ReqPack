@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/types.h"
+#include "core/common/types.h"
 #include "output/idisplay.h"
 
 #include <memory>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/configuration.h"
+#include "core/config/configuration.h"
 #include "output/idisplay.h"
 
 #include <memory>

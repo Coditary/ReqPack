@@ -2,10 +2,10 @@
 
 #include "plugins/iplugin.h"
 
-#include "core/configuration.h"
-#include "core/rq_package.h"
-#include "core/rq_repository.h"
-#include "core/rqp_state_store.h"
+#include "core/config/configuration.h"
+#include "core/packages/rq_package.h"
+#include "core/packages/rq_repository.h"
+#include "core/state/rqp_state_store.h"
 
 #include <filesystem>
 #include <map>

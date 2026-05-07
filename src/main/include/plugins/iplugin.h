@@ -7,10 +7,10 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include "core/configuration.h"
-#include "core/host_info.h"
-#include "core/types.h"
-#include "core/version_compare.h"
+#include "core/config/configuration.h"
+#include "core/host/host_info.h"
+#include "core/common/types.h"
+#include "core/common/version_compare.h"
 #include "output/progress_metrics.h"
 
 #define REQPACK_API_VERSION 4

@@ -57,6 +57,30 @@ Self-update note:
 `rqp update` without package-manager arguments downloads matching release binary from configured release source.
 Release-binary users no longer need local build toolchain for self-update.
 
+## Source Layout
+
+ReqPack source is organized by runtime area first, then by domain where `core` code gets larger:
+
+- `src/main/cpp/main.cpp` for entrypoint and runtime mode selection
+- `src/main/cpp/cli` and `src/main/include/cli` for CLI parsing
+- `src/main/cpp/output` and `src/main/include/output` for display, logging, and command rendering
+- `src/main/cpp/plugins` and `src/main/include/plugins` for plugin bridge and native plugin interfaces
+- `src/main/cpp/core` and `src/main/include/core` for domain-oriented core logic
+
+Inside `core`, files are grouped by domain so navigation is direct:
+
+- `config`, `host`, `manifest`, `archive`, `download`
+- `planning`, `execution`, `registry`, `packages`, `state`
+- `security`, `export`, `remote`, `history`, `plugins`, `common`
+
+Examples:
+
+- `src/main/include/core/registry/registry.h`
+- `src/main/cpp/core/security/validator.cpp`
+- `src/main/cpp/core/remote/serve_remote.cpp`
+- `tests/unit/core/security/*`
+- `tests/integration/core/execution/*`
+
 ## Installation
 
 ### Option 1: Use Release Binary

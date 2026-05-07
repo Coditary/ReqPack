@@ -2,9 +2,9 @@
 
 #include <CLI/CLI.hpp>
 
-#include "core/configuration.h"
-#include "core/registry_database.h"
-#include "core/types.h"
+#include "core/config/configuration.h"
+#include "core/registry/registry_database.h"
+#include "core/common/types.h"
 
 #include <filesystem>
 #include <memory>

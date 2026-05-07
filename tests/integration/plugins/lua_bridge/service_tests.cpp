@@ -12,7 +12,7 @@
 
 #include <catch2/catch.hpp>
 
-#include "core/host_info.h"
+#include "core/host/host_info.h"
 #include "plugins/lua_bridge.h"
 #include "test_helpers.h"
 

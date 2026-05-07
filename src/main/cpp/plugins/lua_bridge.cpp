@@ -1,8 +1,8 @@
 #include "plugins/lua_bridge.h"
 
-#include "core/archive_resolver.h"
-#include "core/downloader.h"
-#include "core/host_info.h"
+#include "core/archive/archive_resolver.h"
+#include "core/download/downloader.h"
+#include "core/host/host_info.h"
 #include "output/progress_metrics_lua.h"
 #include "plugins/exec_rules.h"
 

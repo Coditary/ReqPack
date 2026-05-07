@@ -87,10 +87,6 @@ if(NOT SOL2_INCLUDE_DIR)
 endif()
 
 include_directories(src/main/include)
-include_directories(src/main/include/core)
-include_directories(src/main/include/plugins)
-include_directories(src/main/include/cli)
-include_directories(src/main/include/output)
 
 set(SOURCES
     src/main/cpp/main.cpp
@@ -106,42 +102,42 @@ set(SOURCES
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/plugins/rq_plugin.cpp
-    src/main/cpp/core/configuration.cpp
-    src/main/cpp/core/host_info.cpp
-    src/main/cpp/core/manifest_loader.cpp
-    src/main/cpp/core/archive_resolver.cpp
-    src/main/cpp/core/downloader.cpp
-    src/main/cpp/core/downloader_core.cpp
-    src/main/cpp/core/registry_database.cpp
-    src/main/cpp/core/registry_database_core.cpp
-    src/main/cpp/core/registry_json_parser.cpp
-    src/main/cpp/core/rq_package.cpp
-    src/main/cpp/core/rq_repository.cpp
-    src/main/cpp/core/rqp_state_store.cpp
-    src/main/cpp/core/transaction_database.cpp
-    src/main/cpp/core/transaction_database_core.cpp
-    src/main/cpp/core/orchestrator.cpp
-    src/main/cpp/core/osv_core.cpp
-    src/main/cpp/core/planner.cpp
-    src/main/cpp/core/planner_core.cpp
-    src/main/cpp/core/request_resolution.cpp
-    src/main/cpp/core/security_gateway_service.cpp
-    src/main/cpp/core/audit_exporter.cpp
-    src/main/cpp/core/sbom_exporter.cpp
-    src/main/cpp/core/snapshot_exporter.cpp
-    src/main/cpp/core/validator.cpp
-    src/main/cpp/core/validator_core.cpp
-    src/main/cpp/core/version_compare.cpp
-    src/main/cpp/core/vulnerability_database.cpp
-    src/main/cpp/core/vulnerability_matcher.cpp
-    src/main/cpp/core/vulnerability_sync_service.cpp
-    src/main/cpp/core/serve_remote.cpp
-    src/main/cpp/core/remote_profiles.cpp
-    src/main/cpp/core/remote_client.cpp
-    src/main/cpp/core/executor.cpp
-    src/main/cpp/core/history_manager.cpp
-    src/main/cpp/core/plugin_test_runner.cpp
-    src/main/cpp/core/registry.cpp
+    src/main/cpp/core/archive/archive_resolver.cpp
+    src/main/cpp/core/common/version_compare.cpp
+    src/main/cpp/core/config/configuration.cpp
+    src/main/cpp/core/download/downloader.cpp
+    src/main/cpp/core/download/downloader_core.cpp
+    src/main/cpp/core/execution/executor.cpp
+    src/main/cpp/core/execution/orchestrator.cpp
+    src/main/cpp/core/export/audit_exporter.cpp
+    src/main/cpp/core/export/sbom_exporter.cpp
+    src/main/cpp/core/export/snapshot_exporter.cpp
+    src/main/cpp/core/history/history_manager.cpp
+    src/main/cpp/core/host/host_info.cpp
+    src/main/cpp/core/manifest/manifest_loader.cpp
+    src/main/cpp/core/packages/rq_package.cpp
+    src/main/cpp/core/packages/rq_repository.cpp
+    src/main/cpp/core/planning/planner.cpp
+    src/main/cpp/core/planning/planner_core.cpp
+    src/main/cpp/core/planning/request_resolution.cpp
+    src/main/cpp/core/plugins/plugin_test_runner.cpp
+    src/main/cpp/core/registry/registry.cpp
+    src/main/cpp/core/registry/registry_database.cpp
+    src/main/cpp/core/registry/registry_database_core.cpp
+    src/main/cpp/core/registry/registry_json_parser.cpp
+    src/main/cpp/core/remote/remote_client.cpp
+    src/main/cpp/core/remote/remote_profiles.cpp
+    src/main/cpp/core/remote/serve_remote.cpp
+    src/main/cpp/core/security/osv_core.cpp
+    src/main/cpp/core/security/security_gateway_service.cpp
+    src/main/cpp/core/security/validator.cpp
+    src/main/cpp/core/security/validator_core.cpp
+    src/main/cpp/core/security/vulnerability_database.cpp
+    src/main/cpp/core/security/vulnerability_matcher.cpp
+    src/main/cpp/core/security/vulnerability_sync_service.cpp
+    src/main/cpp/core/state/rqp_state_store.cpp
+    src/main/cpp/core/state/transaction_database.cpp
+    src/main/cpp/core/state/transaction_database_core.cpp
 )
 
 add_executable(ReqPack ${SOURCES})
@@ -163,22 +159,22 @@ add_executable(exec_rules_integration_tests
 
 add_executable(core_integration_tests
     tests/cpp/test_main.cpp
-    tests/integration/core/executor/service_tests.cpp
-    tests/integration/core/orchestrator/service_tests.cpp
-    tests/integration/core/plugin_test_runner/service_tests.cpp
-    tests/integration/core/planner/service_tests.cpp
-    tests/integration/core/registry/service_tests.cpp
+    tests/integration/core/execution/executor_service_tests.cpp
+    tests/integration/core/execution/orchestrator_service_tests.cpp
+    tests/integration/core/plugins/plugin_test_runner_service_tests.cpp
+    tests/integration/core/planning/planner_service_tests.cpp
+    tests/integration/core/registry/registry_service_tests.cpp
     tests/integration/plugins/lua_bridge/service_tests.cpp
-    src/main/cpp/core/executor.cpp
-    src/main/cpp/core/host_info.cpp
-    src/main/cpp/core/osv_core.cpp
-    src/main/cpp/core/planner.cpp
-    src/main/cpp/core/planner_core.cpp
-    src/main/cpp/core/request_resolution.cpp
-    src/main/cpp/core/security_gateway_service.cpp
-    src/main/cpp/core/audit_exporter.cpp
-    src/main/cpp/core/sbom_exporter.cpp
-    src/main/cpp/core/snapshot_exporter.cpp
+    src/main/cpp/core/execution/executor.cpp
+    src/main/cpp/core/host/host_info.cpp
+    src/main/cpp/core/security/osv_core.cpp
+    src/main/cpp/core/planning/planner.cpp
+    src/main/cpp/core/planning/planner_core.cpp
+    src/main/cpp/core/planning/request_resolution.cpp
+    src/main/cpp/core/security/security_gateway_service.cpp
+    src/main/cpp/core/export/audit_exporter.cpp
+    src/main/cpp/core/export/sbom_exporter.cpp
+    src/main/cpp/core/export/snapshot_exporter.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp
     src/main/cpp/output/command_output.cpp
@@ -190,81 +186,81 @@ add_executable(core_integration_tests
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/plugins/rq_plugin.cpp
-    src/main/cpp/core/configuration.cpp
-    src/main/cpp/core/archive_resolver.cpp
-    src/main/cpp/core/downloader.cpp
-    src/main/cpp/core/downloader_core.cpp
-    src/main/cpp/core/rq_package.cpp
-    src/main/cpp/core/rq_repository.cpp
-    src/main/cpp/core/rqp_state_store.cpp
-    src/main/cpp/core/registry.cpp
-    src/main/cpp/core/transaction_database.cpp
-    src/main/cpp/core/transaction_database_core.cpp
-    src/main/cpp/core/registry_database.cpp
-    src/main/cpp/core/registry_database_core.cpp
-    src/main/cpp/core/registry_json_parser.cpp
-    src/main/cpp/core/history_manager.cpp
-    src/main/cpp/core/plugin_test_runner.cpp
-    src/main/cpp/core/version_compare.cpp
-    src/main/cpp/core/vulnerability_database.cpp
-    src/main/cpp/core/vulnerability_matcher.cpp
-    src/main/cpp/core/vulnerability_sync_service.cpp
+    src/main/cpp/core/archive/archive_resolver.cpp
+    src/main/cpp/core/common/version_compare.cpp
+    src/main/cpp/core/config/configuration.cpp
+    src/main/cpp/core/download/downloader.cpp
+    src/main/cpp/core/download/downloader_core.cpp
+    src/main/cpp/core/history/history_manager.cpp
+    src/main/cpp/core/packages/rq_package.cpp
+    src/main/cpp/core/packages/rq_repository.cpp
+    src/main/cpp/core/plugins/plugin_test_runner.cpp
+    src/main/cpp/core/registry/registry.cpp
+    src/main/cpp/core/registry/registry_database.cpp
+    src/main/cpp/core/registry/registry_database_core.cpp
+    src/main/cpp/core/registry/registry_json_parser.cpp
+    src/main/cpp/core/security/vulnerability_database.cpp
+    src/main/cpp/core/security/vulnerability_matcher.cpp
+    src/main/cpp/core/security/vulnerability_sync_service.cpp
+    src/main/cpp/core/state/rqp_state_store.cpp
+    src/main/cpp/core/state/transaction_database.cpp
+    src/main/cpp/core/state/transaction_database_core.cpp
 )
 
 add_dependencies(core_integration_tests ReqPack)
 
 add_executable(core_unit_tests
     tests/cpp/test_main.cpp
-    tests/unit/core/configuration/parse_tests.cpp
-    tests/unit/core/configuration/cli_tests.cpp
-    tests/unit/core/host_info/core_tests.cpp
-    tests/unit/core/downloader/core_tests.cpp
-    tests/unit/core/history/core_tests.cpp
-    tests/unit/core/manifest_loader/core_tests.cpp
-    tests/unit/core/planner/core_tests.cpp
-    tests/unit/core/registry_database/core_tests.cpp
-    tests/unit/core/registry_json_parser/core_tests.cpp
-    tests/unit/core/rq_package/core_tests.cpp
-    tests/unit/core/rq_repository/core_tests.cpp
-    tests/unit/core/rqp_state_store/core_tests.cpp
-    tests/unit/core/osv/core_tests.cpp
-    tests/unit/core/security_gateway_service/core_tests.cpp
-    tests/unit/core/audit/export_tests.cpp
-    tests/unit/core/sbom/export_tests.cpp
-    tests/unit/core/transaction_database/serialization_tests.cpp
-    tests/unit/core/validator/policy_tests.cpp
-    tests/unit/core/validator/validate_tests.cpp
-    tests/unit/core/version_compare/core_tests.cpp
-    tests/unit/core/vulnerability_database/core_tests.cpp
+    tests/unit/core/common/version_compare_tests.cpp
+    tests/unit/core/config/configuration_cli_tests.cpp
+    tests/unit/core/config/configuration_parse_tests.cpp
+    tests/unit/core/download/downloader_tests.cpp
+    tests/unit/core/export/audit_exporter_tests.cpp
+    tests/unit/core/export/sbom_exporter_tests.cpp
+    tests/unit/core/history/history_manager_tests.cpp
+    tests/unit/core/host/host_info_tests.cpp
+    tests/unit/core/manifest/manifest_loader_tests.cpp
+    tests/unit/core/packages/rq_package_tests.cpp
+    tests/unit/core/packages/rq_repository_tests.cpp
+    tests/unit/core/planning/planner_core_tests.cpp
+    tests/unit/core/registry/registry_database_tests.cpp
+    tests/unit/core/registry/registry_json_parser_tests.cpp
+    tests/unit/core/security/osv_core_tests.cpp
+    tests/unit/core/security/security_gateway_service_tests.cpp
+    tests/unit/core/security/validator_policy_tests.cpp
+    tests/unit/core/security/validator_validate_tests.cpp
+    tests/unit/core/security/vulnerability_database_tests.cpp
+    tests/unit/core/state/rqp_state_store_tests.cpp
+    tests/unit/core/state/transaction_database_serialization_tests.cpp
     tests/unit/output/logger/format_tests.cpp
-    src/main/cpp/core/configuration.cpp
-    src/main/cpp/core/host_info.cpp
+    src/main/cpp/core/common/version_compare.cpp
+    src/main/cpp/core/config/configuration.cpp
+    src/main/cpp/core/host/host_info.cpp
     src/main/cpp/cli/cli.cpp
-    src/main/cpp/core/archive_resolver.cpp
-    src/main/cpp/core/manifest_loader.cpp
-    src/main/cpp/core/downloader.cpp
-    src/main/cpp/core/downloader_core.cpp
-    src/main/cpp/core/osv_core.cpp
-    src/main/cpp/core/planner_core.cpp
-    src/main/cpp/core/rq_package.cpp
-    src/main/cpp/core/rq_repository.cpp
-    src/main/cpp/core/rqp_state_store.cpp
-    src/main/cpp/core/registry_database.cpp
-    src/main/cpp/core/registry_database_core.cpp
-    src/main/cpp/core/registry_json_parser.cpp
-    src/main/cpp/core/security_gateway_service.cpp
-    src/main/cpp/core/audit_exporter.cpp
-    src/main/cpp/core/sbom_exporter.cpp
-    src/main/cpp/core/snapshot_exporter.cpp
-    src/main/cpp/core/history_manager.cpp
-    src/main/cpp/core/transaction_database_core.cpp
-    src/main/cpp/core/validator.cpp
-    src/main/cpp/core/validator_core.cpp
-    src/main/cpp/core/version_compare.cpp
-    src/main/cpp/core/vulnerability_database.cpp
-    src/main/cpp/core/vulnerability_matcher.cpp
-    src/main/cpp/core/vulnerability_sync_service.cpp
-    src/main/cpp/core/remote_profiles.cpp
+    src/main/cpp/core/archive/archive_resolver.cpp
+    src/main/cpp/core/manifest/manifest_loader.cpp
+    src/main/cpp/core/download/downloader.cpp
+    src/main/cpp/core/download/downloader_core.cpp
+    src/main/cpp/core/export/audit_exporter.cpp
+    src/main/cpp/core/export/sbom_exporter.cpp
+    src/main/cpp/core/export/snapshot_exporter.cpp
+    src/main/cpp/core/history/history_manager.cpp
+    src/main/cpp/core/packages/rq_package.cpp
+    src/main/cpp/core/packages/rq_repository.cpp
+    src/main/cpp/core/planning/planner_core.cpp
+    src/main/cpp/core/registry/registry_database.cpp
+    src/main/cpp/core/registry/registry_database_core.cpp
+    src/main/cpp/core/registry/registry_json_parser.cpp
+    src/main/cpp/core/remote/remote_profiles.cpp
+    src/main/cpp/core/security/osv_core.cpp
+    src/main/cpp/core/security/security_gateway_service.cpp
+    src/main/cpp/core/security/validator.cpp
+    src/main/cpp/core/security/validator_core.cpp
+    src/main/cpp/core/security/vulnerability_database.cpp
+    src/main/cpp/core/security/vulnerability_matcher.cpp
+    src/main/cpp/core/security/vulnerability_sync_service.cpp
+    src/main/cpp/core/state/rqp_state_store.cpp
+    src/main/cpp/core/state/transaction_database_core.cpp
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/logger.cpp
     src/main/cpp/output/logger_core.cpp

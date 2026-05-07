@@ -7,7 +7,7 @@
 #include <iostream>
 #include <utility>
 
-#include "core/manifest_loader.h"
+#include "core/manifest/manifest_loader.h"
 #include "output/diagnostic.h"
 #include "output/logger.h"
 
