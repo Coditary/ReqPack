@@ -73,7 +73,7 @@ mark_seen() {
 
 is_linux_system_library() {
   case "$(basename "$1")" in
-    linux-vdso.so.*|ld-linux*.so*|libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libutil.so*|libgcc_s.so*|libstdc++.so*|libresolv.so*|libcrypt.so*|libnsl.so*|libanl.so*)
+    linux-vdso.so.*|ld-linux*.so*|libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libutil.so*|libgcc_s.so*|libstdc++.so*|libresolv.so*|libnsl.so*|libanl.so*)
       return 0
       ;;
     *)

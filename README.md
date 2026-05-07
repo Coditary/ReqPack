@@ -103,7 +103,31 @@ mkdir -p ~/.local/bin
 cp rqp ~/.local/bin/rqp
 ```
 
-### Option 2: Build From Source On Ubuntu Or Debian
+### Option 2: Use Container Image
+
+Tagged releases also publish Linux container images to `ghcr.io/coditary/reqpack` for `linux/amd64` and `linux/arm64`.
+
+```bash
+docker pull ghcr.io/coditary/reqpack:vX.Y.Z
+docker run --rm -v "$PWD:/workspace" ghcr.io/coditary/reqpack:vX.Y.Z --help
+docker run --rm -v "$PWD:/workspace" ghcr.io/coditary/reqpack:vX.Y.Z sbom .
+```
+
+To keep ReqPack config, cache, and self-update data between runs, mount:
+
+```bash
+docker run --rm \
+  -v "$PWD:/workspace" \
+  -v "$HOME/.config/reqpack:/root/.config/reqpack" \
+  -v "$HOME/.cache/reqpack:/root/.cache/reqpack" \
+  -v "$HOME/.local/share/reqpack:/root/.local/share/reqpack" \
+  ghcr.io/coditary/reqpack:vX.Y.Z host refresh
+```
+
+Container note:
+ReqPack inside Docker can only use package-manager tools available inside container, not package managers installed on your host.
+
+### Option 3: Build From Source On Ubuntu Or Debian
 
 ```bash
 sudo apt-get update
@@ -126,7 +150,7 @@ Run binary with:
 ./build/rqp --help
 ```
 
-### Option 3: Build From Source On macOS
+### Option 4: Build From Source On macOS
 
 ```bash
 brew install cli11 fmt spdlog boost zstd openssl@3 lua@5.4 ccache
