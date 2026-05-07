@@ -515,6 +515,23 @@ std::filesystem::path decrypt_wrapper_to_temp_file(
     }
 }
 
+std::vector<std::string> zip_archive_entries(const std::filesystem::path& archivePath) {
+    const std::string archive = escape_shell_arg(archivePath.string());
+    const std::array<std::string, 2> commands{
+        "zipinfo -1 " + archive,
+        "unzip -Z1 " + archive,
+    };
+
+    for (const std::string& command : commands) {
+        const CommandResult result = run_command_capture_status(command);
+        if (result.exitCode == 0) {
+            return split_lines(result.output);
+        }
+    }
+
+    throw std::runtime_error("failed to inspect archive");
+}
+
 std::vector<std::string> archive_entries(
     const std::filesystem::path& archivePath,
     const std::string& suffix,
@@ -522,7 +539,7 @@ std::vector<std::string> archive_entries(
     const std::filesystem::path& promptPath
 ) {
     if (suffix == ".zip") {
-        return split_lines(run_command_capture("zipinfo -1 " + escape_shell_arg(archivePath.string())));
+        return zip_archive_entries(archivePath);
     }
     if (suffix == ".7z") {
         return seven_zip_entries(archivePath, options.password, options.interactive, promptPath);
