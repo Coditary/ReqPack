@@ -1,4 +1,4 @@
-[![CI](https://github.com/Coditary/ReqPack/actions/workflows/ci.yml/badge.svg)](https://github.com/Coditary/ReqPack/actions/workflows/ci.yml)
+[![Tests](https://github.com/Coditary/ReqPack/actions/workflows/ci.yml/badge.svg)](https://github.com/Coditary/ReqPack/actions/workflows/tests.yml)
 [![Release](https://github.com/Coditary/ReqPack/actions/workflows/release.yml/badge.svg)](https://github.com/Coditary/ReqPack/actions/workflows/release.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Coditary/ReqPack/main/.github/badges/coverage.json)](https://github.com/Coditary/ReqPack/actions/workflows/coverage.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
