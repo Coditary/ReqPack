@@ -24,8 +24,6 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
       CCACHE_MAXSIZE: 300M
-      HOMEBREW_NO_AUTO_UPDATE: '1'
-      HOMEBREW_NO_INSTALL_CLEANUP: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +59,7 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates ccache cmake curl git pkg-config \
-            libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
+            libboost-all-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
             liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
 
       - name: Install macOS dependencies
@@ -84,22 +82,19 @@ jobs:
         run: |
           find tests -type f -name "*.cpp" -print0 | xargs -0 perl -pi -e 's/value_or\(\{\}\)/value_or("")/g'
 
-      - name: Prepare compiler cache
-        run: |
-          mkdir -p "$CCACHE_DIR"
-          ccache --set-config=max_size="$CCACHE_MAXSIZE"
-          ccache --zero-stats
-
       - name: Build and test Linux targets
         if: matrix.family == 'linux'
         run: |
-          rm -rf build
-          mkdir build
-          cd build
+          mkdir -p build && cd build
+          # -static-libstdc++ und -static-libgcc für Basis-Libs
+          # Wir versuchen Lua statisch zu finden (oft unter /usr/lib/.../liblua5.4.a)
           cmake .. \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}"
+            -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLink_Static=ON \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           make -j$(nproc)
           ctest --output-on-failure
 
@@ -107,18 +102,18 @@ jobs:
         if: matrix.family == 'macos'
         run: |
           export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig:${LUA_PREFIX}/lib/pkgconfig:${ZSTD_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-          rm -rf build
-          mkdir build
-          cd build
+          mkdir -p build && cd build
+          # macOS unterstützt kein echtes voll-statisches Linken (gegen System-Libs), 
+          # aber wir linken Third-Party Kram statisch ein.
           cmake .. \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX};${ZSTD_PREFIX}" \
             -DOPENSSL_ROOT_DIR="${OPENSSL_PREFIX}" \
-            -DREQPACK_ZSTD_LIBRARY="${ZSTD_PREFIX}/lib/libzstd.dylib" \
+            -DREQPACK_ZSTD_LIBRARY="${ZSTD_PREFIX}/lib/libzstd.a" \
             -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
             -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
-            -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.5.4.dylib"
+            -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.a"
           make -j$(sysctl -n hw.ncpu)
           ctest --output-on-failure
 
@@ -162,4 +157,4 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           gh release create "$tag" release-artifacts/rqp-*.tar.gz release-artifacts/SHA256SUMS \
             --title "$tag" \
-            --notes "Multi-target binaries for $tag. Verified by CI."
+            --notes "Portable binaries for $tag (Static linking where possible). Verified by CI."
