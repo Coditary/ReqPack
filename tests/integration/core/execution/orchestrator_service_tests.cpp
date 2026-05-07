@@ -4011,6 +4011,9 @@ TEST_CASE("reqpack remote interactive client reports local input errors through 
         "serve", "--remote", "--bind", "127.0.0.1", "--port", std::to_string(port), "--token", "secret"
     }, logPath);
 
+    const int warmupClient = connect_with_retry("127.0.0.1", port);
+    ::close(warmupClient);
+
     const std::filesystem::path badUploadDir = tempDir.path() / "upload-dir";
     std::filesystem::create_directories(badUploadDir);
     const std::string output = run_reqpack_with_home_and_stdin(
