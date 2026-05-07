@@ -2,6 +2,7 @@
 #include "core/configuration.h"
 #include "core/host_info.h"
 #include "core/orchestrator.h"
+#include "core/plugin_test_runner.h"
 #include "core/remote_client.h"
 #include "core/serve_remote.h"
 #include "output/display_factory.h"
@@ -881,6 +882,18 @@ bool is_host_refresh_command(const std::vector<std::string>& arguments) {
     return to_lower(filtered[0]) == "host" && to_lower(filtered[1]) == "refresh";
 }
 
+DiagnosticMessage plugin_test_diagnostic(const std::string& summary, const std::string& cause, const std::string& recommendation, const std::string& details = {}) {
+    return make_error_diagnostic(
+        "plugin-test",
+        summary,
+        cause,
+        recommendation,
+        details,
+        "test-plugin",
+        "conformance"
+    );
+}
+
 int run_host_refresh(Logger& logger) {
     const std::shared_ptr<const HostInfoSnapshot> snapshot = HostInfoService::refreshSnapshot();
     logger.stdout("host refresh: cache updated");
@@ -1081,6 +1094,18 @@ int run_stdin_serve_loop(Cli& cli, const ReqPackConfig& config, const std::vecto
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    std::vector<std::string> earlyArguments;
+    earlyArguments.reserve(static_cast<std::size_t>(argc > 1 ? argc - 1 : 0));
+    for (int i = 1; i < argc; ++i) {
+        earlyArguments.emplace_back(argv[i]);
+    }
+
+    const PluginTestCliParseResult earlyPluginTest = parse_plugin_test_invocation(earlyArguments);
+    if (earlyPluginTest.matched && earlyPluginTest.helpRequested) {
+        print_plugin_test_help(std::cout);
+        return 0;
+    }
+
     // Fast path: handle -h/--help before any heavy initialisation.
     // This avoids CLI11 internal-state issues and the async Logger worker hang.
     {
@@ -1221,6 +1246,45 @@ int main(int argc, char* argv[]) {
         logger.flushSync();
         curl_global_cleanup();
         return result;
+    }
+
+    const PluginTestCliParseResult pluginTest = parse_plugin_test_invocation(rawArguments);
+    if (pluginTest.matched) {
+        if (pluginTest.helpRequested) {
+            print_plugin_test_help(std::cout);
+            logger.flushSync();
+            curl_global_cleanup();
+            return 0;
+        }
+        if (!pluginTest.error.empty()) {
+            logger.diagnostic(plugin_test_diagnostic(
+                "Plugin test invocation is invalid",
+                "Required `test-plugin` arguments were missing or malformed.",
+                "Run `rqp test-plugin --help` and retry with a plugin plus one or more case files.",
+                pluginTest.error
+            ));
+            logger.flushSync();
+            curl_global_cleanup();
+            return 1;
+        }
+
+        try {
+            const PluginTestRunReport report = run_plugin_test_cases(config, pluginTest.invocation);
+            print_plugin_test_report(report, std::cout);
+            logger.flushSync();
+            curl_global_cleanup();
+            return report.failed == 0 ? 0 : 1;
+        } catch (const std::exception& error) {
+            logger.diagnostic(plugin_test_diagnostic(
+                "Plugin test execution failed",
+                "ReqPack could not execute requested hermetic plugin test suite.",
+                "Check plugin path, case files, and fake execution rules, then retry.",
+                error.what()
+            ));
+            logger.flushSync();
+            curl_global_cleanup();
+            return 1;
+        }
     }
 
     const std::vector<Request> requests = cli.parse(argc, argv, config);

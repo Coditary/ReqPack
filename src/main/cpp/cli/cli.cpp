@@ -168,9 +168,10 @@ bool is_removed_security_backend_flag(const std::string& argument) {
 }
 
 bool current_system_prefers_package_tokens(const std::string& currentSystem, ActionType action) {
-    if (to_lower(currentSystem) != "sys") {
-        return false;
-    }
+	const std::string normalizedSystem = to_lower(currentSystem);
+	if (normalizedSystem != "sys" && normalizedSystem != "rqp") {
+		return false;
+	}
 
     switch (action) {
         case ActionType::INSTALL:
@@ -478,8 +479,9 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         return requests[it->second];
     };
 
-    for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
-        const std::string& argument = requestArguments[i];
+	for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
+		const std::string& argument = requestArguments[i];
+		const std::string normalized_argument = to_lower(argument);
 
 		if (is_flag(argument)) {
 			const std::size_t previousFlagCount = global_flags.size();
@@ -538,9 +540,15 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
                 snapshotOutputPath = requestArguments[++i];
                 continue;
             }
-            global_flags.push_back(argument.substr(2));
-            continue;
-        }
+			global_flags.push_back(argument.substr(2));
+			continue;
+		}
+
+		if (current_system.empty() && known_systems.contains(normalized_argument)) {
+			ensure_request(normalized_argument);
+			current_system = normalized_argument;
+			continue;
+		}
 
         // URL detection: handle before scoped-package and system-name checks.
         if (action == ActionType::INSTALL && is_url(argument)) {
@@ -587,10 +595,8 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 			}
             request.packages.push_back(scoped_package->second);
             current_system = request.system;
-            continue;
-        }
-
-        const std::string normalized_argument = to_lower(argument);
+			continue;
+		}
 
         if (current_system.empty()) {
             ensure_request(normalized_argument);
@@ -747,6 +753,7 @@ void Cli::print_help() {
         "  sbom                    Exports planned graph as table or JSON\n"
         "  audit                   Audits planned graph for vulnerabilities\n"
         "  host                    Manages cached host system metadata\n"
+        "  test-plugin             Runs hermetic plugin conformance cases\n"
         "  snapshot                Snapshots installed packages to reqpack.lua\n"
         "  serve                   Reads commands from stdin and keeps process running\n"
         "  remote                  Connects to remote profile from XDG config (~/.config/reqpack fallback)\n"

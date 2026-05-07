@@ -16,6 +16,7 @@
 #include <type_traits>
 #include <optional>
 #include <sstream>
+#include <tuple>
 
 namespace {
 
@@ -1357,6 +1358,9 @@ ExecResult LuaBridge::denyExecution(const std::string& message) const {
 }
 
 ExecResult LuaBridge::executeCommandWithPolicy(const std::string& sourceId, const std::string& command, bool silent) const {
+    if (m_execOverride) {
+        return m_execOverride(sourceId, command);
+    }
     if (!shouldEnforceExecutionPolicy()) {
         return run_plugin_command(m_logger, sourceId, m_pluginId, command, silent);
     }
@@ -1370,6 +1374,9 @@ ExecResult LuaBridge::executeCommandWithPolicy(const std::string& sourceId, cons
 }
 
 ExecResult LuaBridge::executeCommandWithPolicy(const std::string& sourceId, const std::string& command, const sol::object& rules, bool silent) const {
+    if (m_execOverride) {
+        return m_execOverride(sourceId, command);
+    }
     if (!shouldEnforceExecutionPolicy()) {
         return run_plugin_command(m_logger, sourceId, m_pluginId, command, rules, silent);
     }
@@ -1815,18 +1822,25 @@ std::string LuaBridge::serializeLuaPayload(const sol::object& value) const {
         return "<lua-value>";
     }
 
-    std::ostringstream stream;
-    stream << '{';
-    bool first = true;
-    for (const auto& [key, entry] : value.as<sol::table>()) {
-        if (!first) {
-            stream << ", ";
-        }
-        first = false;
-        stream << value_to_string(key) << '=' << value_to_string(entry);
-    }
-    stream << '}';
-    return stream.str();
+	std::ostringstream stream;
+	stream << '{';
+	std::vector<std::pair<std::string, std::string>> fields;
+	for (const auto& [key, entry] : value.as<sol::table>()) {
+		fields.emplace_back(value_to_string(key), value_to_string(entry));
+	}
+	std::sort(fields.begin(), fields.end(), [](const auto& left, const auto& right) {
+		return left.first < right.first;
+	});
+	bool first = true;
+	for (const auto& [keyText, valueText] : fields) {
+		if (!first) {
+			stream << ", ";
+		}
+		first = false;
+		stream << keyText << '=' << valueText;
+	}
+	stream << '}';
+	return stream.str();
 }
 
 ExecResult LuaBridge::runCommand(const std::string& command) const {
@@ -2013,4 +2027,8 @@ std::string LuaBridge::createTempDirectory(const std::string& pluginId) {
 DownloadResult LuaBridge::download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) {
     (void)pluginId;
     return downloadToPath(url, destinationPath);
+}
+
+void LuaBridge::setExecOverride(ExecOverride execOverride) {
+	m_execOverride = std::move(execOverride);
 }

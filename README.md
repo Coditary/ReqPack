@@ -140,6 +140,7 @@ ctest --test-dir build --output-on-failure
 | `sbom` | Export SBOM for installed packages | `rqp sbom --format cyclonedx-json --output sbom.json` |
 | `snapshot` | Write installed-package state to `reqpack.lua` | `rqp snapshot --output reqpack.lua` |
 | `host refresh` | Refresh cached host metadata | `rqp host refresh` |
+| `test-plugin` | Run hermetic plugin conformance cases | `rqp test-plugin --plugin demo --preset core` |
 | `serve` | Run stdin or remote command server | `rqp serve --remote --token secret` |
 | `remote` | Connect to configured remote profile | `rqp remote dev list apt` |
 
@@ -224,6 +225,71 @@ you can also provide archive password through `REQPACK_ARCHIVE_PASSWORD`.
 rqp snapshot --output reqpack.lua
 rqp install .
 ```
+
+### Plugin Testing
+
+`test-plugin` runs hermetic plugin conformance cases against one Lua plugin without touching a real package manager.
+
+```bash
+rqp test-plugin --plugin ./plugins/demo --case ./cases/install.lua
+rqp test-plugin --plugin demo --cases ./tests/plugins/demo
+rqp test-plugin --plugin demo --preset core --report ./plugin-test-report.json
+```
+
+Command notes:
+
+- `--plugin` accepts plugin id, plugin directory, or direct script path.
+- `--case` adds one Lua case file.
+- `--cases` loads all `*.lua` files from a directory.
+- `--preset core` loads built-in preset cases from `<plugin>/.reqpack-test/core/`.
+- `--report` writes JSON summary including commands, stdout, stderr, artifacts, and event payloads.
+
+Minimal case shape:
+
+```lua
+return {
+  name = "install success",
+  request = {
+    action = "install",
+    system = "demo",
+    packages = {
+      { name = "curl", version = "8.0" }
+    }
+  },
+  fakeExec = {
+    {
+      match = "demo-pm install curl",
+      exitCode = 0,
+      stdout = "ok\n",
+      stderr = "",
+      success = true,
+    }
+  },
+  expect = {
+    success = true,
+    commands = { "demo-pm install curl" },
+    stdout = { "ok\n" },
+    events = { "installed", "success" },
+    eventPayloads = {
+      installed = "{name=curl}",
+      success = "ok",
+    },
+  }
+}
+```
+
+Available `expect` checks in MVP+:
+
+- `success`
+- `commands`
+- `stdout`
+- `stderr`
+- `events`
+- `eventPayloads`
+- `artifacts`
+- `resultCount`
+- `resultName`
+- `resultVersion`
 
 ### Audit
 

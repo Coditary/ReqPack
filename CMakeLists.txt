@@ -140,6 +140,7 @@ set(SOURCES
     src/main/cpp/core/remote_client.cpp
     src/main/cpp/core/executor.cpp
     src/main/cpp/core/history_manager.cpp
+    src/main/cpp/core/plugin_test_runner.cpp
     src/main/cpp/core/registry.cpp
 )
 
@@ -164,6 +165,7 @@ add_executable(core_integration_tests
     tests/cpp/test_main.cpp
     tests/integration/core/executor/service_tests.cpp
     tests/integration/core/orchestrator/service_tests.cpp
+    tests/integration/core/plugin_test_runner/service_tests.cpp
     tests/integration/core/planner/service_tests.cpp
     tests/integration/core/registry/service_tests.cpp
     tests/integration/plugins/lua_bridge/service_tests.cpp
@@ -202,6 +204,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/registry_database_core.cpp
     src/main/cpp/core/registry_json_parser.cpp
     src/main/cpp/core/history_manager.cpp
+    src/main/cpp/core/plugin_test_runner.cpp
     src/main/cpp/core/version_compare.cpp
     src/main/cpp/core/vulnerability_database.cpp
     src/main/cpp/core/vulnerability_matcher.cpp

@@ -84,11 +84,13 @@ function plugin.search(context, prompt)
 end
 
 function plugin.info(context, package)
-    return {
+    local item = {
         name = package or "java",
         version = "proxy",
         description = "Java proxy manager",
     }
+    context.events.informed(item)
+    return item
 end
 
 function plugin.resolveProxyRequest(context, request)

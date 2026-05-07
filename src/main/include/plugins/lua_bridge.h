@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <functional>
 
 #include "core/configuration.h"
 #include "core/types.h"
@@ -12,6 +13,9 @@
 #include "plugins/iplugin.h"
 
 class LuaBridge : public IPlugin, public IPluginRuntimeHost {
+public:
+    using ExecOverride = std::function<ExecResult(const std::string& sourceId, const std::string& command)>;
+
 private:
     sol::state m_lua;
     std::string m_name;
@@ -29,6 +33,7 @@ private:
 	std::vector<std::string> m_tempDirectories;
 	std::vector<PluginEventRecord> m_recentEvents;
 	mutable std::atomic<bool> m_silentRuntimeOutput{false};
+	ExecOverride m_execOverride;
 
 	PluginCallContext makeContext(const std::vector<std::string>& flags) const;
 	void register_context_types();
@@ -97,4 +102,5 @@ public:
 	ExecResult execute(const std::string& pluginId, const std::string& command) override;
 	std::string createTempDirectory(const std::string& pluginId) override;
 	DownloadResult download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) override;
+	void setExecOverride(ExecOverride execOverride);
 };
