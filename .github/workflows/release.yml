@@ -82,8 +82,7 @@ jobs:
 
       - name: Fix C++ optional ambiguity in tests
         run: |
-          # Fix: Verwende xargs für bessere Kompatibilität und Vermeidung des {} + Fehlers
-          find tests -type f -name "*.cpp" -print0 | xargs -0 sed -i 's/value_or({})/value_or("")/g'
+          find tests -type f -name "*.cpp" -print0 | xargs -0 perl -pi -e 's/value_or\(\{\}\)/value_or("")/g'
 
       - name: Prepare compiler cache
         run: |
@@ -126,7 +125,6 @@ jobs:
       - name: Package release
         run: |
           mkdir -p release-artifacts
-          # Verpackt das Binärprogramm aus dem build Ordner
           tar -czf release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C build rqp
 
       - name: Upload release bundle
