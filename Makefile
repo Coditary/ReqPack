@@ -7,15 +7,12 @@ PROFILE_TEST_BINARIES := core_unit_tests exec_rules_unit_tests core_integration_
 PROFILE_GPROF_RUNS := 5
 PYTHON := python3
 
-# Standard-Aktion: Kompilieren
 all: build
 	cmake --build build -j$(JOBS)
 
-# Erstellt den build-Ordner, falls er nicht existiert, und konfiguriert CMake
 build:
 	cmake -S . -B build
 
-# Startet das Programm
 run: all
 	@echo
 	@echo "---------------------- Running ReqPack ----------------------"
@@ -23,35 +20,28 @@ run: all
 	@echo
 	@./build/ReqPack ${ARGS}
 
-# Führt alle Tests aus
 test: all
 	@ctest --test-dir build --output-on-failure
 
-# Führt nur Unit-Tests aus
 test-unit: all
 	@ctest --test-dir build --output-on-failure -R "^unit::"
 
-# Führt nur Smoke-Tests aus
 test-smoke: all
 	@ctest --test-dir build --output-on-failure -R "^integration::"
 
-# Baut Coverage-instrumentierte Targets in separatem Build-Ordner
 coverage-build:
 	cmake -S . -B $(COVERAGE_BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug -DREQPACK_ENABLE_COVERAGE=ON
 	cmake --build $(COVERAGE_BUILD_DIR) -j$(JOBS)
 
-# Führt Coverage-Tests aus und erzeugt CTest-Coverage-Report
 test-coverage: coverage-build
 	@ctest --test-dir $(COVERAGE_BUILD_DIR) --output-on-failure
 	@ctest --test-dir $(COVERAGE_BUILD_DIR) -T Coverage
 	@$(PYTHON) tests/coverage_summary.py $(COVERAGE_BUILD_DIR) .
 
-# Baut Profiling-Targets in separatem Build-Ordner
 profile-build:
 	cmake -S . -B $(PROFILE_BUILD_DIR) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DREQPACK_ENABLE_PROFILING=ON
 	cmake --build $(PROFILE_BUILD_DIR) -j$(JOBS)
 
-# Führt Profiling pro Test-Binary aus, bevorzugt perf ohne Kindprozesse
 profile-tests: profile-build
 	@cmake -E make_directory $(PROFILE_BUILD_DIR)/profile-data
 	@if command -v perf >/dev/null 2>&1; then \
@@ -77,6 +67,5 @@ profile-tests: profile-build
 		exit 1; \
 	fi
 
-# Löscht den Build-Ordner
 clean:
 	rm -rf build
