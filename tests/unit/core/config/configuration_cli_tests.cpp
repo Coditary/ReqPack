@@ -18,7 +18,7 @@ class TempDir {
 public:
     explicit TempDir(const std::string& prefix)
         : path_(std::filesystem::temp_directory_path() /
-            (prefix + "-" + std::to_string(std::filesystem::file_time_type::clock::now().time_since_epoch().count()))) {
+            (prefix + "-" + std::to_string(static_cast<long long>(std::filesystem::file_time_type::clock::now().time_since_epoch().count())))) {
         std::filesystem::create_directories(path_);
     }
 
