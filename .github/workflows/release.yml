@@ -94,6 +94,7 @@ jobs:
             -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
             -DBUILD_SHARED_LIBS=OFF \
             -DLink_Static=ON \
+            -DREQPACK_LINK_STATIC_LUA=ON \
             -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           make -j$(nproc)
           ctest --output-on-failure
@@ -112,6 +113,7 @@ jobs:
             -DOPENSSL_ROOT_DIR="${OPENSSL_PREFIX}" \
             -DREQPACK_ZSTD_LIBRARY="${ZSTD_PREFIX}/lib/libzstd.a" \
             -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
+            -DREQPACK_LINK_STATIC_LUA=ON \
             -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
             -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.a"
           make -j$(sysctl -n hw.ncpu)
@@ -120,7 +122,10 @@ jobs:
       - name: Package release
         run: |
           mkdir -p release-artifacts
-          tar -czf release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C build rqp
+          bash scripts/package_release_bundle.sh \
+            build/rqp \
+            release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
+            ${{ matrix.family }}
 
       - name: Upload release bundle
         uses: actions/upload-artifact@v4

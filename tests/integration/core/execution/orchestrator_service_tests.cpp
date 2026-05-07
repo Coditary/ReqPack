@@ -586,12 +586,31 @@ std::filesystem::path create_self_update_release_archive(
 ) {
     const std::filesystem::path sourceRoot = root / ("release-src-" + versionLabel);
     const std::filesystem::path archivePath = root / ("rqp-" + tag + "-" + target + ".tar.gz");
-    write_file(sourceRoot / "rqp", "#!/bin/sh\nprintf '%s\\n' '" + versionLabel + "'\n");
-    require_command_success("chmod +x " + escape_shell_arg((sourceRoot / "rqp").string()));
+    write_file(sourceRoot / "rqp",
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "resolve_script_path() {\n"
+        "  target=\"$1\"\n"
+        "  while [ -L \"$target\" ]; do\n"
+        "    dir=$(CDPATH= cd -- \"$(dirname -- \"$target\")\" && pwd)\n"
+        "    target=$(readlink \"$target\")\n"
+        "    case \"$target\" in\n"
+        "      /*) ;;\n"
+        "      *) target=\"$dir/$target\" ;;\n"
+        "    esac\n"
+        "  done\n"
+        "  printf '%s\\n' \"$target\"\n"
+        "}\n"
+        "SCRIPT_PATH=$(resolve_script_path \"$0\")\n"
+        "HERE=$(CDPATH= cd -- \"$(dirname -- \"$SCRIPT_PATH\")\" && pwd)\n"
+        "exec \"$HERE/bin/rqp.bin\" \"$@\"\n");
+    write_file(sourceRoot / "bin" / "rqp.bin", "#!/bin/sh\nprintf '%s\\n' '" + versionLabel + "'\n");
+    require_command_success("chmod +x " + escape_shell_arg((sourceRoot / "rqp").string()) +
+        " " + escape_shell_arg((sourceRoot / "bin" / "rqp.bin").string()));
     require_command_success(
         "tar -C " + escape_shell_arg(sourceRoot.string()) +
         " -czf " + escape_shell_arg(archivePath.string()) +
-        " rqp"
+        " rqp bin"
     );
     return archivePath;
 }
@@ -2454,10 +2473,11 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
     CHECK(firstOutput.find("self-update complete: now on release " + firstTag) != std::string::npos);
 
     const std::filesystem::path linkPath = homePath / ".local/bin/rqp";
-    const std::filesystem::path binaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + firstTag + "-" + target);
+    const std::filesystem::path binaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + firstTag + "-" + target) / "rqp";
     REQUIRE(std::filesystem::exists(binaryPath));
     REQUIRE(std::filesystem::is_symlink(linkPath));
     CHECK(std::filesystem::read_symlink(linkPath) == binaryPath);
+    CHECK(run_command_capture(escape_shell_arg(linkPath.string()) + " 2>&1").find("v1") != std::string::npos);
 
     const std::filesystem::path secondArchive = create_self_update_release_archive(releaseAssetRoot, "v2", secondTag, target);
     write_self_update_release_api_response(releaseApiRoot, owner, repo, secondTag, target, secondArchive);
@@ -2467,9 +2487,10 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
     CHECK(secondOutput.find("self-update: download release archive") != std::string::npos);
     CHECK(secondOutput.find("self-update complete: now on release " + secondTag) != std::string::npos);
 
-    const std::filesystem::path secondBinaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + secondTag + "-" + target);
+    const std::filesystem::path secondBinaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + secondTag + "-" + target) / "rqp";
     REQUIRE(std::filesystem::exists(secondBinaryPath));
     CHECK(std::filesystem::read_symlink(linkPath) == secondBinaryPath);
+    CHECK(run_command_capture(escape_shell_arg(linkPath.string()) + " 2>&1").find("v2") != std::string::npos);
 
     const std::filesystem::path sysLogPath = tempDir.path() / "sys-update.log";
     const std::string wrapperUpdateOutput = run_reqpack_with_home_and_env(

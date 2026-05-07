@@ -5,6 +5,7 @@ enable_testing()
 
 option(REQPACK_ENABLE_COVERAGE "Build ReqPack targets with coverage instrumentation" OFF)
 option(REQPACK_ENABLE_PROFILING "Build ReqPack targets with profiling instrumentation" OFF)
+option(REQPACK_LINK_STATIC_LUA "Prefer static Lua library when available" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,6 +52,46 @@ find_package(OpenSSL REQUIRED)
 find_library(REQPACK_ZSTD_LIBRARY NAMES zstd REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+
+set(REQPACK_LUA_LINK_LIBRARIES ${LUA_LIBRARIES})
+if(REQPACK_LINK_STATIC_LUA)
+    set(_reqpack_saved_library_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+
+    set(_reqpack_lua_hint_dirs)
+    foreach(_reqpack_lua_lib IN LISTS LUA_LIBRARIES)
+        if(_reqpack_lua_lib)
+            get_filename_component(_reqpack_lua_lib_dir "${_reqpack_lua_lib}" DIRECTORY)
+            if(_reqpack_lua_lib_dir)
+                list(APPEND _reqpack_lua_hint_dirs "${_reqpack_lua_lib_dir}")
+            endif()
+        endif()
+    endforeach()
+
+    find_library(REQPACK_LUA_STATIC_LIBRARY
+        NAMES lua5.4 lua-5.4 lua54 lua
+        HINTS ${_reqpack_lua_hint_dirs}
+    )
+
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${_reqpack_saved_library_suffixes})
+
+    if(REQPACK_LUA_STATIC_LIBRARY)
+        set(REQPACK_LUA_LINK_LIBRARIES ${REQPACK_LUA_STATIC_LIBRARY})
+        message(STATUS "Using static Lua library: ${REQPACK_LUA_STATIC_LIBRARY}")
+    else()
+        message(WARNING "REQPACK_LINK_STATIC_LUA is ON, but no static Lua library was found. Falling back to ${LUA_LIBRARIES}")
+    endif()
+endif()
+
+set(REQPACK_FMT_TARGET fmt::fmt)
+if(TARGET fmt::fmt-header-only)
+    set(REQPACK_FMT_TARGET fmt::fmt-header-only)
+endif()
+
+set(REQPACK_SPDLOG_TARGET spdlog::spdlog)
+if(TARGET spdlog::spdlog_header_only)
+    set(REQPACK_SPDLOG_TARGET spdlog::spdlog_header_only)
+endif()
 
 if(APPLE)
     add_compile_options(-Wno-unknown-warning-option)
@@ -328,24 +369,24 @@ target_link_libraries(ReqPack PRIVATE
 	OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
 	${REQPACK_ZSTD_LIBRARY}
-	${LUA_LIBRARIES}
+	${REQPACK_LUA_LINK_LIBRARIES}
 	Boost::boost
-	spdlog::spdlog
-	fmt::fmt
+	${REQPACK_SPDLOG_TARGET}
+	${REQPACK_FMT_TARGET}
 )
 
 target_link_libraries(exec_rules_unit_tests PRIVATE
     Catch2::Catch2
-    ${LUA_LIBRARIES}
-    spdlog::spdlog
-    fmt::fmt
+    ${REQPACK_LUA_LINK_LIBRARIES}
+    ${REQPACK_SPDLOG_TARGET}
+    ${REQPACK_FMT_TARGET}
 )
 
 target_link_libraries(exec_rules_integration_tests PRIVATE
     Catch2::Catch2
-    ${LUA_LIBRARIES}
-    spdlog::spdlog
-    fmt::fmt
+    ${REQPACK_LUA_LINK_LIBRARIES}
+    ${REQPACK_SPDLOG_TARGET}
+    ${REQPACK_FMT_TARGET}
 )
 
 target_link_libraries(core_unit_tests PRIVATE
@@ -356,10 +397,10 @@ target_link_libraries(core_unit_tests PRIVATE
     OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
     ${REQPACK_ZSTD_LIBRARY}
-    ${LUA_LIBRARIES}
+    ${REQPACK_LUA_LINK_LIBRARIES}
     Boost::boost
-    spdlog::spdlog
-    fmt::fmt
+    ${REQPACK_SPDLOG_TARGET}
+    ${REQPACK_FMT_TARGET}
 )
 
 target_link_libraries(core_integration_tests PRIVATE
@@ -369,10 +410,10 @@ target_link_libraries(core_integration_tests PRIVATE
     OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
     ${REQPACK_ZSTD_LIBRARY}
-    ${LUA_LIBRARIES}
+    ${REQPACK_LUA_LINK_LIBRARIES}
     Boost::boost
-    spdlog::spdlog
-    fmt::fmt
+    ${REQPACK_SPDLOG_TARGET}
+    ${REQPACK_FMT_TARGET}
 )
 
 target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)

@@ -6,6 +6,7 @@ RELEASE_REPO_URL="${REQPACK_RELEASE_REPO_URL:-https://github.com/Coditary/ReqPac
 RELEASE_API_BASE_URL="${REQPACK_RELEASE_API_BASE_URL:-https://api.github.com}"
 RELEASE_TAG="${REQPACK_RELEASE_TAG:-latest}"
 INSTALL_DIR="${REQPACK_INSTALL_DIR:-$HOME/.local/bin}"
+SELF_BIN_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/reqpack/self/bin"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/reqpack"
 CONFIG_PATH="$CONFIG_DIR/config.lua"
 
@@ -113,11 +114,10 @@ ensure_linux_tools() {
   fi
   if need_cmd apt-get; then
     sudo apt-get install -y --no-install-recommends \
-      ca-certificates curl git python3 tar \
-      libcurl4-openssl-dev liblua5.4-dev libfmt-dev libspdlog-dev libssl-dev libzstd-dev
+      ca-certificates curl git python3 tar
     return 0
   fi
-  die "Missing curl/tar/python3/git or runtime libraries. Install them manually, then rerun install.sh."
+  die "Missing curl/tar/python3/git. Install them manually, then rerun install.sh."
 }
 
 ensure_macos_tools() {
@@ -125,10 +125,10 @@ ensure_macos_tools() {
     return 0
   fi
   if need_cmd brew; then
-    brew install curl fmt git lua@5.4 openssl@3 python3 spdlog zstd
+    brew install curl git python3
     return 0
   fi
-  die "Missing curl/tar/python3/git or runtime libraries. Install Command Line Tools or Homebrew, then rerun install.sh."
+  die "Missing curl/tar/python3/git. Install Command Line Tools or Homebrew, then rerun install.sh."
 }
 
 ensure_tools() {
@@ -194,7 +194,9 @@ main() {
   asset_url=$(resolve_asset_url "$metadata_path" "$asset_name")
   [ -n "$asset_url" ] || die "No release asset for target $target in release $tag_name."
 
-  mkdir -p "$extract_path" "$INSTALL_DIR"
+  bundle_path="$SELF_BIN_DIR/rqp-$tag_name-$target"
+
+  mkdir -p "$extract_path" "$INSTALL_DIR" "$SELF_BIN_DIR"
   curl -fsSL -A 'ReqPack install.sh' -o "$archive_path" "$asset_url"
   tar -xzf "$archive_path" -C "$extract_path"
 
@@ -202,7 +204,15 @@ main() {
   [ -f "$binary_path" ] || die "Release archive does not contain rqp binary at archive root."
 
   chmod +x "$binary_path"
-  cp "$binary_path" "$INSTALL_DIR/rqp"
+  rm -rf "$bundle_path"
+  mkdir -p "$bundle_path"
+  cp -R "$extract_path"/. "$bundle_path"/
+  chmod +x "$bundle_path/rqp"
+  if [ -f "$bundle_path/bin/rqp.bin" ]; then
+    chmod +x "$bundle_path/bin/rqp.bin"
+  fi
+  rm -f "$INSTALL_DIR/rqp"
+  ln -s "$bundle_path/rqp" "$INSTALL_DIR/rqp"
   write_default_config "$owner" "$repo"
 
   printf 'Installed ReqPack %s to %s/rqp\n' "$tag_name" "$INSTALL_DIR"

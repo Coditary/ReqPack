@@ -22,6 +22,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <set>
@@ -602,6 +604,61 @@ bool copy_file_with_mode(const std::filesystem::path& source, const std::filesys
     return !error;
 }
 
+bool copy_directory_contents_with_mode(const std::filesystem::path& sourceRoot, const std::filesystem::path& targetRoot) {
+    std::error_code error;
+    if (!ensure_directory(targetRoot)) {
+        return false;
+    }
+
+    for (auto it = std::filesystem::recursive_directory_iterator(sourceRoot, error);
+         it != std::filesystem::recursive_directory_iterator();
+         it.increment(error)) {
+        if (error) {
+            return false;
+        }
+
+        const std::filesystem::path relativePath = std::filesystem::relative(it->path(), sourceRoot, error);
+        if (error) {
+            return false;
+        }
+        const std::filesystem::path targetPath = targetRoot / relativePath;
+
+        if (it->is_directory(error)) {
+            if (error || !ensure_directory(targetPath)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (it->is_regular_file(error)) {
+            if (error || !copy_file_with_mode(it->path(), targetPath)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (it->is_symlink(error)) {
+            const std::filesystem::path linkTarget = std::filesystem::read_symlink(it->path(), error);
+            if (error || !ensure_directory(targetPath.parent_path())) {
+                return false;
+            }
+            std::filesystem::remove(targetPath, error);
+            error.clear();
+            std::filesystem::create_symlink(linkTarget, targetPath, error);
+            if (error) {
+                return false;
+            }
+            continue;
+        }
+
+        if (error) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool replace_symlink_atomically(const std::filesystem::path& target, const std::filesystem::path& linkPath) {
     std::error_code error;
     if (!ensure_directory(linkPath.parent_path())) {
@@ -815,6 +872,8 @@ bool extract_release_archive(const std::filesystem::path& archivePath, const std
 
 std::optional<std::filesystem::path> locate_extracted_binary(const std::filesystem::path& directory) {
     std::error_code error;
+    std::optional<std::filesystem::path> bestMatch;
+    std::size_t bestDepth = std::numeric_limits<std::size_t>::max();
     for (auto it = std::filesystem::recursive_directory_iterator(directory, error); it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
         if (error) {
             return std::nullopt;
@@ -823,13 +882,21 @@ std::optional<std::filesystem::path> locate_extracted_binary(const std::filesyst
             continue;
         }
         if (it->path().filename() == "rqp") {
-            return it->path();
+            const std::filesystem::path relativePath = std::filesystem::relative(it->path(), directory, error);
+            if (error) {
+                return std::nullopt;
+            }
+            const std::size_t depth = static_cast<std::size_t>(std::distance(relativePath.begin(), relativePath.end()));
+            if (!bestMatch.has_value() || depth < bestDepth) {
+                bestMatch = it->path();
+                bestDepth = depth;
+            }
         }
     }
-    return std::nullopt;
+    return bestMatch;
 }
 
-std::optional<std::string> current_link_target_name(const std::filesystem::path& linkPath) {
+std::optional<std::filesystem::path> current_link_target_path(const std::filesystem::path& linkPath) {
     std::error_code error;
     if (!std::filesystem::exists(linkPath, error) || error) {
         return std::nullopt;
@@ -842,7 +909,7 @@ std::optional<std::string> current_link_target_name(const std::filesystem::path&
     if (error || target.empty()) {
         return std::nullopt;
     }
-    return target.filename().string();
+    return target;
 }
 
 bool is_self_update_command(const std::vector<std::string>& arguments) {
@@ -954,7 +1021,7 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
     const std::filesystem::path extractPath = tempPath / "extract";
     const std::filesystem::path linkPath(config.selfUpdate.linkPath);
     const std::filesystem::path binaryDirectory(config.selfUpdate.binaryDirectory);
-    const std::optional<std::string> previousLinkTargetName = current_link_target_name(linkPath);
+    const std::optional<std::filesystem::path> previousLinkTargetPath = current_link_target_path(linkPath);
     Downloader downloader(nullptr, config);
 
     const auto cleanup = [&tempPath]() {
@@ -1038,15 +1105,40 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         return 1;
     }
 
-    const std::filesystem::path installedBinaryPath = binaryDirectory /
+    const std::filesystem::path installedBundlePath = binaryDirectory /
         ("rqp-" + sanitize_release_identifier(asset->first) + "-" + releaseTarget.value());
-    if (!copy_file_with_mode(extractedBinary.value(), installedBinaryPath)) {
+    std::error_code installCleanupError;
+    std::filesystem::remove_all(installedBundlePath, installCleanupError);
+    if (installCleanupError) {
         cleanup();
         logger.diagnostic(self_update_diagnostic(
-            "Self-update binary install failed",
-            "Downloaded ReqPack binary could not be copied into configured self-update binary directory.",
+            "Self-update install directory cleanup failed",
+            "ReqPack could not prepare destination directory for downloaded release bundle.",
             "Check filesystem permissions for selfUpdate.binaryDirectory.",
-            installedBinaryPath.string()
+            installedBundlePath.string()
+        ));
+        return 1;
+    }
+
+    if (!copy_directory_contents_with_mode(extractedBinary.value().parent_path(), installedBundlePath)) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update bundle install failed",
+            "Downloaded ReqPack release bundle could not be copied into configured self-update binary directory.",
+            "Check filesystem permissions for selfUpdate.binaryDirectory.",
+            installedBundlePath.string()
+        ));
+        return 1;
+    }
+
+    const std::filesystem::path installedBinaryPath = installedBundlePath / "rqp";
+    if (!std::filesystem::exists(installedBinaryPath)) {
+        cleanup();
+        logger.diagnostic(self_update_diagnostic(
+            "Self-update bundle is invalid",
+            "Downloaded release bundle was copied locally, but installed executable is missing.",
+            "Republish release archive with `rqp` binary at archive root.",
+            installedBundlePath.string()
         ));
         return 1;
     }
@@ -1076,7 +1168,7 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         ));
     }
 
-    if (previousLinkTargetName.has_value() && previousLinkTargetName.value() == installedBinaryPath.filename().string()) {
+    if (previousLinkTargetPath.has_value() && previousLinkTargetPath.value() == installedBinaryPath) {
         logger.stdout("self-update complete: already on release " + asset->first);
     } else {
         logger.stdout("self-update complete: now on release " + asset->first);
