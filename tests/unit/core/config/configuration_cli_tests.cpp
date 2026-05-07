@@ -128,7 +128,7 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(config.sbom.skipMissingPackages);
 }
 
-TEST_CASE("cli update --all discovers plugins from registry database", "[unit][configuration][cli]") {
+TEST_CASE("cli update --all discovers plugins from configured registry sources", "[unit][configuration][cli]") {
     TempDir tempDir{"reqpack-cli-update-all-registry"};
     const std::filesystem::path databasePath = tempDir.path() / "registry-db";
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
@@ -136,15 +136,9 @@ TEST_CASE("cli update --all discovers plugins from registry database", "[unit][c
     ReqPackConfig config;
     config.registry.databasePath = databasePath.string();
     config.registry.pluginDirectory = pluginDirectory.string();
-
-    RegistryDatabase database(config);
-    REQUIRE(database.ensureReady());
-
-    RegistrySourceMap sources;
-    sources["dnf"].source = "git+https://github.com/Matographo/dnf.git?ref=main";
-    sources["maven"].source = "git+https://github.com/Matographo/maven.git?ref=main";
-    sources["sys"].source = "git+https://github.com/Coditary/ReqPack.git?ref=main";
-    REQUIRE(database.write_records(sources));
+    config.registry.sources["dnf"].source = "git+https://github.com/Matographo/dnf.git?ref=main";
+    config.registry.sources["maven"].source = "git+https://github.com/Matographo/maven.git?ref=main";
+    config.registry.sources["sys"].source = "git+https://github.com/Coditary/ReqPack.git?ref=main";
 
     Cli cli;
     const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "--all"}, config);
