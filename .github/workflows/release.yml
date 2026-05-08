@@ -14,9 +14,12 @@ defaults:
   run:
     shell: bash
 
+env:
+  RELEASE_ID: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.sha }}
+
 jobs:
-  build-test-package:
-    name: ${{ matrix.target }}
+  build-artifacts:
+    name: build-${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     env:
       XDG_CACHE_HOME: ${{ github.workspace }}/.cache
@@ -66,7 +69,7 @@ jobs:
       - name: Install macOS dependencies
         if: matrix.family == 'macos'
         run: |
-          brew install ccache cli11 fmt spdlog boost zstd openssl@3 lua@5.4
+          brew install ccache cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4
           {
             echo "BREW_PREFIX=$(brew --prefix)"
             echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)"
@@ -76,69 +79,172 @@ jobs:
 
       - name: Install sol2 headers
         run: |
-          git clone --depth 1 -b ${{ env.SOL2_VERSION }} https://github.com/ThePhD/sol2.git
-          echo "SOL2_INCLUDE_DIR=${{ github.workspace }}/sol2/include" >> "$GITHUB_ENV"
+          mkdir -p "${{ github.workspace }}/third_party"
+          bash .github/scripts/setup-sol2.sh "${{ github.workspace }}/third_party/include"
+          echo "SOL2_INCLUDE_DIR=${{ github.workspace }}/third_party/include" >> "$GITHUB_ENV"
 
-      - name: Fix C++ optional ambiguity in tests
+      - name: Prepare compiler cache
         run: |
-          find tests -type f -name "*.cpp" -print0 | xargs -0 perl -pi -e 's/value_or\(\{\}\)/value_or("")/g'
+          mkdir -p "$CCACHE_DIR"
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --zero-stats
 
-      - name: Build and test Linux targets
+      - name: Build Linux targets
         if: matrix.family == 'linux'
         run: |
-          mkdir -p build && cd build
-          # -static-libstdc++ und -static-libgcc für Basis-Libs
-          # Wir versuchen Lua statisch zu finden (oft unter /usr/lib/.../liblua5.4.a)
-          cmake .. \
+          rm -rf build release-artifacts build-artifacts
+          bash .github/scripts/configure-build.sh build linux \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DLink_Static=ON \
-            -DREQPACK_LINK_STATIC_LUA=ON \
-            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
-          make -j$(nproc)
-          ctest --output-on-failure
+            -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}"
+          mkdir -p release-artifacts build-artifacts
+          bash scripts/package_release_bundle.sh build/rqp "release-artifacts/rqp-${RELEASE_ID}-${{ matrix.target }}.tar.gz" linux
+          bash .github/scripts/archive-build-tree.sh build "build-artifacts/build-tree-${{ matrix.target }}.tar.gz"
 
-      - name: Build and test macOS targets
+      - name: Build macOS targets
         if: matrix.family == 'macos'
         run: |
           export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig:${LUA_PREFIX}/lib/pkgconfig:${ZSTD_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-          mkdir -p build && cd build
-          # macOS unterstützt kein echtes voll-statisches Linken (gegen System-Libs), 
-          # aber wir linken Third-Party Kram statisch ein.
-          cmake .. \
+          rm -rf build release-artifacts build-artifacts
+          bash .github/scripts/configure-build.sh build macos \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX};${ZSTD_PREFIX}" \
             -DOPENSSL_ROOT_DIR="${OPENSSL_PREFIX}" \
             -DREQPACK_ZSTD_LIBRARY="${ZSTD_PREFIX}/lib/libzstd.a" \
             -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
-            -DREQPACK_LINK_STATIC_LUA=ON \
             -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
             -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.a"
-          make -j$(sysctl -n hw.ncpu)
-          ctest --output-on-failure
+          mkdir -p release-artifacts build-artifacts
+          bash scripts/package_release_bundle.sh build/rqp "release-artifacts/rqp-${RELEASE_ID}-${{ matrix.target }}.tar.gz" macos
+          bash .github/scripts/archive-build-tree.sh build "build-artifacts/build-tree-${{ matrix.target }}.tar.gz"
 
-      - name: Package release
-        run: |
-          mkdir -p release-artifacts
-          bash scripts/package_release_bundle.sh \
-            build/rqp \
-            release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
-            ${{ matrix.family }}
+      - name: Upload build tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tree-${{ matrix.target }}
+          path: build-artifacts/build-tree-${{ matrix.target }}.tar.gz
 
       - name: Upload release bundle
         uses: actions/upload-artifact@v4
         with:
           name: release-bundle-${{ matrix.target }}
-          path: release-artifacts/rqp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          path: release-artifacts/rqp-${{ env.RELEASE_ID }}-${{ matrix.target }}.tar.gz
+
+  unit-integration-tests:
+    name: ctest-${{ matrix.target }}
+    needs: build-artifacts
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux
+            runner: ubuntu-24.04
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - target: aarch64-darwin
+            runner: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux runtime dependencies
+        if: matrix.target != 'aarch64-darwin'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            cmake \
+            libboost-all-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
+            liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+
+      - name: Install macOS runtime dependencies
+        if: matrix.target == 'aarch64-darwin'
+        run: |
+          brew install cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4
+
+      - name: Download build tree artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tree-${{ matrix.target }}
+          path: build-artifacts
+
+      - name: Restore build tree
+        run: |
+          rm -rf build
+          mkdir -p build
+          tar -xzf "build-artifacts/build-tree-${{ matrix.target }}.tar.gz" -C build
+
+      - name: Run unit and integration tests
+        run: bash .github/scripts/run-ctest.sh build
+
+  system-tests-linux:
+    name: system-linux-${{ matrix.target }}
+    needs:
+      - build-artifacts
+      - unit-integration-tests
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux
+            runner: ubuntu-24.04
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends podman
+
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-${{ matrix.target }}
+          path: release-artifacts
+
+      - name: Run Podman system tests
+        run: |
+          bash .github/scripts/run-system-tests-linux.sh \
+            "release-artifacts/rqp-${{ env.RELEASE_ID }}-${{ matrix.target }}.tar.gz" \
+            "${{ github.workspace }}" \
+            "${{ matrix.target }}"
+
+  system-tests-macos:
+    name: system-macos-aarch64-darwin
+    needs:
+      - build-artifacts
+      - unit-integration-tests
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-aarch64-darwin
+          path: release-artifacts
+
+      - name: Run native system tests
+        run: |
+          bash .github/scripts/run-system-tests-macos.sh \
+            "release-artifacts/rqp-${{ env.RELEASE_ID }}-aarch64-darwin.tar.gz" \
+            "${{ github.workspace }}"
 
   publish-container-arch:
     name: container-${{ matrix.arch }}
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
-    needs: build-test-package
+    needs:
+      - build-artifacts
+      - unit-integration-tests
+      - system-tests-linux
+      - system-tests-macos
     strategy:
       fail-fast: false
       matrix:
@@ -239,14 +345,20 @@ jobs:
     name: publish-release
     if: |
       always() &&
-      needs.build-test-package.result == 'success' &&
+      needs.build-artifacts.result == 'success' &&
+      needs.unit-integration-tests.result == 'success' &&
+      needs.system-tests-linux.result == 'success' &&
+      needs.system-tests-macos.result == 'success' &&
       (
         github.event_name == 'workflow_dispatch' ||
         needs.publish-container-manifest.result == 'success'
       )
     runs-on: ubuntu-latest
     needs:
-      - build-test-package
+      - build-artifacts
+      - unit-integration-tests
+      - system-tests-linux
+      - system-tests-macos
       - publish-container-manifest
     permissions:
       contents: write

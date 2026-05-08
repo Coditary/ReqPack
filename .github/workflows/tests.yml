@@ -11,9 +11,12 @@ defaults:
   run:
     shell: bash
 
+env:
+  RELEASE_ID: ${{ github.sha }}
+
 jobs:
-  build-test:
-    name: ${{ matrix.target }}
+  build-artifacts:
+    name: build-${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     env:
       XDG_CACHE_HOME: ${{ github.workspace }}/.cache
@@ -29,7 +32,7 @@ jobs:
       matrix:
         include:
           - target: x86_64-linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             family: linux
           - target: aarch64-linux
             runner: ubuntu-24.04-arm
@@ -65,7 +68,7 @@ jobs:
       - name: Install macOS dependencies
         if: matrix.family == 'macos'
         run: |
-          brew install ccache cli11 fmt spdlog boost zstd openssl@3 lua@5.4
+          brew install ccache cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4
           {
             echo "BREW_PREFIX=$(brew --prefix)"
             echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)"
@@ -75,8 +78,9 @@ jobs:
 
       - name: Install sol2 headers
         run: |
-          git clone --depth 1 -b ${{ env.SOL2_VERSION }} https://github.com/ThePhD/sol2.git
-          echo "SOL2_INCLUDE_DIR=${{ github.workspace }}/sol2/include" >> "$GITHUB_ENV"
+          mkdir -p "${{ github.workspace }}/third_party"
+          bash .github/scripts/setup-sol2.sh "${{ github.workspace }}/third_party/include"
+          echo "SOL2_INCLUDE_DIR=${{ github.workspace }}/third_party/include" >> "$GITHUB_ENV"
 
       - name: Prepare compiler cache
         run: |
@@ -84,27 +88,24 @@ jobs:
           ccache --set-config=max_size="$CCACHE_MAXSIZE"
           ccache --zero-stats
 
-      - name: Build and test Linux targets
+      - name: Build Linux targets
         if: matrix.family == 'linux'
         run: |
-          rm -rf build
-          mkdir build
-          cd build
-          cmake .. \
+          rm -rf build release-artifacts build-artifacts
+          bash .github/scripts/configure-build.sh build linux \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}"
-          make -j$(nproc)
-          ctest --output-on-failure
+          mkdir -p release-artifacts build-artifacts
+          bash scripts/package_release_bundle.sh build/rqp "release-artifacts/rqp-${RELEASE_ID}-${{ matrix.target }}.tar.gz" linux
+          bash .github/scripts/archive-build-tree.sh build "build-artifacts/build-tree-${{ matrix.target }}.tar.gz"
 
-      - name: Build and test macOS targets
+      - name: Build macOS targets
         if: matrix.family == 'macos'
         run: |
           export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig:${LUA_PREFIX}/lib/pkgconfig:${ZSTD_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-          rm -rf build
-          mkdir build
-          cd build
-          cmake .. \
+          rm -rf build release-artifacts build-artifacts
+          bash .github/scripts/configure-build.sh build macos \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX};${ZSTD_PREFIX}" \
@@ -113,8 +114,21 @@ jobs:
             -DSOL2_INCLUDE_DIR="${{ env.SOL2_INCLUDE_DIR }}" \
             -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
             -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.5.4.dylib"
-          make -j$(sysctl -n hw.ncpu)
-          ctest --output-on-failure
+          mkdir -p release-artifacts build-artifacts
+          bash scripts/package_release_bundle.sh build/rqp "release-artifacts/rqp-${RELEASE_ID}-${{ matrix.target }}.tar.gz" macos
+          bash .github/scripts/archive-build-tree.sh build "build-artifacts/build-tree-${{ matrix.target }}.tar.gz"
+
+      - name: Upload build tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tree-${{ matrix.target }}
+          path: build-artifacts/build-tree-${{ matrix.target }}.tar.gz
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ matrix.target }}
+          path: release-artifacts/rqp-${{ env.RELEASE_ID }}-${{ matrix.target }}.tar.gz
 
       - name: Show compiler cache stats
         if: always()
@@ -130,3 +144,108 @@ jobs:
             build/CMakeCache.txt
             build/CMakeFiles/CMakeOutput.log
             build/CMakeFiles/CMakeError.log
+
+  unit-integration-tests:
+    name: ctest-${{ matrix.target }}
+    needs: build-artifacts
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux
+            runner: ubuntu-24.04
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - target: aarch64-darwin
+            runner: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux runtime dependencies
+        if: matrix.target != 'aarch64-darwin'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            cmake \
+            libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
+            liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+
+      - name: Install macOS runtime dependencies
+        if: matrix.target == 'aarch64-darwin'
+        run: |
+          brew install cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4
+
+      - name: Download build tree artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tree-${{ matrix.target }}
+          path: build-artifacts
+
+      - name: Restore build tree
+        run: |
+          rm -rf build
+          mkdir -p build
+          tar -xzf "build-artifacts/build-tree-${{ matrix.target }}.tar.gz" -C build
+
+      - name: Run unit and integration tests
+        run: bash .github/scripts/run-ctest.sh build
+
+  system-tests-linux:
+    name: system-linux-${{ matrix.target }}
+    needs:
+      - build-artifacts
+      - unit-integration-tests
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux
+            runner: ubuntu-24.04
+          - target: aarch64-linux
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends podman
+
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-${{ matrix.target }}
+          path: release-artifacts
+
+      - name: Run Podman system tests
+        run: |
+          bash .github/scripts/run-system-tests-linux.sh \
+            "release-artifacts/rqp-${{ github.sha }}-${{ matrix.target }}.tar.gz" \
+            "${{ github.workspace }}" \
+            "${{ matrix.target }}"
+
+  system-tests-macos:
+    name: system-macos-aarch64-darwin
+    needs:
+      - build-artifacts
+      - unit-integration-tests
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-aarch64-darwin
+          path: release-artifacts
+
+      - name: Run native system tests
+        run: |
+          bash .github/scripts/run-system-tests-macos.sh \
+            "release-artifacts/rqp-${{ github.sha }}-aarch64-darwin.tar.gz" \
+            "${{ github.workspace }}"

@@ -942,6 +942,14 @@ bool is_host_refresh_command(const std::vector<std::string>& arguments) {
     return to_lower(filtered[0]) == "host" && to_lower(filtered[1]) == "refresh";
 }
 
+bool is_version_command(const std::vector<std::string>& arguments) {
+    const std::vector<std::string> filtered = strip_config_arguments(arguments);
+    if (filtered.size() != 1) {
+        return false;
+    }
+    return to_lower(filtered.front()) == "version";
+}
+
 DiagnosticMessage plugin_test_diagnostic(const std::string& summary, const std::string& cause, const std::string& recommendation, const std::string& details = {}) {
     return make_error_diagnostic(
         "plugin-test",
@@ -1437,6 +1445,13 @@ int main(int argc, char* argv[]) {
         logger.flushSync();
         curl_global_cleanup();
         return result;
+    }
+
+    if (is_version_command(rawArguments)) {
+        logger.stdout(config.applicationName + " " + config.version);
+        logger.flushSync();
+        curl_global_cleanup();
+        return 0;
     }
 
     const PluginTestCliParseResult pluginTest = parse_plugin_test_invocation(rawArguments);

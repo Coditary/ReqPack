@@ -106,6 +106,7 @@ cp rqp ~/.local/bin/rqp
 ### Option 2: Use Container Image
 
 Tagged releases also publish Linux container images to `ghcr.io/coditary/reqpack` for `linux/amd64` and `linux/arm64`.
+Those images are now validated in Podman-backed system tests before release publish.
 
 ```bash
 docker pull ghcr.io/coditary/reqpack:vX.Y.Z
@@ -537,20 +538,55 @@ make profile-tests
 Coverage writes `Coverage.xml` below `build/coverage/Testing/...` and summary is derived from `src/main/cpp` sources.
 Profiling writes reports below `build/profile/profile-data/`.
 
+### System-Test Helpers
+
+ReqPack now has dedicated artifact-level system tests in addition to CTest-based unit and integration tests.
+
+- Linux system tests package `rqp`, build temporary runtime image in Podman, then run end-to-end fixture checks.
+- macOS system tests package `rqp`, extract bundle, then run same fixture flow natively.
+
+Local examples:
+
+```bash
+bash .github/scripts/configure-build.sh build linux -DSOL2_INCLUDE_DIR=/tmp/reqpack-sol2/include
+bash scripts/package_release_bundle.sh build/rqp /tmp/rqp-test.tar.gz linux
+bash .github/scripts/run-system-tests-linux.sh /tmp/rqp-test.tar.gz "$PWD" x86_64-linux
+```
+
+```bash
+bash .github/scripts/configure-build.sh build macos \
+  -DSOL2_INCLUDE_DIR=/tmp/reqpack-sol2/include \
+  -DCMAKE_PREFIX_PATH="${BREW_PREFIX};${OPENSSL_PREFIX};${LUA_PREFIX};${ZSTD_PREFIX}" \
+  -DOPENSSL_ROOT_DIR="${OPENSSL_PREFIX}" \
+  -DREQPACK_ZSTD_LIBRARY="${ZSTD_PREFIX}/lib/libzstd.dylib" \
+  -DLUA_INCLUDE_DIR="${LUA_PREFIX}/include/lua" \
+  -DLUA_LIBRARIES="${LUA_PREFIX}/lib/liblua.5.4.dylib"
+bash scripts/package_release_bundle.sh build/rqp /tmp/rqp-test.tar.gz macos
+bash .github/scripts/run-system-tests-macos.sh /tmp/rqp-test.tar.gz "$PWD"
+```
+
 ## CI/CD
 
 Repo ships three documentation-visible automation signals:
 
-- `CI`: build and test matrix for `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`.
-- `Release`: tag-driven packaging flow for `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin` plus `SHA256SUMS` publication.
+- `Tests`: artifact-first build matrix for `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`, then fan-out unit, integration, and system verification.
+- `Release`: tag-driven artifact-first packaging flow for `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin` plus `SHA256SUMS` and Linux GHCR image publication.
 - `Coverage`: Linux coverage run that updates README badge from GitHub Actions on pushes to `main` and uploads report artifacts for pull requests.
+
+Release workflow builds each target once per workflow run, then reuses those exact tested outputs for:
+
+- archived build-tree CTest replay
+- Linux Podman system tests
+- Darwin native system tests
+- GHCR image publication
+- GitHub release asset publication
 
 Coverage badge note:
 it will show `pending` until first successful `Coverage` workflow run on `main` writes `.github/badges/coverage.json`.
 
 Relevant workflow files:
 
-- `.github/workflows/ci.yml`
+- `.github/workflows/tests.yml`
 - `.github/workflows/release.yml`
 - `.github/workflows/coverage.yml`
 
@@ -559,7 +595,7 @@ Relevant workflow files:
 - `src/main/cpp`: core implementation.
 - `src/main/include`: public and internal headers.
 - `plugins/`: built-in or locally checked-in plugins.
-- `tests/`: unit, integration, coverage, and profiling helpers.
+- `tests/`: unit, integration, system, coverage, and profiling helpers.
 - `.github/workflows/`: CI, coverage, and release automation.
 
 ## Contributing

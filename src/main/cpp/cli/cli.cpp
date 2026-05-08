@@ -753,6 +753,7 @@ void Cli::print_help() {
         "  sbom                    Exports planned graph as table or JSON\n"
         "  audit                   Audits planned graph for vulnerabilities\n"
         "  host                    Manages cached host system metadata\n"
+        "  version                 Prints ReqPack version\n"
         "  test-plugin             Runs hermetic plugin conformance cases\n"
         "  snapshot                Snapshots installed packages to reqpack.lua\n"
         "  serve                   Reads commands from stdin and keeps process running\n"
