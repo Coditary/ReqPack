@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "name": "sys",
+  "version": "1.0.0",
+  "summary": "Frozen sys fixture",
+  "description": "Frozen sys bundle fixture for orchestrator tests",
+  "license": "MIT"
+}

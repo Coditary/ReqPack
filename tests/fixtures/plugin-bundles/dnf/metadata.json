@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "name": "dnf",
+  "version": "1.0.0",
+  "summary": "Frozen DNF fixture",
+  "description": "Frozen DNF bundle fixture for orchestrator tests",
+  "license": "MIT"
+}

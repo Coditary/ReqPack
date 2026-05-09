@@ -3,6 +3,7 @@
 #include <sol/sol.hpp>
 
 #include "core/host/host_info.h"
+#include "core/plugins/plugin_bundle.h"
 #include "plugins/lua_bridge.h"
 
 #include <algorithm>
@@ -315,14 +316,14 @@ std::filesystem::path resolve_plugin_script(const ReqPackConfig& config, const s
 
     error.clear();
     if (std::filesystem::is_directory(pluginPath, error) && !error) {
-        const std::filesystem::path scriptPath = pluginPath / (pluginPath.filename().string() + ".lua");
+        const std::filesystem::path scriptPath = pluginPath / "run.lua";
         if (std::filesystem::is_regular_file(scriptPath, error) && !error) {
             return std::filesystem::absolute(scriptPath).lexically_normal();
         }
-        throw PluginTestError("plugin directory does not contain matching script: " + scriptPath.string());
+        throw PluginTestError("plugin directory does not contain run.lua: " + scriptPath.string());
     }
 
-    const std::filesystem::path byId = std::filesystem::path(config.registry.pluginDirectory) / pluginArgument / (pluginArgument + ".lua");
+    const std::filesystem::path byId = std::filesystem::path(config.registry.pluginDirectory) / pluginArgument / "run.lua";
     error.clear();
     if (std::filesystem::is_regular_file(byId, error) && !error) {
         return std::filesystem::absolute(byId).lexically_normal();
@@ -456,7 +457,6 @@ PluginCallContext make_test_context(LuaBridge& bridge, const ReqPackConfig& conf
         .pluginId = bridge.getPluginId(),
         .pluginDirectory = bridge.getPluginDirectory(),
         .scriptPath = bridge.getScriptPath(),
-        .bootstrapPath = bridge.getBootstrapPath(),
         .flags = testCase.flags,
         .host = bridge.getRuntimeHost(),
         .proxy = proxy_config_for_system(config, bridge.getPluginId()),

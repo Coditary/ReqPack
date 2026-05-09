@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "name": "java",
+  "version": "1.0.0",
+  "summary": "Frozen java proxy fixture",
+  "description": "Frozen java proxy bundle fixture for orchestrator tests",
+  "license": "MIT"
+}

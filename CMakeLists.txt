@@ -160,6 +160,7 @@ set(SOURCES
     src/main/cpp/core/packages/rq_repository.cpp
     src/main/cpp/core/planning/planner.cpp
     src/main/cpp/core/planning/planner_core.cpp
+    src/main/cpp/core/plugins/plugin_bundle.cpp
     src/main/cpp/core/planning/request_resolution.cpp
     src/main/cpp/core/plugins/plugin_test_runner.cpp
     src/main/cpp/core/registry/registry.cpp
@@ -211,6 +212,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/security/osv_core.cpp
     src/main/cpp/core/planning/planner.cpp
     src/main/cpp/core/planning/planner_core.cpp
+    src/main/cpp/core/plugins/plugin_bundle.cpp
     src/main/cpp/core/planning/request_resolution.cpp
     src/main/cpp/core/security/security_gateway_service.cpp
     src/main/cpp/core/export/audit_exporter.cpp
@@ -289,6 +291,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/packages/rq_package.cpp
     src/main/cpp/core/packages/rq_repository.cpp
     src/main/cpp/core/planning/planner_core.cpp
+    src/main/cpp/core/plugins/plugin_bundle.cpp
     src/main/cpp/core/registry/registry_database.cpp
     src/main/cpp/core/registry/registry_database_core.cpp
     src/main/cpp/core/registry/registry_json_parser.cpp

@@ -1,4 +1,5 @@
 #include "core/registry/registry_database.h"
+#include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database_core.h"
 #include "core/registry/registry_json_parser.h"
 #include "core/common/version_compare.h"
@@ -242,20 +243,15 @@ std::optional<std::pair<std::string, std::string>> read_plugin_payload_files(
 }
 
 std::optional<std::pair<std::string, std::string>> read_plugin_directory(const std::filesystem::path& directory, const std::string& pluginName) {
+    if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_root(directory, pluginName); layout.has_value()) {
+        return std::make_pair(read_text_file(layout->runScriptPath), std::string{});
+    }
     return read_plugin_payload_files(directory / (pluginName + ".lua"), directory / "bootstrap.lua");
 }
 
 std::optional<std::filesystem::path> plugin_bundle_root(const std::filesystem::path& basePath, const std::string& pluginName) {
-    const std::vector<std::filesystem::path> candidates = {
-        basePath / "plugins" / pluginName,
-        basePath / pluginName,
-        basePath
-    };
-
-    for (const std::filesystem::path& candidate : candidates) {
-        if (std::filesystem::exists(candidate / (pluginName + ".lua"))) {
-            return candidate;
-        }
+    if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_root(basePath, pluginName); layout.has_value()) {
+        return layout->rootDir;
     }
 
     return std::nullopt;
@@ -613,11 +609,7 @@ bool sync_git_repository(const ReqPackConfig& config, const std::string& source,
 }
 
 std::optional<std::pair<std::string, std::string>> read_plugin_repository(const std::filesystem::path& repositoryPath, const std::string& pluginName) {
-    if (const auto bundleRoot = plugin_bundle_root(repositoryPath, pluginName)) {
-        return read_plugin_directory(bundleRoot.value(), pluginName);
-    }
-
-    return std::nullopt;
+    return read_plugin_directory(repositoryPath, pluginName);
 }
 
 std::optional<std::filesystem::path> resolve_bundle_path(const ReqPackConfig& config, const std::string& source, const std::string& pluginName) {
@@ -625,10 +617,6 @@ std::optional<std::filesystem::path> resolve_bundle_path(const ReqPackConfig& co
     if (std::filesystem::exists(sourcePath) && std::filesystem::is_directory(sourcePath)) {
         if (const auto bundleRoot = plugin_bundle_root(sourcePath, pluginName)) {
             return bundleRoot;
-        }
-
-        if (std::filesystem::exists(sourcePath / (pluginName + ".lua"))) {
-            return sourcePath;
         }
     }
 

@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "name": "maven",
+  "version": "1.0.0",
+  "summary": "Frozen Maven fixture",
+  "description": "Frozen Maven bundle fixture for orchestrator tests",
+  "license": "MIT"
+}

@@ -52,10 +52,37 @@ ReqPackConfig make_planner_test_config(const std::filesystem::path& root) {
     return config;
 }
 
-std::filesystem::path add_plugin_script(const std::filesystem::path& pluginRoot, const std::string& pluginName, const std::string& content) {
-    const std::filesystem::path scriptPath = pluginRoot / pluginName / (pluginName + ".lua");
-    write_file(scriptPath, content);
-    return scriptPath;
+std::filesystem::path add_plugin_script(
+    const std::filesystem::path& pluginRoot,
+    const std::string& pluginName,
+    const std::string& content,
+    const std::vector<std::string>& dependencySpecs = {}
+) {
+    const std::filesystem::path pluginDirectory = pluginRoot / pluginName;
+    std::string manifest = "return {\n  apiVersion = 1,\n  depends = {";
+    if (!dependencySpecs.empty()) {
+        manifest += "\n";
+        for (const std::string& dependencySpec : dependencySpecs) {
+            manifest += "    \"" + dependencySpec + "\",\n";
+        }
+        manifest += "  ";
+    }
+    manifest += "}\n}\n";
+
+    write_file(pluginDirectory / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"" + pluginName + "\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"summary\": \"" + pluginName + " plugin\",\n"
+        "  \"description\": \"" + pluginName + " plugin bundle\",\n"
+        "  \"license\": \"MIT\"\n"
+        "}\n");
+    write_file(pluginDirectory / "reqpack.lua", manifest);
+    write_file(pluginDirectory / "run.lua", content);
+    write_file(pluginDirectory / "scripts" / "install.lua", "return true\n");
+    write_file(pluginDirectory / "scripts" / "remove.lua", "return true\n");
+    return pluginDirectory / "run.lua";
 }
 
 std::vector<Package> collect_packages(const Graph& graph) {
@@ -256,8 +283,8 @@ TEST_CASE("planner ensure builds dependency DAG from plugin requirements", "[int
     TempDir tempDir{"reqpack-planner-ensure-dag"};
     ReqPackConfig config = make_planner_test_config(tempDir.path());
 
-    add_plugin_script(tempDir.path() / "plugins", "app", APP_PLUGIN);
-    add_plugin_script(tempDir.path() / "plugins", "dep", DEP_PLUGIN_MISSING);
+    add_plugin_script(tempDir.path() / "plugins", "app", APP_PLUGIN, {"dep:runtime"});
+    add_plugin_script(tempDir.path() / "plugins", "dep", DEP_PLUGIN_MISSING, {"leaf:openssl"});
     add_plugin_script(tempDir.path() / "plugins", "leaf", LEAF_PLUGIN);
 
     Registry registry(config);
@@ -278,7 +305,7 @@ TEST_CASE("planner ensure returns empty graph when plugin requirements are alrea
     TempDir tempDir{"reqpack-planner-ensure-empty"};
     ReqPackConfig config = make_planner_test_config(tempDir.path());
 
-    add_plugin_script(tempDir.path() / "plugins", "app", APP_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "app", APP_PLUGIN, {"dep:runtime"});
     add_plugin_script(tempDir.path() / "plugins", "dep", DEP_PLUGIN_SATISFIED);
 
     Registry registry(config);
@@ -294,7 +321,7 @@ TEST_CASE("planner install marks requirements ready when plugin dependencies are
     TempDir tempDir{"reqpack-planner-marker"};
     ReqPackConfig config = make_planner_test_config(tempDir.path());
 
-    add_plugin_script(tempDir.path() / "plugins", "app", APP_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "app", APP_PLUGIN, {"dep:runtime"});
     add_plugin_script(tempDir.path() / "plugins", "dep", DEP_PLUGIN_SATISFIED);
 
     Registry registry(config);

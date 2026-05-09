@@ -1,4 +1,5 @@
 #include "core/registry/registry_database_core.h"
+#include "core/plugins/plugin_bundle.h"
 
 #include <algorithm>
 #include <array>
@@ -128,12 +129,14 @@ bool registry_record_requires_script_hash(const RegistryRecord& record) {
 
 std::pair<std::string, std::string> registry_record_payload_files(const RegistryRecord& record) {
     if (record.bundleSource && !record.bundlePath.empty() && std::filesystem::exists(record.bundlePath)) {
+        if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_root(record.bundlePath, record.name); layout.has_value()) {
+            return {read_text_file(layout->runScriptPath), std::string{}};
+        }
+
         const std::filesystem::path bundlePath(record.bundlePath);
-        const std::filesystem::path scriptPath = bundlePath / (record.name + ".lua");
-        const std::filesystem::path bootstrapPath = bundlePath / "bootstrap.lua";
         return {
-            read_text_file(scriptPath),
-            std::filesystem::exists(bootstrapPath) ? read_text_file(bootstrapPath) : std::string{}
+            read_text_file(bundlePath / (record.name + ".lua")),
+            read_text_file(bundlePath / "bootstrap.lua")
         };
     }
 

@@ -25,7 +25,6 @@ public:
     std::string getPluginId() const override;
     std::string getPluginDirectory() const override;
     std::string getScriptPath() const override;
-    std::string getBootstrapPath() const override;
     IPluginRuntimeHost* getRuntimeHost() override;
     bool supportsResolvePackage() const override;
 

@@ -75,10 +75,36 @@ ReqPackConfig make_executor_test_config(const std::filesystem::path& root) {
     return config;
 }
 
-std::filesystem::path add_plugin_script(const std::filesystem::path& pluginRoot, const std::string& pluginName, const std::string& content) {
-    const std::filesystem::path scriptPath = pluginRoot / pluginName / (pluginName + ".lua");
-    write_file(scriptPath, content);
-    return scriptPath;
+std::filesystem::path add_plugin_script(
+    const std::filesystem::path& pluginRoot,
+    const std::string& pluginName,
+    const std::string& content,
+    const std::vector<std::string>& dependencySpecs = {}
+) {
+    const std::filesystem::path pluginDirectory = pluginRoot / pluginName;
+    std::string manifest = "return {\n  apiVersion = 1,\n  depends = {";
+    if (!dependencySpecs.empty()) {
+        manifest += "\n";
+        for (const std::string& dependencySpec : dependencySpecs) {
+            manifest += "    \"" + dependencySpec + "\",\n";
+        }
+        manifest += "  ";
+    }
+    manifest += "}\n}\n";
+    write_file(pluginDirectory / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"" + pluginName + "\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"summary\": \"" + pluginName + " plugin\",\n"
+        "  \"description\": \"" + pluginName + " plugin bundle\",\n"
+        "  \"license\": \"MIT\"\n"
+        "}\n");
+    write_file(pluginDirectory / "reqpack.lua", manifest);
+    write_file(pluginDirectory / "run.lua", content);
+    write_file(pluginDirectory / "scripts" / "install.lua", "return true\n");
+    write_file(pluginDirectory / "scripts" / "remove.lua", "return true\n");
+    return pluginDirectory / "run.lua";
 }
 
 Graph make_linear_graph(const std::vector<Package>& packages) {
@@ -176,7 +202,7 @@ function plugin.info(context, package)
   return {
     name = package,
     version = join(context.flags),
-    description = context.plugin.bootstrap,
+    description = context.plugin.script,
     homepage = context.plugin.dir,
     author = context.plugin.id,
     email = "query@example.test",
@@ -850,7 +876,7 @@ TEST_CASE("executor info forwards first package and flags", "[integration][execu
 
     CHECK(info.name == "first");
     CHECK(info.version == "--verbose|--raw");
-    CHECK(info.description == (tempDir.path() / "plugins" / "query" / "bootstrap.lua").string());
+    CHECK(info.description == (tempDir.path() / "plugins" / "query" / "run.lua").string());
     CHECK(info.homepage == (tempDir.path() / "plugins" / "query").string());
     CHECK(info.author == "query");
     CHECK(info.email == "query@example.test");
@@ -1180,8 +1206,8 @@ TEST_CASE("executor keeps shared dependency installed until last owner is remove
     ReqPackConfig config = make_executor_test_config(tempDir.path());
     config.execution.useTransactionDb = false;
 
-    add_plugin_script(tempDir.path() / "plugins", "app", OWNER_CHAIN_PLUGIN);
-    add_plugin_script(tempDir.path() / "plugins", "other", OWNER_CHAIN_PLUGIN);
+    add_plugin_script(tempDir.path() / "plugins", "app", OWNER_CHAIN_PLUGIN, {"dep:maven"});
+    add_plugin_script(tempDir.path() / "plugins", "other", OWNER_CHAIN_PLUGIN, {"dep:maven"});
     add_plugin_script(tempDir.path() / "plugins", "dep", OWNER_CHAIN_PLUGIN);
 
     Registry registry(config);

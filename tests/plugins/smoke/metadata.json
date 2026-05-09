@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "name": "smoke",
+  "version": "1.0.0",
+  "summary": "Smoke exec rules fixture",
+  "description": "Smoke exec rules fixture bundle for integration tests",
+  "license": "MIT"
+}

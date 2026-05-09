@@ -23,7 +23,6 @@ private:
 	std::string m_pluginId;
 	std::string m_pluginDirectory;
 	std::string m_scriptPath;
-	std::string m_bootstrapPath;
 	std::optional<PluginSecurityMetadata> m_securityMetadata;
 	std::vector<std::string> m_fileExtensions;
 	Logger& m_logger;
@@ -63,7 +62,6 @@ public:
 	std::string getPluginId() const override { return m_pluginId; }
 	std::string getPluginDirectory() const override { return m_pluginDirectory; }
 	std::string getScriptPath() const override { return m_scriptPath; }
-	std::string getBootstrapPath() const override { return m_bootstrapPath; }
 	IPluginRuntimeHost* getRuntimeHost() override { return this; }
 	std::optional<PluginSecurityMetadata> getSecurityMetadata() const override { return m_securityMetadata; }
 	std::vector<std::string> getFileExtensions() const override { return m_fileExtensions; }

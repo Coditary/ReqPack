@@ -1,6 +1,7 @@
 #include "core/execution/executor.h"
 
 #include "core/host/host_info.h"
+#include "core/plugins/plugin_bundle.h"
 #include "core/planning/request_resolution.h"
 #include "output/diagnostic.h"
 #include "output/idisplay.h"
@@ -582,6 +583,21 @@ void Executer::execute(Graph *graph) {
 std::vector<Package> Executer::normalizedRequirements(const Package& package) const {
 	if (package.system.empty() || this->securityGateway.isGatewaySystem(package.system)) {
 		return {};
+	}
+
+	if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_installed(this->config, package.system); layout.has_value()) {
+		std::vector<Package> requirements;
+		for (Package dependency : plugin_bundle_dependency_packages(layout.value())) {
+			if (dependency.action == ActionType::UNKNOWN) {
+				dependency.action = ActionType::INSTALL;
+			}
+			if (dependency.system.empty()) {
+				dependency.system = package.system;
+			}
+			dependency.system = this->registry->resolvePluginName(dependency.system);
+			requirements.push_back(std::move(dependency));
+		}
+		return requirements;
 	}
 
 	if (this->registry->getPlugin(package.system) == nullptr || !this->registry->loadPlugin(package.system)) {
@@ -1484,7 +1500,6 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 		.pluginId = plugin->getPluginId(),
 		.pluginDirectory = plugin->getPluginDirectory(),
 		.scriptPath = plugin->getScriptPath(),
-		.bootstrapPath = plugin->getBootstrapPath(),
 		.flags = taskGroup.flags,
 		.host = plugin->getRuntimeHost(),
 		.proxy = proxy_config_for_system(this->config, plugin->getPluginId()),

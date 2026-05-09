@@ -1,5 +1,6 @@
 #include "core/download/downloader.h"
 #include "core/download/downloader_core.h"
+#include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database_core.h"
 
 #include <curl/curl.h>
@@ -22,6 +23,22 @@ std::string read_file(const std::filesystem::path& path) {
     std::ostringstream buffer;
     buffer << stream.rdbuf();
     return buffer.str();
+}
+
+std::string json_escape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char ch : value) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped.push_back(ch); break;
+        }
+    }
+    return escaped;
 }
 
 bool write_file(const std::filesystem::path& path, const std::string& content) {
@@ -100,6 +117,29 @@ void copy_directory_contents(const std::filesystem::path& source, const std::fil
     }
 }
 
+bool write_script_bundle(
+    const std::filesystem::path& targetDirectory,
+    const std::string& pluginName,
+    const std::string& description,
+    const std::string& script
+) {
+    const std::string summary = description.empty() ? pluginName : description;
+    remove_directory_contents(targetDirectory);
+    return write_file(targetDirectory / "metadata.json",
+               "{\n"
+               "  \"formatVersion\": 1,\n"
+               "  \"name\": \"" + json_escape(pluginName) + "\",\n"
+               "  \"version\": \"0.0.0\",\n"
+               "  \"summary\": \"" + json_escape(summary) + "\",\n"
+               "  \"description\": \"" + json_escape(summary) + "\",\n"
+               "  \"license\": \"unknown\"\n"
+               "}\n") &&
+           write_file(targetDirectory / "reqpack.lua", "return {\n  apiVersion = 1,\n  depends = {}\n}\n") &&
+           write_file(targetDirectory / "run.lua", script) &&
+           write_file(targetDirectory / "scripts" / "install.lua", "return true\n") &&
+           write_file(targetDirectory / "scripts" / "remove.lua", "return true\n");
+}
+
 }  // namespace
 
 bool Downloader::downloadPlugin(const std::string& system) const {
@@ -142,23 +182,14 @@ bool Downloader::downloadPlugin(const std::string& system) const {
         }
 
         if (record->bundleSource && !record->bundlePath.empty() && std::filesystem::exists(record->bundlePath)) {
-            remove_directory_contents(targetPath.parent_path());
-            copy_directory_contents(record->bundlePath, targetPath.parent_path());
-            return true;
+            if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_root(record->bundlePath, resolvedSystem); layout.has_value()) {
+                remove_directory_contents(targetPath.parent_path());
+                copy_directory_contents(layout->rootDir, targetPath.parent_path());
+                return true;
+            }
         }
 
-        if (!write_file(targetPath, record->script)) {
-            return false;
-        }
-
-        const std::filesystem::path bootstrapPath = targetPath.parent_path() / "bootstrap.lua";
-        if (!record->bootstrapScript.empty()) {
-            return write_file(bootstrapPath, record->bootstrapScript);
-        }
-
-        std::error_code removeError;
-        std::filesystem::remove(bootstrapPath, removeError);
-        return true;
+        return write_script_bundle(targetPath.parent_path(), resolvedSystem, record->description, record->script);
     }
 
     if (!this->download_to_path(record->source, targetPath)) {
@@ -181,6 +212,12 @@ bool Downloader::downloadPlugin(const std::string& system) const {
     if (!registry_record_matches_expected_hashes(downloadedRecord)) {
         std::error_code removeError;
         std::filesystem::remove(downloadedPath, removeError);
+        return false;
+    }
+
+    if (!write_script_bundle(downloadedPath.parent_path(), resolvedSystem, record->description, script)) {
+        std::error_code removeError;
+        std::filesystem::remove_all(downloadedPath.parent_path(), removeError);
         return false;
     }
 

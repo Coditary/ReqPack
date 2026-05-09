@@ -1,4 +1,5 @@
 #include "core/registry/registry.h"
+#include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database_core.h"
 #include "plugins/rq_plugin.h"
 #include "plugins/lua_bridge.h"
@@ -17,6 +18,37 @@ std::string to_lower(std::string value) {
         return static_cast<char>(std::tolower(c));
     });
     return value;
+}
+
+std::string json_escape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char ch : value) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped.push_back(ch); break;
+        }
+    }
+    return escaped;
+}
+
+bool write_text_file(const std::filesystem::path& path, const std::string& content) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) {
+        return false;
+    }
+
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+        return false;
+    }
+    output << content;
+    return output.good();
 }
 
 void remove_directory_contents(const std::filesystem::path& directory) {
@@ -81,6 +113,24 @@ void copy_directory_contents(const std::filesystem::path& source, const std::fil
             return;
         }
     }
+}
+
+void materialize_script_bundle(const std::filesystem::path& targetDirectory, const RegistryRecord& record) {
+    const std::string summary = record.description.empty() ? record.name : record.description;
+    remove_directory_contents(targetDirectory);
+    (void)write_text_file(targetDirectory / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"" + json_escape(record.name) + "\",\n"
+        "  \"version\": \"0.0.0\",\n"
+        "  \"summary\": \"" + json_escape(summary) + "\",\n"
+        "  \"description\": \"" + json_escape(summary) + "\",\n"
+        "  \"license\": \"unknown\"\n"
+        "}\n");
+    (void)write_text_file(targetDirectory / "reqpack.lua", "return {\n  apiVersion = 1,\n  depends = {}\n}\n");
+    (void)write_text_file(targetDirectory / "run.lua", record.script);
+    (void)write_text_file(targetDirectory / "scripts" / "install.lua", "return true\n");
+    (void)write_text_file(targetDirectory / "scripts" / "remove.lua", "return true\n");
 }
 
 bool path_matches_extension(const std::filesystem::path& path, const std::string& extension) {
@@ -326,39 +376,29 @@ void Registry::materializePluginScript(const RegistryRecord& record) const {
         return;
     }
 
-    if (record.script.empty()) {
+    if (record.script.empty() && (!record.bundleSource || record.bundlePath.empty())) {
         return;
     }
 
     const std::filesystem::path targetDirectory = std::filesystem::path(this->config.registry.pluginDirectory) / record.name;
+    if (record.bundleSource && !record.bundlePath.empty()) {
+        if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_root(record.bundlePath, record.name); layout.has_value()) {
+            remove_directory_contents(targetDirectory);
+            copy_directory_contents(layout->rootDir, targetDirectory);
+            return;
+        }
+    }
+
+    if (!record.script.empty()) {
+        materialize_script_bundle(targetDirectory, record);
+        return;
+    }
+
     if (record.bundleSource && !record.bundlePath.empty() && std::filesystem::exists(record.bundlePath)) {
         remove_directory_contents(targetDirectory);
         copy_directory_contents(record.bundlePath, targetDirectory);
         return;
     }
-
-    const std::filesystem::path targetPath = targetDirectory / (record.name + ".lua");
-    std::filesystem::create_directories(targetPath.parent_path());
-
-    std::ofstream stream(targetPath, std::ios::binary | std::ios::trunc);
-    if (!stream) {
-        return;
-    }
-
-    stream << record.script;
-
-    const std::filesystem::path bootstrapPath = targetDirectory / "bootstrap.lua";
-
-    if (!record.bootstrapScript.empty()) {
-        std::ofstream bootstrapStream(bootstrapPath, std::ios::binary | std::ios::trunc);
-        if (bootstrapStream) {
-            bootstrapStream << record.bootstrapScript;
-        }
-        return;
-    }
-
-    std::error_code removeError;
-    std::filesystem::remove(bootstrapPath, removeError);
 }
 
 void Registry::scanDirectory(const std::string& path) {
@@ -366,22 +406,22 @@ void Registry::scanDirectory(const std::string& path) {
 
     if (!std::filesystem::exists(path)) return;
 
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
-		std::filesystem::path filePath = entry.path();
-
-        if (!entry.is_regular_file() || filePath.extension() != ".lua") {
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(path, error)) {
+        if (error || !entry.is_directory()) {
             continue;
         }
 
-        if (filePath.parent_path().filename() != filePath.stem()) {
+        const std::optional<PluginBundleLayout> layout = plugin_bundle_read_directory(entry.path());
+        if (!layout.has_value()) {
             continue;
         }
 
-        std::string id = filePath.stem().string();
+        std::string id = layout->metadata.name;
 		if (id == BUILTIN_RQ_PLUGIN_ID) {
 			continue;
 		}
-		m_pluginPaths[id] = filePath.string();
+		m_pluginPaths[id] = layout->runScriptPath.string();
 		if (m_states.find(id) == m_states.end() || m_states[id] == PluginState::NOT_FOUND) {
 			m_states[id] = PluginState::REGISTERED;
 		}

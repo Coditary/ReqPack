@@ -10,8 +10,6 @@
 #include "cli/cli.h"
 #include "core/config/configuration.h"
 #include "core/registry/registry_database.h"
-#include "test_helpers.h"
-
 namespace {
 
 class TempDir {
@@ -38,6 +36,54 @@ private:
 std::filesystem::path reqpack_user_home() {
     const char* home = std::getenv("HOME");
     return home != nullptr ? std::filesystem::path(home) : std::filesystem::path{};
+}
+
+void write_file(const std::filesystem::path& path, const std::string& content) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary);
+    REQUIRE(output.is_open());
+    output << content;
+}
+
+void write_plugin_bundle(const std::filesystem::path& pluginRoot, const std::string& pluginName) {
+    const std::filesystem::path pluginDirectory = pluginRoot / pluginName;
+    write_file(pluginDirectory / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"" + pluginName + "\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"summary\": \"" + pluginName + " plugin\",\n"
+        "  \"description\": \"" + pluginName + " plugin bundle\",\n"
+        "  \"license\": \"MIT\"\n"
+        "}\n");
+    write_file(pluginDirectory / "reqpack.lua", "return {\n  apiVersion = 1,\n  depends = {}\n}\n");
+    write_file(pluginDirectory / "run.lua", R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "test" } end
+function plugin.getMissingPackages(packages) return packages or {} end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.outdated(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, packageName) return { name = packageName or "pkg", version = "1.0.0" } end
+function plugin.shutdown() return true end
+)");
+    write_file(pluginDirectory / "scripts" / "install.lua", "return true\n");
+    write_file(pluginDirectory / "scripts" / "remove.lua", "return true\n");
+}
+
+void write_test_plugin_bundles(const std::filesystem::path& pluginRoot) {
+    write_plugin_bundle(pluginRoot, "dnf");
+    write_plugin_bundle(pluginRoot, "java");
+    write_plugin_bundle(pluginRoot, "maven");
+    write_plugin_bundle(pluginRoot, "sys");
 }
 
 }  // namespace
@@ -442,7 +488,10 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
 TEST_CASE("cli parses token vectors and defaults list and outdated to all systems", "[unit][cli][parse]") {
     Cli cli;
     ReqPackConfig config = default_reqpack_config();
-    config.registry.pluginDirectory = (repo_root() / "plugins").string();
+    TempDir tempDir{"reqpack-cli-known-systems"};
+    write_test_plugin_bundles(tempDir.path() / "plugins");
+    config.registry.pluginDirectory = (tempDir.path() / "plugins").string();
+    config.registry.databasePath = (tempDir.path() / "registry-db").string();
 
     SECTION("token vector install parse") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "dnf", "curl", "git"}, config);

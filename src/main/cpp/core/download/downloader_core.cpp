@@ -38,5 +38,5 @@ std::filesystem::path downloader_temp_path_for_target(const std::filesystem::pat
 }
 
 std::filesystem::path downloader_plugin_target_path(const ReqPackConfig& config, const std::string& system) {
-    return std::filesystem::path(config.registry.pluginDirectory) / system / (system + ".lua");
+    return std::filesystem::path(config.registry.pluginDirectory) / system / "run.lua";
 }

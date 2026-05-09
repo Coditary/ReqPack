@@ -1,2 +1,0 @@
-# dnf
-test for packagemanager

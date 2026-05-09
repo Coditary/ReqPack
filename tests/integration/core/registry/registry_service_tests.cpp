@@ -68,9 +68,21 @@ ReqPackConfig make_registry_test_config(const std::filesystem::path& root) {
 }
 
 std::filesystem::path add_plugin_script(const std::filesystem::path& pluginRoot, const std::string& pluginName, const std::string& content) {
-    const std::filesystem::path scriptPath = pluginRoot / pluginName / (pluginName + ".lua");
-    write_file(scriptPath, content);
-    return scriptPath;
+    const std::filesystem::path pluginDirectory = pluginRoot / pluginName;
+    write_file(pluginDirectory / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"" + pluginName + "\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"summary\": \"" + pluginName + " plugin\",\n"
+        "  \"description\": \"" + pluginName + " plugin bundle\",\n"
+        "  \"license\": \"MIT\"\n"
+        "}\n");
+    write_file(pluginDirectory / "reqpack.lua", "return {\n  apiVersion = 1,\n  depends = {}\n}\n");
+    write_file(pluginDirectory / "run.lua", content);
+    write_file(pluginDirectory / "scripts" / "install.lua", "return true\n");
+    write_file(pluginDirectory / "scripts" / "remove.lua", "return true\n");
+    return pluginDirectory / "run.lua";
 }
 
 const char* VALID_PLUGIN = R"(
@@ -241,8 +253,9 @@ TEST_CASE("registry resolves aliases from database and config", "[integration][r
 TEST_CASE("registry materializes database-backed plugin script on load", "[integration][registry][service]") {
     TempDir tempDir{"reqpack-registry-materialize"};
     ReqPackConfig config = make_registry_test_config(tempDir.path());
+    const std::filesystem::path cachedSource = (tempDir.path() / "remote-source" / "cached");
     config.registry.sources["cached"] = RegistrySourceEntry{
-        .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
+        .source = cachedSource.string(),
         .alias = false,
         .description = "cached plugin",
         .role = "package-manager",
@@ -254,12 +267,12 @@ TEST_CASE("registry materializes database-backed plugin script on load", "[integ
         .scriptSha256 = registry_database_sha256_hex(VALID_PLUGIN),
     };
 
-    write_file(tempDir.path() / "remote-source" / "cached.lua", VALID_PLUGIN);
+    add_plugin_script(tempDir.path() / "remote-source", "cached", VALID_PLUGIN);
 
     Registry registry(config);
     REQUIRE(registry.getDatabase()->ensureReady());
 
-    const std::filesystem::path materializedPath = tempDir.path() / "plugins" / "cached" / "cached.lua";
+    const std::filesystem::path materializedPath = tempDir.path() / "plugins" / "cached" / "run.lua";
     CHECK_FALSE(std::filesystem::exists(materializedPath));
 
     REQUIRE(registry.loadPlugin("cached"));
@@ -272,28 +285,30 @@ TEST_CASE("registry blocks database-backed plugin load when thin-layer metadata 
     TempDir tempDir{"reqpack-registry-thin-layer-block"};
     ReqPackConfig config = make_registry_test_config(tempDir.path());
     config.security.requireThinLayer = true;
+    const std::filesystem::path cachedSource = (tempDir.path() / "remote-source" / "cached");
     config.registry.sources["cached"] = RegistrySourceEntry{
-        .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
+        .source = cachedSource.string(),
         .alias = false,
         .description = "cached plugin",
     };
 
-    write_file(tempDir.path() / "remote-source" / "cached.lua", VALID_PLUGIN);
+    add_plugin_script(tempDir.path() / "remote-source", "cached", VALID_PLUGIN);
 
     Registry registry(config);
     REQUIRE(registry.getDatabase()->ensureReady());
 
     CHECK_FALSE(registry.loadPlugin("cached"));
     CHECK(registry.getState("cached") == PluginState::FAILED);
-    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "cached.lua"));
+    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "run.lua"));
 }
 
 TEST_CASE("registry allows database-backed plugin load when thin-layer metadata is present", "[integration][registry][service]") {
     TempDir tempDir{"reqpack-registry-thin-layer-pass"};
     ReqPackConfig config = make_registry_test_config(tempDir.path());
     config.security.requireThinLayer = true;
+    const std::filesystem::path cachedSource = (tempDir.path() / "remote-source" / "cached");
     config.registry.sources["cached"] = RegistrySourceEntry{
-        .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
+        .source = cachedSource.string(),
         .alias = false,
         .description = "cached plugin",
         .role = "package-manager",
@@ -305,14 +320,14 @@ TEST_CASE("registry allows database-backed plugin load when thin-layer metadata 
         .scriptSha256 = registry_database_sha256_hex(VALID_PLUGIN),
     };
 
-    write_file(tempDir.path() / "remote-source" / "cached.lua", VALID_PLUGIN);
+    add_plugin_script(tempDir.path() / "remote-source", "cached", VALID_PLUGIN);
 
     Registry registry(config);
     REQUIRE(registry.getDatabase()->ensureReady());
 
     REQUIRE(registry.loadPlugin("cached"));
     CHECK(registry.getState("cached") == PluginState::ACTIVE);
-    CHECK(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "cached.lua"));
+    CHECK(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "run.lua"));
 }
 
 TEST_CASE("registry blocks unpinned git-backed plugin load when thin-layer trust is required", "[integration][registry][service]") {
@@ -333,7 +348,7 @@ TEST_CASE("registry blocks unpinned git-backed plugin load when thin-layer trust
 
     CHECK_FALSE(registry.loadPlugin("cached"));
     CHECK(registry.getState("cached") == PluginState::FAILED);
-    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "cached.lua"));
+    CHECK_FALSE(std::filesystem::exists(tempDir.path() / "plugins" / "cached" / "run.lua"));
 }
 
 TEST_CASE("registry blocks database-backed plugin load when thin-layer script hash mismatches", "[integration][registry][service]") {
@@ -367,8 +382,9 @@ TEST_CASE("registry blocks database-backed plugin load when runtime metadata mis
     TempDir tempDir{"reqpack-registry-thin-layer-runtime-mismatch"};
     ReqPackConfig config = make_registry_test_config(tempDir.path());
     config.security.requireThinLayer = true;
+    const std::filesystem::path cachedSource = (tempDir.path() / "remote-source" / "cached");
     config.registry.sources["cached"] = RegistrySourceEntry{
-        .source = (tempDir.path() / "remote-source" / "cached.lua").string(),
+        .source = cachedSource.string(),
         .alias = false,
         .description = "cached plugin",
         .role = "package-manager",
@@ -380,35 +396,13 @@ TEST_CASE("registry blocks database-backed plugin load when runtime metadata mis
         .scriptSha256 = registry_database_sha256_hex(MISMATCHED_METADATA_PLUGIN),
     };
 
-    write_file(tempDir.path() / "remote-source" / "cached.lua", MISMATCHED_METADATA_PLUGIN);
+    add_plugin_script(tempDir.path() / "remote-source", "cached", MISMATCHED_METADATA_PLUGIN);
 
     Registry registry(config);
     REQUIRE(registry.getDatabase()->ensureReady());
 
     CHECK_FALSE(registry.loadPlugin("cached"));
     CHECK(registry.getState("cached") == PluginState::FAILED);
-}
-
-TEST_CASE("registry bootstrap scripts may use io library", "[integration][registry][service]") {
-    TempDir tempDir{"reqpack-registry-bootstrap-io"};
-    ReqPackConfig config = make_registry_test_config(tempDir.path());
-
-    add_plugin_script(tempDir.path() / "plugins", "valid", VALID_PLUGIN);
-    write_file(tempDir.path() / "plugins" / "valid" / "bootstrap.lua",
-        "function bootstrap()\n"
-        "  local marker = io.open(REQPACK_PLUGIN_DIR .. '/bootstrapped.txt', 'w')\n"
-        "  if marker ~= nil then\n"
-        "    marker:write('ok\\n')\n"
-        "    marker:close()\n"
-        "  end\n"
-        "  return true\n"
-        "end\n");
-
-    Registry registry(config);
-    registry.scanDirectory(config.registry.pluginDirectory);
-
-    REQUIRE(registry.loadPlugin("valid"));
-    CHECK(std::filesystem::exists(tempDir.path() / "plugins" / "valid" / "bootstrapped.txt"));
 }
 
 TEST_CASE("registry bootstraps metadata from git json registry and lazily materializes payload", "[integration][registry][service]") {
@@ -422,7 +416,7 @@ TEST_CASE("registry bootstraps metadata from git json registry and lazily materi
     init_git_repository(remoteRegistry);
     init_git_repository(remotePlugin);
 
-    write_file(remotePlugin / "valid.lua", VALID_PLUGIN);
+    add_plugin_script(remotePlugin, "valid", VALID_PLUGIN);
     commit_all_git_repository(remotePlugin, "plugin");
 
     const std::string registryJson =
@@ -458,7 +452,7 @@ TEST_CASE("registry bootstraps metadata from git json registry and lazily materi
     CHECK(registry.getDatabase()->getMetaValue("remotePluginsPath").value() == "registry");
 
     REQUIRE(registry.loadPlugin("okay"));
-    CHECK(std::filesystem::exists(tempDir.path() / "plugins" / "valid" / "valid.lua"));
+    CHECK(std::filesystem::exists(tempDir.path() / "plugins" / "valid" / "run.lua"));
 
     const std::optional<RegistryRecord> refreshed = registry.getDatabase()->getRecord("valid");
     REQUIRE(refreshed.has_value());

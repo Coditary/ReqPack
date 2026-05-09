@@ -72,7 +72,6 @@ struct PluginCallContext {
 	std::string pluginId;
 	std::string pluginDirectory;
 	std::string scriptPath;
-	std::string bootstrapPath;
 	std::vector<std::string> flags;
 	IPluginRuntimeHost* host{nullptr};
 	std::optional<ProxyConfig> proxy;
@@ -189,7 +188,6 @@ public:
 	virtual std::string getPluginId() const = 0;
 	virtual std::string getPluginDirectory() const = 0;
 	virtual std::string getScriptPath() const = 0;
-	virtual std::string getBootstrapPath() const = 0;
 	virtual IPluginRuntimeHost* getRuntimeHost() = 0;
 	virtual std::optional<PluginSecurityMetadata> getSecurityMetadata() const {
 		return std::nullopt;

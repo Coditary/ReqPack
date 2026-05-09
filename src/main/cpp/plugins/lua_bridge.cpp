@@ -3,6 +3,7 @@
 #include "core/archive/archive_resolver.h"
 #include "core/download/downloader.h"
 #include "core/host/host_info.h"
+#include "core/plugins/plugin_bundle.h"
 #include "output/progress_metrics_lua.h"
 #include "plugins/exec_rules.h"
 
@@ -1045,13 +1046,16 @@ LuaBridge::LuaBridge(const std::string& scriptPath, const ReqPackConfig& config)
 
     const std::filesystem::path resolvedScriptPath(scriptPath);
     m_pluginDirectory = resolvedScriptPath.parent_path().string();
-    m_pluginId = resolvedScriptPath.stem().string();
-    m_bootstrapPath = (resolvedScriptPath.parent_path() / "bootstrap.lua").string();
+    m_pluginId = resolvedScriptPath.parent_path().filename().string();
+    if (const std::optional<PluginBundleLayout> layout = plugin_bundle_read_directory(resolvedScriptPath.parent_path()); layout.has_value()) {
+        if (!layout->metadata.name.empty()) {
+            m_pluginId = layout->metadata.name;
+        }
+    }
 
     m_lua["REQPACK_PLUGIN_ID"] = m_pluginId;
     m_lua["REQPACK_PLUGIN_DIR"] = m_pluginDirectory;
     m_lua["REQPACK_PLUGIN_SCRIPT"] = m_scriptPath;
-    m_lua["REQPACK_PLUGIN_BOOTSTRAP"] = m_bootstrapPath;
     m_lua["print"] = [this](sol::variadic_args args) {
         std::string message;
         bool first = true;
@@ -1065,10 +1069,6 @@ LuaBridge::LuaBridge(const std::string& scriptPath, const ReqPackConfig& config)
 
         m_logger.stdout(message, "lua", m_pluginId);
     };
-
-    if (std::filesystem::exists(m_bootstrapPath) && !execute_file(m_lua, m_logger, m_bootstrapPath)) {
-        return;
-    }
 
     if (!execute_file(m_lua, m_logger, m_scriptPath)) {
         return;
@@ -1189,7 +1189,6 @@ void LuaBridge::register_context_types() {
             plugin["id"] = context.pluginId;
             plugin["dir"] = context.pluginDirectory;
             plugin["script"] = context.scriptPath;
-            plugin["bootstrap"] = context.bootstrapPath;
             return plugin;
         }),
         "repositories", sol::readonly_property([this](const PluginCallContext& context) {
@@ -1433,7 +1432,6 @@ PluginCallContext LuaBridge::makeContext(const std::vector<std::string>& flags) 
         .pluginId = m_pluginId,
         .pluginDirectory = m_pluginDirectory,
         .scriptPath = m_scriptPath,
-        .bootstrapPath = m_bootstrapPath,
         .flags = flags,
 		.host = const_cast<LuaBridge*>(this),
 		.proxy = proxy_config_for_system(m_config, m_pluginId),
@@ -1445,20 +1443,6 @@ PluginCallContext LuaBridge::makeContext(const std::vector<std::string>& flags) 
 bool LuaBridge::init() {
     if (!validatePluginContract()) {
         return false;
-    }
-
-    sol::protected_function bootstrap = m_lua["bootstrap"];
-    if (bootstrap.valid()) {
-        auto bootstrapResult = bootstrap();
-        if (!bootstrapResult.valid()) {
-            sol::error err = bootstrapResult;
-            log_lua_error(m_logger, m_pluginId, std::string("[Lua Exec Error] bootstrap(): ") + err.what());
-            return false;
-        }
-
-        if (bootstrapResult.return_count() > 0 && !bootstrapResult.get<bool>()) {
-            return false;
-        }
     }
 
     sol::protected_function luaInit = m_pluginTable["init"];

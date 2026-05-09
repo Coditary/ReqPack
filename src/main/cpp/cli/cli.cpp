@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "core/manifest/manifest_loader.h"
+#include "core/plugins/plugin_bundle.h"
 #include "output/diagnostic.h"
 #include "output/logger.h"
 
@@ -1266,16 +1267,14 @@ std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config)
     }
 
     if (std::filesystem::exists(directory)) {
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
-            if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
+        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            if (!entry.is_directory()) {
                 continue;
             }
 
-            if (entry.path().parent_path().filename() != entry.path().stem()) {
-                continue;
+            if (const auto layout = plugin_bundle_read_directory(entry.path()); layout.has_value()) {
+                systems.insert(to_lower(layout->metadata.name));
             }
-
-            systems.insert(to_lower(entry.path().stem().string()));
         }
     }
 
@@ -1298,16 +1297,17 @@ std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& con
 	}
 
 	if (std::filesystem::exists(directory)) {
-		for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
-			if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
+		for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+			if (!entry.is_directory()) {
 				continue;
 			}
 
-			if (entry.path().parent_path().filename() != entry.path().stem()) {
+			const auto layout = plugin_bundle_read_directory(entry.path());
+			if (!layout.has_value()) {
 				continue;
 			}
 
-			const std::string name = to_lower(entry.path().stem().string());
+			const std::string name = to_lower(layout->metadata.name);
 			if (name != "rqp" && name != "sys") {
 				systems.insert(name);
 			}
@@ -1357,16 +1357,17 @@ std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {
         return systems;
     }
 
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
-        if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        if (!entry.is_directory()) {
             continue;
         }
 
-        if (entry.path().parent_path().filename() != entry.path().stem()) {
+        const auto layout = plugin_bundle_read_directory(entry.path());
+        if (!layout.has_value()) {
             continue;
         }
 
-        systems.insert(to_lower(entry.path().stem().string()));
+        systems.insert(to_lower(layout->metadata.name));
     }
 
     for (const auto& [alias, target] : config.planner.systemAliases) {

@@ -64,18 +64,54 @@ std::string read_file(const std::filesystem::path& path) {
     return buffer.str();
 }
 
-std::filesystem::path add_plugin_script(const std::filesystem::path& pluginRoot, const std::string& pluginName, const std::string& content) {
-    const std::filesystem::path scriptPath = pluginRoot / pluginName / (pluginName + ".lua");
-    write_file(scriptPath, content);
-    return scriptPath;
+std::filesystem::path add_plugin_script(
+    const std::filesystem::path& pluginRoot,
+    const std::string& pluginName,
+    const std::string& content,
+    const std::vector<std::string>& dependencySpecs = {}
+) {
+    const std::filesystem::path pluginDirectory = pluginRoot / pluginName;
+    std::string manifest = "return {\n  apiVersion = 1,\n  depends = {";
+    if (!dependencySpecs.empty()) {
+        manifest += "\n";
+        for (const std::string& dependencySpec : dependencySpecs) {
+            manifest += "    \"" + dependencySpec + "\",\n";
+        }
+        manifest += "  ";
+    }
+    manifest += "}\n}\n";
+
+    write_file(pluginDirectory / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"" + pluginName + "\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"summary\": \"" + pluginName + " plugin\",\n"
+        "  \"description\": \"" + pluginName + " plugin bundle\",\n"
+        "  \"license\": \"MIT\"\n"
+        "}\n");
+    write_file(pluginDirectory / "reqpack.lua", manifest);
+    write_file(pluginDirectory / "run.lua", content);
+    write_file(pluginDirectory / "scripts" / "install.lua", "return true\n");
+    write_file(pluginDirectory / "scripts" / "remove.lua", "return true\n");
+    return pluginDirectory / "run.lua";
+}
+
+std::filesystem::path fixture_plugin_root() {
+    return repo_root() / "tests" / "fixtures" / "plugin-bundles";
 }
 
 void copy_repo_plugin(const std::filesystem::path& pluginRoot, const std::string& pluginName) {
-    const std::filesystem::path repoPluginDir = repo_root() / "plugins" / pluginName;
-    write_file(pluginRoot / pluginName / (pluginName + ".lua"), read_file(repoPluginDir / (pluginName + ".lua")));
-    const std::filesystem::path bootstrapPath = repoPluginDir / "bootstrap.lua";
-    if (std::filesystem::exists(bootstrapPath)) {
-        write_file(pluginRoot / pluginName / "bootstrap.lua", read_file(bootstrapPath));
+    const std::filesystem::path repoPluginDir = fixture_plugin_root() / pluginName;
+    const std::filesystem::path targetPluginDir = pluginRoot / pluginName;
+    REQUIRE(std::filesystem::exists(repoPluginDir));
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(repoPluginDir)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::filesystem::path relative = std::filesystem::relative(entry.path(), repoPluginDir);
+        write_file(targetPluginDir / relative, read_file(entry.path()));
     }
 }
 
@@ -630,7 +666,22 @@ void tag_git_commit(const std::filesystem::path& repoPath, const std::string& ta
 }
 
 void write_test_plugin_bundle(const std::filesystem::path& root, const std::string& pluginName, const std::string& versionLabel) {
-    write_file(root / pluginName / (pluginName + ".lua"),
+    const std::filesystem::path pluginDirectory = root / pluginName;
+    write_file(pluginDirectory / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"" + pluginName + "\",\n"
+        "  \"version\": \"" + versionLabel + "\",\n"
+        "  \"summary\": \"" + pluginName + " plugin\",\n"
+        "  \"description\": \"" + pluginName + " test plugin bundle\",\n"
+        "  \"license\": \"MIT\"\n"
+        "}\n");
+    write_file(pluginDirectory / "reqpack.lua",
+        "return {\n"
+        "  apiVersion = 1,\n"
+        "  depends = {}\n"
+        "}\n");
+    write_file(pluginDirectory / "run.lua",
         "plugin = {}\n"
         "function plugin.getName() return '" + pluginName + "' end\n"
         "function plugin.getVersion() return '" + versionLabel + "' end\n"
@@ -645,6 +696,8 @@ void write_test_plugin_bundle(const std::filesystem::path& root, const std::stri
         "function plugin.search(context, prompt) return {} end\n"
         "function plugin.info(context, package) return { name = package, version = '" + versionLabel + "', description = '" + versionLabel + "' } end\n"
         "function plugin.shutdown() return true end\n");
+    write_file(pluginDirectory / "scripts" / "install.lua", "return true\n");
+    write_file(pluginDirectory / "scripts" / "remove.lua", "return true\n");
 }
 
 void commit_plugin_source_version(
@@ -2020,7 +2073,6 @@ function plugin.shutdown() return true end
         {"install", "apply", archivePath.string()},
         status
     );
-    INFO(output);
     CHECK(status == 0);
     CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.txt") == "hello-encrypted-env");
 }
@@ -2594,7 +2646,7 @@ TEST_CASE("update plugin refreshes git-backed wrapper to newest tagged version",
     INFO(output);
     CHECK(output.find("UPDATE: pip") != std::string::npos);
     CHECK(output.find("UPDATE done:  1 ok") != std::string::npos);
-    const std::string refreshedScript = read_file(pluginDirectory / "pip" / "pip.lua");
+    const std::string refreshedScript = read_file(pluginDirectory / "pip" / "run.lua");
     CHECK(refreshedScript.find("1.2.0") != std::string::npos);
 }
 
@@ -2672,8 +2724,8 @@ TEST_CASE("update --all refreshes all known plugin wrappers", "[integration][orc
     INFO(output);
     CHECK(output.find("UPDATE:") != std::string::npos);
     CHECK(output.find("UPDATE done:  2 ok") != std::string::npos);
-    const std::string refreshedPipScript = read_file(pluginDirectory / "pip" / "pip.lua");
-    const std::string refreshedNpmScript = read_file(pluginDirectory / "npm" / "npm.lua");
+    const std::string refreshedPipScript = read_file(pluginDirectory / "pip" / "run.lua");
+    const std::string refreshedNpmScript = read_file(pluginDirectory / "npm" / "run.lua");
     CAPTURE(refreshedPipScript);
     CAPTURE(refreshedNpmScript);
     CHECK(refreshedPipScript.find("1.2.0") != std::string::npos);
@@ -2725,15 +2777,15 @@ TEST_CASE("update --all refreshes configured sources before plugins exist locall
         "  },\n"
         "}\n");
 
-    REQUIRE_FALSE(std::filesystem::exists(pluginDirectory / "pip" / "pip.lua"));
-    REQUIRE_FALSE(std::filesystem::exists(pluginDirectory / "npm" / "npm.lua"));
+    REQUIRE_FALSE(std::filesystem::exists(pluginDirectory / "pip" / "run.lua"));
+    REQUIRE_FALSE(std::filesystem::exists(pluginDirectory / "npm" / "run.lua"));
 
     const std::string output = run_reqpack(workspace, configPath, {"update", "--all"});
     INFO(output);
     CHECK(output.find("UPDATE:") != std::string::npos);
     CHECK(output.find("UPDATE done:  2 ok") != std::string::npos);
-    CHECK(read_file(pluginDirectory / "pip" / "pip.lua").find("1.2.0") != std::string::npos);
-    CHECK(read_file(pluginDirectory / "npm" / "npm.lua").find("2.1.0") != std::string::npos);
+    CHECK(read_file(pluginDirectory / "pip" / "run.lua").find("1.2.0") != std::string::npos);
+    CHECK(read_file(pluginDirectory / "npm" / "run.lua").find("2.1.0") != std::string::npos);
 }
 
 TEST_CASE("orchestrator sbom command exports planned graph without executing plugin install", "[integration][orchestrator][service]") {
@@ -3858,7 +3910,6 @@ TEST_CASE("reqpack remote uploads local install file over text protocol", "[inte
     const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
         "remote", "dev", "install", "apply", uploadPath.string()
     }, status);
-    INFO(output);
     CHECK(status == 0);
     CHECK(read_file(pluginDirectory / "apply" / "state" / "local.txt").find("sample.pkg") != std::string::npos);
 }
@@ -4125,6 +4176,7 @@ TEST_CASE("orchestrator sys plugin maps logical packages to apt backend", "[inte
         status
     );
 
+    INFO(output);
     CHECK(status == 0);
     CHECK(output.find("[error]") == std::string::npos);
     CHECK(output.find("INSTALL done:  2 ok,  0 skipped,  0 failed") != std::string::npos);
@@ -4194,6 +4246,7 @@ TEST_CASE("orchestrator install maven provisions sys requirements before invokin
         status
     );
 
+    INFO(output);
     CHECK(status == 0);
     CHECK(output.find("[error]") == std::string::npos);
     CHECK(output.find("INSTALL done:  3 ok,  0 skipped,  0 failed") != std::string::npos);

@@ -40,7 +40,6 @@ PluginCallContext RequestResolutionService::buildProxyContext(IPlugin* plugin, c
         .pluginId = plugin->getPluginId(),
         .pluginDirectory = plugin->getPluginDirectory(),
         .scriptPath = plugin->getScriptPath(),
-        .bootstrapPath = plugin->getBootstrapPath(),
         .flags = request.flags,
         .host = plugin->getRuntimeHost(),
         .proxy = proxy_config_for_system(this->config, plugin->getPluginId()),

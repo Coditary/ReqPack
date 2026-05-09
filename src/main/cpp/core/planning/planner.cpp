@@ -1,5 +1,6 @@
 #include "core/planning/planner.h"
 
+#include "core/plugins/plugin_bundle.h"
 #include "core/planning/request_resolution.h"
 #include "output/logger.h"
 
@@ -15,7 +16,7 @@
 namespace {
 
 std::filesystem::path requirementsMarkerPath(const ReqPackConfig& config, const std::string& system) {
-	return std::filesystem::path(config.registry.pluginDirectory) / system / ".requirements_ready";
+	return plugin_bundle_ready_marker_path(std::filesystem::path(config.registry.pluginDirectory) / system);
 }
 
 Package resolveDependencySystem(Package dependency, const Registry* registry) {
@@ -142,13 +143,13 @@ bool Planner::shouldInstallPluginDependencies(const std::string& system) const {
 }
 
 bool Planner::pluginRequirementsSatisfied(const std::string& system) const {
-	IPlugin* plugin = load_plugin_for_use(this->registry, system);
-	if (plugin == nullptr) {
+	const std::optional<PluginBundleLayout> layout = plugin_bundle_find_installed(this->config, system);
+	if (!layout.has_value()) {
 		return false;
 	}
 
 	std::vector<Package> requirements;
-	for (Package dependency : plugin->getRequirements()) {
+	for (Package dependency : plugin_bundle_dependency_packages(layout.value())) {
 		requirements.push_back(resolveDependencySystem(planner_normalize_dependency(std::move(dependency), system), this->registry));
 	}
 
@@ -228,12 +229,12 @@ std::vector<Package> Planner::collectPluginDependencies(const std::vector<Reques
 		if (this->gatewayExists(request.system)) {
 			continue;
 		}
-		IPlugin* plugin = load_plugin_for_use(this->registry, request.system);
-		if (plugin == nullptr) {
+		const std::optional<PluginBundleLayout> layout = plugin_bundle_find_installed(this->config, request.system);
+		if (!layout.has_value()) {
 			continue;
 		}
 
-		for (Package dependency : plugin->getRequirements()) {
+		for (Package dependency : plugin_bundle_dependency_packages(layout.value())) {
 			dependencies.push_back(resolveDependencySystem(planner_normalize_dependency(std::move(dependency), request.system), this->registry));
 		}
 	}
@@ -389,15 +390,15 @@ void Planner::addPackageToGraph(Graph& graph, const Package& package) const {
 			return packageVertex;
 		}
 
-		IPlugin* plugin = load_plugin_for_use(this->registry, currentPackage.system);
-		if (plugin == nullptr && this->config.planner.autoDownloadMissingDependencies) {
+		std::optional<PluginBundleLayout> layout = plugin_bundle_find_installed(this->config, currentPackage.system);
+		if (!layout.has_value() && this->config.planner.autoDownloadMissingDependencies) {
 			this->queueDependencyDownload(Package{.action = ActionType::INSTALL, .system = currentPackage.system});
-			plugin = load_plugin_for_use(this->registry, currentPackage.system);
+			layout = plugin_bundle_find_installed(this->config, currentPackage.system);
 		}
 
-		if (plugin != nullptr) {
+		if (layout.has_value()) {
 			std::vector<Package> normalizedDependencies;
-			for (Package dependency : plugin->getRequirements()) {
+			for (Package dependency : plugin_bundle_dependency_packages(layout.value())) {
 				Package normalizedDependency = resolveDependencySystem(planner_normalize_dependency(std::move(dependency), currentPackage.system), this->registry);
 				normalizedDependency.directRequest = false;
 				normalizedDependencies.push_back(std::move(normalizedDependency));

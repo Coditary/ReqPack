@@ -1,6 +1,7 @@
 #include "plugins/rq_plugin.h"
 
 #include "core/archive/archive_resolver.h"
+#include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database.h"
 #include "core/packages/rq_package.h"
 #include "core/packages/rq_repository.h"
@@ -125,28 +126,22 @@ void collect_materialized_plugin_scripts(
         return;
     }
 
-    for (auto it = std::filesystem::recursive_directory_iterator(root, error);
-         it != std::filesystem::recursive_directory_iterator();
-         it.increment(error)) {
-        if (error) {
-            return;
-        }
-
-        const std::filesystem::directory_entry& entry = *it;
-        if (!entry.is_regular_file() || entry.path().extension() != ".lua") {
+    for (const auto& entry : std::filesystem::directory_iterator(root, error)) {
+        if (error || !entry.is_directory()) {
             continue;
         }
 
-        if (entry.path().parent_path().filename() != entry.path().stem()) {
+        const std::optional<PluginBundleLayout> layout = plugin_bundle_read_directory(entry.path());
+        if (!layout.has_value()) {
             continue;
         }
 
-        const std::string pluginId = to_lower_copy(entry.path().stem().string());
+        const std::string pluginId = to_lower_copy(layout->metadata.name);
         if (pluginId == BUILTIN_RQ_PLUGIN_ID) {
             continue;
         }
 
-        scriptPaths[pluginId] = entry.path();
+        scriptPaths[pluginId] = layout->runScriptPath;
     }
 }
 
@@ -176,6 +171,10 @@ std::string try_read_text_file(const std::filesystem::path& path) {
 }
 
 std::string plugin_version_from_script(const std::filesystem::path& scriptPath) {
+    if (const std::optional<PluginBundleLayout> layout = plugin_bundle_read_directory(scriptPath.parent_path()); layout.has_value()) {
+        return layout->metadata.version;
+    }
+
     static const std::regex versionPattern(R"(function\s+plugin\.getVersion\s*\(\s*\)\s*return\s*["']([^"']+)["'])");
 
     const std::string script = try_read_text_file(scriptPath);
@@ -505,10 +504,6 @@ std::string RqPlugin::getPluginDirectory() const {
 }
 
 std::string RqPlugin::getScriptPath() const {
-    return {};
-}
-
-std::string RqPlugin::getBootstrapPath() const {
     return {};
 }
 
