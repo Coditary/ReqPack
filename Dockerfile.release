@@ -24,6 +24,15 @@ COPY rqp.tar.gz /tmp/rqp.tar.gz
 
 RUN mkdir -p /opt/reqpack \
     && tar -xzf /tmp/rqp.tar.gz -C /opt/reqpack \
+    && if [ -d /opt/reqpack/lib ]; then \
+         for bundled_lib in /opt/reqpack/lib/*; do \
+           [ -e "$bundled_lib" ] || continue; \
+           bundled_name="$(basename "$bundled_lib")"; \
+           if ldconfig -p 2>/dev/null | awk '{print $1}' | grep -Fx "$bundled_name" >/dev/null; then \
+             rm -f "$bundled_lib"; \
+           fi; \
+         done; \
+       fi \
     && chmod +x /opt/reqpack/rqp /opt/reqpack/bin/rqp.bin \
     && ln -sf /opt/reqpack/rqp /usr/local/bin/rqp \
     && rm -f /tmp/rqp.tar.gz

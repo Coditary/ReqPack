@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "name": "demo-plugin",
+  "version": "1.0.0",
+  "summary": "Demo system test plugin",
+  "description": "Hermetic plugin bundle fixture for system tests",
+  "license": "MIT"
+}

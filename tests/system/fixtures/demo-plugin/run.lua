@@ -5,7 +5,7 @@ local function trim(value)
 end
 
 function plugin.getName()
-    return "demo-system-plugin"
+    return REQPACK_PLUGIN_ID
 end
 
 function plugin.getVersion()
