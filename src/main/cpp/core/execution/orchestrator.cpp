@@ -30,7 +30,7 @@ bool package_info_has_details(const PackageInfo& item) {
 	return !item.packageId.empty() || !item.version.empty() || !item.latestVersion.empty() ||
 		!item.status.empty() || !item.installed.empty() || !item.summary.empty() || !item.description.empty() ||
 		!item.homepage.empty() || !item.documentation.empty() || !item.sourceUrl.empty() || !item.repository.empty() ||
-		!item.channel.empty() || !item.section.empty() || !item.packageType.empty() || !item.architecture.empty() || !item.license.empty() ||
+		!item.channel.empty() || !item.section.empty() || !item.packageType.empty() || !item.architecture.empty() || !item.targetSystems.empty() || !item.license.empty() ||
 		!item.author.empty() || !item.maintainer.empty() || !item.email.empty() || !item.publishedAt.empty() ||
 		!item.updatedAt.empty() || !item.size.empty() || !item.installedSize.empty() ||
 		!item.dependencies.empty() || !item.optionalDependencies.empty() || !item.provides.empty() ||
@@ -60,12 +60,14 @@ CommandOutput package_table_output(ActionType action,
 		headers.push_back("Latest");
 		headers.push_back("Type");
 		headers.push_back("Architecture");
+		headers.push_back("Target Systems");
 		headers.push_back("Description");
 		output.blocks.push_back(make_command_table_block(headers, package_outdated_infos_to_rows(items, includeSystem)));
 	} else if (action == ActionType::SEARCH || action == ActionType::LIST) {
 		headers.push_back("Version");
 		headers.push_back("Type");
 		headers.push_back("Architecture");
+		headers.push_back("Target Systems");
 		headers.push_back("Description");
 		if (action == ActionType::SEARCH) {
 			output.blocks.push_back(make_command_table_block(headers, package_search_infos_to_rows(items, includeSystem)));

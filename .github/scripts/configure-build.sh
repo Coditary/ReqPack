@@ -15,6 +15,12 @@ cmake_args=(
     "$@"
 )
 
+if [ -n "${RELEASE_ID:-}" ]; then
+    cmake_args+=(
+        "-DREQPACK_RELEASE_ID=${RELEASE_ID}"
+    )
+fi
+
 if [ "$target_family" = "linux" ]; then
     cmake_args+=(
         -DBUILD_SHARED_LIBS=OFF

@@ -35,6 +35,8 @@ std::optional<bool> bool_from_string(const std::string& value) {
     return std::nullopt;
 }
 
+bool load_string_array_strict(const sol::object& object, std::vector<std::string>& values);
+
 std::optional<RepositoryAuthType> repository_auth_type_from_string(const std::string& value) {
     const std::string normalized = to_lower(value);
     if (normalized == "none") {
@@ -101,6 +103,41 @@ std::vector<std::string> normalize_string_list(std::vector<std::string> values) 
     }), values.end());
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
+    return values;
+}
+
+std::map<std::string, std::vector<std::string>> load_string_list_map(const sol::object& object, bool& ok) {
+    std::map<std::string, std::vector<std::string>> values;
+    ok = true;
+    if (!object.valid()) {
+        return values;
+    }
+    if (object.get_type() != sol::type::table) {
+        ok = false;
+        return values;
+    }
+
+    for (const auto& [key, value] : object.as<sol::table>()) {
+        if (key.get_type() != sol::type::string) {
+            ok = false;
+            values.clear();
+            return values;
+        }
+
+        std::vector<std::string> members;
+        if (!load_string_array_strict(value, members)) {
+            ok = false;
+            values.clear();
+            return values;
+        }
+
+        members = normalize_string_list(std::move(members));
+        if (members.empty()) {
+            continue;
+        }
+        values[to_lower(key.as<std::string>())] = std::move(members);
+    }
+
     return values;
 }
 
@@ -216,6 +253,7 @@ std::string expand_env_reference(const std::string& value) {
 }
 
 std::vector<std::string> load_string_array(const sol::object& object);
+bool load_string_array_strict(const sol::object& object, std::vector<std::string>& values);
 std::vector<RegistryWriteScope> load_registry_write_scopes(const sol::object& object);
 std::vector<RegistryNetworkScope> load_registry_network_scopes(const sol::object& object);
 
@@ -895,8 +933,11 @@ ReqPackConfig::ReqPackConfig()
           .linkPath = default_reqpack_self_update_link_path().string(),
       }),
       history(HistoryConfig{
-          .historyPath = default_reqpack_history_path().string(),
-      }) {}
+           .historyPath = default_reqpack_history_path().string(),
+       }) {
+    version = reqpack_build_release_id();
+    downloader.userAgent = reqpack_user_agent();
+}
 
 ReqPackConfig default_reqpack_config() {
     return ReqPackConfig{};
@@ -1333,6 +1374,14 @@ ReqPackConfig load_config_from_lua(const std::filesystem::path& configPath, cons
     if (rqp.has_value()) {
         config.rqp.repositories = load_string_array(rqp.value()["repositories"]);
         assign_if_present(rqp.value(), "statePath", config.rqp.statePath);
+        bool aliasesOk = true;
+        const auto aliases = load_string_list_map(rqp.value()["systemAliases"], aliasesOk);
+        if (!aliasesOk) {
+            return fallback;
+        }
+        for (const auto& [name, members] : aliases) {
+            config.rqp.systemAliases[name] = members;
+        }
     }
     if (!config.rqp.statePath.empty()) {
         config.rqp.statePath = expand_user_path(config.rqp.statePath).string();

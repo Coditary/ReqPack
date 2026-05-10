@@ -419,6 +419,10 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                     "https://packages.example.test/rqp/index.json",
                     "file:///srv/rqp/index.json",
                 },
+                systemAliases = {
+                    ["Debian-Family"] = { "Debian", "Ubuntu" },
+                    ["Lab-Linux"] = { "Nobara", "Fedora" },
+                },
                 statePath = "~/rqp-state",
             },
             selfUpdate = {
@@ -495,6 +499,10 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
         "https://packages.example.test/rqp/index.json",
         "file:///srv/rqp/index.json",
     });
+    REQUIRE(config.rqp.systemAliases.contains("debian-family"));
+    CHECK(config.rqp.systemAliases.at("debian-family") == std::vector<std::string>({"debian", "ubuntu"}));
+    REQUIRE(config.rqp.systemAliases.contains("lab-linux"));
+    CHECK(config.rqp.systemAliases.at("lab-linux") == std::vector<std::string>({"fedora", "nobara"}));
     CHECK(std::filesystem::path(config.rqp.statePath) == home / "rqp-state");
     CHECK(config.selfUpdate.repoUrl == "https://example.test/ReqPack.git");
     CHECK(config.selfUpdate.releaseApiBaseUrl == "https://api.example.test");
@@ -540,6 +548,13 @@ TEST_CASE("archive password resolution prefers config then environment fallback"
 
     config.archives.password.clear();
     CHECK(resolve_archive_password(config) == "from-env");
+}
+
+TEST_CASE("configuration defaults build version and user agent from release id", "[unit][configuration][load]") {
+    const ReqPackConfig config = default_reqpack_config();
+
+    CHECK(config.version == reqpack_build_release_id());
+    CHECK(config.downloader.userAgent == reqpack_user_agent());
 }
 
 TEST_CASE("configuration resolves execution jobs from fixed and max modes", "[unit][configuration][execution]") {

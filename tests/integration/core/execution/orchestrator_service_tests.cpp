@@ -20,6 +20,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "core/common/build_info.h"
 #include "core/host/host_info.h"
 #include "core/registry/registry.h"
 #include "test_helpers.h"
@@ -1843,6 +1844,26 @@ TEST_CASE("orchestrator install local rqp resolves to built-in rqp by extension"
     CHECK(std::filesystem::exists(stateDir / "metadata.json"));
     CHECK(std::filesystem::exists(stateDir / "reqpack.lua"));
     CHECK(std::filesystem::exists(stateDir / "manifest.json"));
+
+    const std::string listOutput = run_reqpack(tempDir.path(), configPath, {"list", "rqp"});
+    INFO(listOutput);
+    CHECK(listOutput.find("Target Systems") != std::string::npos);
+    CHECK(listOutput.find("noarch") != std::string::npos);
+    CHECK(listOutput.find("nosys") != std::string::npos);
+
+    const std::string infoOutput = run_reqpack(tempDir.path(), configPath, {"info", "rqp", "artifact"});
+    INFO(infoOutput);
+    CHECK(infoOutput.find("Target Systems") != std::string::npos);
+    CHECK(infoOutput.find("nosys") != std::string::npos);
+}
+
+TEST_CASE("reqpack version commands print build release id", "[integration][orchestrator][service]") {
+    const std::string binaryPath = escape_shell_arg((build_root() / "rqp").string());
+    const std::string versionOutput = run_command_capture(binaryPath + " version 2>&1");
+    const std::string flagOutput = run_command_capture(binaryPath + " --version 2>&1");
+
+    CHECK(versionOutput.find(std::string{"ReqPack "} + reqpack_build_release_id()) != std::string::npos);
+    CHECK(flagOutput.find(std::string{"ReqPack "} + reqpack_build_release_id()) != std::string::npos);
 }
 
 TEST_CASE("orchestrator install local archive passes extracted directory to plugin", "[integration][orchestrator][service]") {

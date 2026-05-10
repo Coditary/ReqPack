@@ -1,4 +1,5 @@
 #include "cli/cli.h"
+#include "core/common/build_info.h"
 #include "core/config/configuration.h"
 #include "core/download/downloader.h"
 #include "core/host/host_info.h"
@@ -947,7 +948,8 @@ bool is_version_command(const std::vector<std::string>& arguments) {
     if (filtered.size() != 1) {
         return false;
     }
-    return to_lower(filtered.front()) == "version";
+    const std::string command = to_lower(filtered.front());
+    return command == "version" || command == "--version";
 }
 
 DiagnosticMessage plugin_test_diagnostic(const std::string& summary, const std::string& cause, const std::string& recommendation, const std::string& details = {}) {
@@ -1448,7 +1450,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (is_version_command(rawArguments)) {
-        logger.stdout(config.applicationName + " " + config.version);
+        logger.stdout(config.applicationName + " " + reqpack_build_release_id());
         logger.flushSync();
         curl_global_cleanup();
         return 0;

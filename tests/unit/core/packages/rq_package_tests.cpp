@@ -161,3 +161,75 @@ TEST_CASE("rqp package reader rejects payload hash mismatch", "[unit][rq_package
         Catch::Matchers::Contains("payload sha256 mismatch")
     );
 }
+
+TEST_CASE("rqp metadata parser normalizes missing architecture and system", "[unit][rq_package][core]") {
+    const RqMetadata metadata = rq_parse_metadata_json(
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"portable\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"release\": 1,\n"
+        "  \"revision\": 0,\n"
+        "  \"summary\": \"portable\",\n"
+        "  \"description\": \"portable\",\n"
+        "  \"license\": \"MIT\",\n"
+        "  \"vendor\": \"ReqPack Tests\",\n"
+        "  \"maintainerEmail\": \"tests@example.org\",\n"
+        "  \"url\": \"https://example.test/portable.rqp\"\n"
+        "}\n"
+    );
+
+    CHECK(metadata.architecture == "noarch");
+    CHECK(metadata.systems == std::vector<std::string>{"nosys"});
+}
+
+TEST_CASE("rqp metadata parser accepts system string and array", "[unit][rq_package][core]") {
+    const RqMetadata stringMetadata = rq_parse_metadata_json(
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"debian-tool\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"release\": 1,\n"
+        "  \"revision\": 0,\n"
+        "  \"summary\": \"tool\",\n"
+        "  \"description\": \"tool\",\n"
+        "  \"license\": \"MIT\",\n"
+        "  \"architecture\": \"\",\n"
+        "  \"system\": \"Debian\",\n"
+        "  \"vendor\": \"ReqPack Tests\",\n"
+        "  \"maintainerEmail\": \"tests@example.org\",\n"
+        "  \"url\": \"https://example.test/debian-tool.rqp\"\n"
+        "}\n"
+    );
+
+    const RqMetadata arrayMetadata = rq_parse_metadata_json(
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"multi-tool\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"release\": 1,\n"
+        "  \"revision\": 0,\n"
+        "  \"summary\": \"tool\",\n"
+        "  \"description\": \"tool\",\n"
+        "  \"license\": \"MIT\",\n"
+        "  \"architecture\": \"noarch\",\n"
+        "  \"system\": [\"ubuntu\", \"linux\", \"Ubuntu\"],\n"
+        "  \"vendor\": \"ReqPack Tests\",\n"
+        "  \"maintainerEmail\": \"tests@example.org\",\n"
+        "  \"url\": \"https://example.test/multi-tool.rqp\"\n"
+        "}\n"
+    );
+
+    CHECK(stringMetadata.systems == std::vector<std::string>{"debian"});
+    CHECK(stringMetadata.architecture == "noarch");
+    CHECK(arrayMetadata.systems == std::vector<std::string>{"linux", "ubuntu"});
+}
+
+TEST_CASE("rqp system matching supports aliases and nosys", "[unit][rq_package][core]") {
+    const auto aliases = rq_builtin_system_aliases();
+
+    CHECK(rq_system_matches({"nosys"}, std::set<std::string>{"fedora", "linux"}, aliases));
+    CHECK(rq_system_matches({"debian-family"}, std::set<std::string>{"ubuntu", "linux"}, aliases));
+    CHECK(rq_system_matches({"darwin"}, std::set<std::string>{"macos", "darwin"}, aliases));
+    CHECK_FALSE(rq_system_matches({"debian"}, std::set<std::string>{"fedora", "linux"}, aliases));
+}

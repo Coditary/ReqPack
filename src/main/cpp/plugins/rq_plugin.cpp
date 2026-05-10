@@ -1,6 +1,7 @@
 #include "plugins/rq_plugin.h"
 
 #include "core/archive/archive_resolver.h"
+#include "core/common/build_info.h"
 #include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database.h"
 #include "core/packages/rq_package.h"
@@ -377,7 +378,8 @@ public:
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "ReqPack/0.1.0");
+        const std::string userAgent = reqpack_user_agent();
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &write_to_file);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
 
@@ -451,6 +453,7 @@ std::string metadata_json_for_lua(const RqMetadata& metadata) {
     stream << "\"description\":\"" << json_escape(metadata.description) << "\",";
     stream << "\"license\":\"" << json_escape(metadata.license) << "\",";
     stream << "\"architecture\":\"" << json_escape(metadata.architecture) << "\",";
+    stream << "\"system\":\"" << json_escape(rq_join_systems(metadata.systems)) << "\",";
     stream << "\"vendor\":\"" << json_escape(metadata.vendor) << "\",";
     stream << "\"maintainerEmail\":\"" << json_escape(metadata.maintainerEmail) << "\",";
     stream << "\"url\":\"" << json_escape(metadata.url) << "\"";
@@ -492,7 +495,7 @@ std::string RqPlugin::getName() const {
 }
 
 std::string RqPlugin::getVersion() const {
-    return "1.0.0";
+    return reqpack_build_release_id();
 }
 
 std::string RqPlugin::getPluginId() const {
@@ -552,7 +555,9 @@ bool RqPlugin::install(const PluginCallContext& context, const std::vector<Packa
             indexes,
             package.name,
             package.version,
-            rq_host_architecture()
+            rq_host_architecture(),
+            rq_host_system_tokens(*HostInfoService::currentSnapshot()),
+            config_
         );
         if (!resolvedPackage.has_value()) {
             recentEvents_.push_back(PluginEventRecord{.name = "unavailable", .payload = package.version.empty() ? package.name : package.name + "@" + package.version});
@@ -638,7 +643,9 @@ bool RqPlugin::update(const PluginCallContext& context, const std::vector<Packag
             indexes,
             installed.metadata.name,
             {},
-            rq_host_architecture()
+            rq_host_architecture(),
+            rq_host_system_tokens(*HostInfoService::currentSnapshot()),
+            config_
         );
         if (!candidate.has_value() || !repositoryCandidateIsNewer(installed, candidate.value())) {
             continue;
@@ -764,7 +771,7 @@ std::vector<PackageInfo> RqPlugin::outdated(const PluginCallContext& context) {
 
 std::vector<PackageInfo> RqPlugin::search(const PluginCallContext& context, const std::string& prompt) {
     (void)context;
-    return {rq_info_item(prompt.empty() ? "rqp" : prompt, "1.0.0", "rqp search not implemented yet")};
+    return {rq_info_item(prompt.empty() ? "rqp" : prompt, reqpack_build_release_id(), "rqp search not implemented yet")};
 }
 
 PackageInfo RqPlugin::info(const PluginCallContext& context, const std::string& packageName) {
@@ -793,7 +800,9 @@ std::optional<Package> RqPlugin::resolvePackage(const PluginCallContext& context
         indexes,
         package.name,
         package.version,
-        rq_host_architecture()
+        rq_host_architecture(),
+        rq_host_system_tokens(*HostInfoService::currentSnapshot()),
+        config_
     );
     if (!candidate.has_value()) {
         return std::nullopt;
@@ -822,7 +831,7 @@ bool RqPlugin::installPackagePath(
         context.emitBeginStep("load rqp package");
         const std::filesystem::path stateRoot = std::filesystem::path(config_.rqp.statePath);
         const std::filesystem::path workRoot = std::filesystem::temp_directory_path() / "reqpack-rqp";
-        const RqPackageLayout layout = RqPackageReader::load(path, workRoot, stateRoot);
+        const RqPackageLayout layout = RqPackageReader::load(path, workRoot, stateRoot, config_);
 
         context.emitBeginStep("run install hook");
         if (!runHook(context, layout, "install")) {
@@ -911,6 +920,7 @@ bool RqPlugin::runHook(const PluginCallContext& context, const RqPackageLayout& 
     metadataTable["description"] = layout.metadata.description;
     metadataTable["license"] = layout.metadata.license;
     metadataTable["architecture"] = layout.metadata.architecture;
+    metadataTable["system"] = rq_join_systems(layout.metadata.systems);
     metadataTable["vendor"] = layout.metadata.vendor;
     metadataTable["maintainerEmail"] = layout.metadata.maintainerEmail;
     metadataTable["url"] = layout.metadata.url;
@@ -1052,6 +1062,7 @@ bool RqPlugin::runInstalledHook(const PluginCallContext& context, const RqpInsta
     metadataTable["description"] = installed.metadata.description;
     metadataTable["license"] = installed.metadata.license;
     metadataTable["architecture"] = installed.metadata.architecture;
+    metadataTable["system"] = rq_join_systems(installed.metadata.systems);
     metadataTable["vendor"] = installed.metadata.vendor;
     metadataTable["maintainerEmail"] = installed.metadata.maintainerEmail;
     metadataTable["url"] = installed.metadata.url;
@@ -1107,7 +1118,11 @@ bool RqPlugin::persistInstalledState(
     const std::string& repository
 ) const {
     std::filesystem::create_directories(layout.stateDir / "scripts");
-    std::filesystem::copy_file(layout.controlDir / "metadata.json", layout.stateDir / "metadata.json", std::filesystem::copy_options::overwrite_existing);
+    std::ofstream metadataFile(layout.stateDir / "metadata.json", std::ios::binary | std::ios::trunc);
+    if (!metadataFile.is_open()) {
+        return false;
+    }
+    metadataFile << rq_metadata_json(layout.metadata);
     std::filesystem::copy_file(layout.controlDir / "reqpack.lua", layout.stateDir / "reqpack.lua", std::filesystem::copy_options::overwrite_existing);
 
     const std::filesystem::path scriptsDir = layout.controlDir / "scripts";
@@ -1202,6 +1217,7 @@ PackageInfo RqPlugin::packageInfoFromInstalled(const RqpInstalledPackage& instal
 		.sourceUrl = installed.metadata.sourceUrl,
 		.repository = installed.source.repository,
 		.architecture = installed.metadata.architecture,
+		.targetSystems = rq_join_systems(installed.metadata.systems),
 		.license = installed.metadata.license,
         .author = installed.metadata.vendor,
 		.maintainer = installed.metadata.packager,

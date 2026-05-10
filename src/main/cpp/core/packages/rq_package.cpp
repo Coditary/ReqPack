@@ -21,6 +21,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <unordered_set>
 
 namespace {
 
@@ -85,6 +86,99 @@ std::string to_lower(std::string value) {
         return static_cast<char>(std::tolower(ch));
     });
     return value;
+}
+
+std::string json_escape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char ch : value) {
+        switch (ch) {
+            case '\\': escaped += "\\\\"; break;
+            case '"': escaped += "\\\""; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped.push_back(ch); break;
+        }
+    }
+    return escaped;
+}
+
+std::vector<std::string> normalize_string_values(const std::vector<std::string>& values) {
+    std::vector<std::string> normalized;
+    normalized.reserve(values.size());
+    for (std::string value : values) {
+        value = to_lower(trim(std::move(value)));
+        if (!value.empty()) {
+            normalized.push_back(std::move(value));
+        }
+    }
+    std::sort(normalized.begin(), normalized.end());
+    normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+    return normalized;
+}
+
+std::vector<std::string> parse_string_or_array_field(const ptree& tree, const std::string& key) {
+    if (const auto node = tree.get_child_optional(key)) {
+        if (node->empty()) {
+            if (const auto stringValue = tree.get_optional<std::string>(key)) {
+                return {stringValue.value()};
+            }
+            return {};
+        }
+
+        std::vector<std::string> values;
+        for (const auto& [childKey, child] : node.value()) {
+            if (!childKey.empty()) {
+                throw std::runtime_error("metadata field must be string or array of strings: " + key);
+            }
+            values.push_back(child.get_value<std::string>());
+        }
+        return values;
+    }
+    return {};
+}
+
+std::unordered_set<std::string> expand_system_token(
+    const std::string& token,
+    const std::map<std::string, std::vector<std::string>>& aliases,
+    std::unordered_set<std::string>& visiting
+) {
+    std::unordered_set<std::string> expanded;
+    if (token.empty()) {
+        return expanded;
+    }
+
+    expanded.insert(token);
+    if (!visiting.insert(token).second) {
+        return expanded;
+    }
+
+    if (const auto it = aliases.find(token); it != aliases.end()) {
+        for (const std::string& member : it->second) {
+            const auto nested = expand_system_token(member, aliases, visiting);
+            expanded.insert(nested.begin(), nested.end());
+        }
+    }
+
+    for (const auto& [alias, members] : aliases) {
+        if (std::find(members.begin(), members.end(), token) != members.end()) {
+            expanded.insert(alias);
+            const auto nested = expand_system_token(alias, aliases, visiting);
+            expanded.insert(nested.begin(), nested.end());
+        }
+    }
+
+    visiting.erase(token);
+    return expanded;
+}
+
+std::unordered_set<std::string> expand_system_token(
+    const std::string& token,
+    const std::map<std::string, std::vector<std::string>>& aliases
+) {
+    std::unordered_set<std::string> visiting;
+    return expand_system_token(token, aliases, visiting);
 }
 
 bool path_has_invalid_segments(const std::filesystem::path& path) {
@@ -330,7 +424,8 @@ RqMetadata rq_parse_metadata_json(const std::string& content) {
     metadata.summary = required_string(tree, "summary");
     metadata.description = required_string(tree, "description");
     metadata.license = required_string(tree, "license");
-    metadata.architecture = required_string(tree, "architecture");
+    metadata.architecture = rq_normalize_architecture(tree.get<std::string>("architecture", {}));
+    metadata.systems = rq_normalize_systems(parse_string_or_array_field(tree, "system"));
     metadata.vendor = required_string(tree, "vendor");
     metadata.maintainerEmail = required_string(tree, "maintainerEmail");
     metadata.tags = load_string_array(tree.get_child_optional("tags"));
@@ -481,10 +576,207 @@ bool rq_architecture_matches(const std::string& packageArchitecture, const std::
     return packageArchitecture == "noarch" || packageArchitecture == hostArchitecture;
 }
 
+std::string rq_normalize_architecture(std::string architecture) {
+    architecture = to_lower(trim(std::move(architecture)));
+    return architecture.empty() ? "noarch" : architecture;
+}
+
+std::vector<std::string> rq_normalize_systems(const std::vector<std::string>& systems) {
+    std::vector<std::string> normalized = normalize_string_values(systems);
+    if (normalized.empty()) {
+        normalized.push_back("nosys");
+    }
+    return normalized;
+}
+
+std::map<std::string, std::vector<std::string>> rq_builtin_system_aliases() {
+    return {
+        {"darwin-family", {"darwin", "macos"}},
+        {"debian-family", {"debian", "ubuntu", "linuxmint", "pop"}},
+        {"rhel-family", {"almalinux", "centos", "fedora", "rhel", "rocky"}},
+    };
+}
+
+std::map<std::string, std::vector<std::string>> rq_merged_system_aliases(const ReqPackConfig& config) {
+    auto aliases = rq_builtin_system_aliases();
+    for (const auto& [name, members] : config.rqp.systemAliases) {
+        std::vector<std::string> merged = aliases[name];
+        merged.insert(merged.end(), members.begin(), members.end());
+        aliases[name] = normalize_string_values(merged);
+    }
+    return aliases;
+}
+
+std::set<std::string> rq_host_system_tokens(const HostInfoSnapshot& snapshot) {
+    std::set<std::string> tokens;
+    const std::string family = to_lower(trim(snapshot.os.family));
+    const std::string id = to_lower(trim(snapshot.os.id));
+    const std::string distroId = snapshot.os.distroId.has_value() ? to_lower(trim(snapshot.os.distroId.value())) : std::string{};
+
+    if (!family.empty()) {
+        tokens.insert(family);
+    }
+    if (!id.empty()) {
+        tokens.insert(id);
+    }
+    if (!distroId.empty()) {
+        tokens.insert(distroId);
+    }
+    if (tokens.contains("macos")) {
+        tokens.insert("darwin");
+    }
+    if (tokens.contains("darwin")) {
+        tokens.insert("macos");
+    }
+    return tokens;
+}
+
+bool rq_system_matches(
+    const std::vector<std::string>& packageSystems,
+    const std::set<std::string>& hostSystems,
+    const std::map<std::string, std::vector<std::string>>& aliases
+) {
+    for (const std::string& packageSystem : rq_normalize_systems(packageSystems)) {
+        if (packageSystem == "nosys") {
+            return true;
+        }
+        const auto expandedPackage = expand_system_token(packageSystem, aliases);
+        for (const std::string& hostSystem : hostSystems) {
+            if (expandedPackage.contains(hostSystem)) {
+                return true;
+            }
+            const auto expandedHost = expand_system_token(hostSystem, aliases);
+            for (const std::string& token : expandedPackage) {
+                if (expandedHost.contains(token)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+std::string rq_join_systems(const std::vector<std::string>& systems) {
+    const std::vector<std::string> normalized = rq_normalize_systems(systems);
+    std::ostringstream stream;
+    for (std::size_t index = 0; index < normalized.size(); ++index) {
+        if (index > 0) {
+            stream << ", ";
+        }
+        stream << normalized[index];
+    }
+    return stream.str();
+}
+
+std::string rq_metadata_json(const RqMetadata& metadata) {
+    std::ostringstream stream;
+    stream << "{\n";
+    stream << "  \"formatVersion\": " << metadata.formatVersion << ",\n";
+    stream << "  \"name\": \"" << json_escape(metadata.name) << "\",\n";
+    stream << "  \"version\": \"" << json_escape(metadata.version) << "\",\n";
+    stream << "  \"release\": " << metadata.release << ",\n";
+    stream << "  \"revision\": " << metadata.revision << ",\n";
+    stream << "  \"summary\": \"" << json_escape(metadata.summary) << "\",\n";
+    stream << "  \"description\": \"" << json_escape(metadata.description) << "\",\n";
+    stream << "  \"license\": \"" << json_escape(metadata.license) << "\",\n";
+    stream << "  \"architecture\": \"" << json_escape(rq_normalize_architecture(metadata.architecture)) << "\",\n";
+    stream << "  \"system\": [";
+    const auto systems = rq_normalize_systems(metadata.systems);
+    for (std::size_t index = 0; index < systems.size(); ++index) {
+        if (index > 0) {
+            stream << ", ";
+        }
+        stream << "\"" << json_escape(systems[index]) << "\"";
+    }
+    stream << "],\n";
+    stream << "  \"vendor\": \"" << json_escape(metadata.vendor) << "\",\n";
+    stream << "  \"maintainerEmail\": \"" << json_escape(metadata.maintainerEmail) << "\",\n";
+    stream << "  \"url\": \"" << json_escape(metadata.url) << "\"";
+
+    if (!metadata.tags.empty()) {
+        stream << ",\n  \"tags\": [";
+        for (std::size_t index = 0; index < metadata.tags.size(); ++index) {
+            if (index > 0) {
+                stream << ", ";
+            }
+            stream << "\"" << json_escape(metadata.tags[index]) << "\"";
+        }
+        stream << ']';
+    }
+    if (!metadata.homepage.empty()) {
+        stream << ",\n  \"homepage\": \"" << json_escape(metadata.homepage) << "\"";
+    }
+    if (!metadata.sourceUrl.empty()) {
+        stream << ",\n  \"sourceUrl\": \"" << json_escape(metadata.sourceUrl) << "\"";
+    }
+    if (!metadata.packager.empty()) {
+        stream << ",\n  \"packager\": \"" << json_escape(metadata.packager) << "\"";
+    }
+    if (!metadata.buildDate.empty()) {
+        stream << ",\n  \"buildDate\": \"" << json_escape(metadata.buildDate) << "\"";
+    }
+    if (!metadata.depends.empty()) {
+        stream << ",\n  \"depends\": [";
+        for (std::size_t index = 0; index < metadata.depends.size(); ++index) {
+            if (index > 0) {
+                stream << ", ";
+            }
+            stream << "\"" << json_escape(metadata.depends[index]) << "\"";
+        }
+        stream << ']';
+    }
+    if (!metadata.provides.empty()) {
+        stream << ",\n  \"provides\": [";
+        for (std::size_t index = 0; index < metadata.provides.size(); ++index) {
+            if (index > 0) {
+                stream << ", ";
+            }
+            stream << "\"" << json_escape(metadata.provides[index]) << "\"";
+        }
+        stream << ']';
+    }
+    if (!metadata.conflicts.empty()) {
+        stream << ",\n  \"conflicts\": [";
+        for (std::size_t index = 0; index < metadata.conflicts.size(); ++index) {
+            if (index > 0) {
+                stream << ", ";
+            }
+            stream << "\"" << json_escape(metadata.conflicts[index]) << "\"";
+        }
+        stream << ']';
+    }
+    if (!metadata.replaces.empty()) {
+        stream << ",\n  \"replaces\": [";
+        for (std::size_t index = 0; index < metadata.replaces.size(); ++index) {
+            if (index > 0) {
+                stream << ", ";
+            }
+            stream << "\"" << json_escape(metadata.replaces[index]) << "\"";
+        }
+        stream << ']';
+    }
+    if (metadata.payload.has_value()) {
+        const auto& payload = metadata.payload.value();
+        stream << ",\n  \"payload\": {\n";
+        stream << "    \"path\": \"" << json_escape(payload.path) << "\",\n";
+        stream << "    \"archive\": \"" << json_escape(payload.archive) << "\",\n";
+        stream << "    \"compression\": \"" << json_escape(payload.compression) << "\",\n";
+        stream << "    \"hashAlgorithm\": \"" << json_escape(payload.hashAlgorithm) << "\",\n";
+        stream << "    \"hashFile\": \"" << json_escape(payload.hashFile) << "\",\n";
+        stream << "    \"sizeCompressed\": " << payload.sizeCompressed << ",\n";
+        stream << "    \"sizeInstalledExpected\": " << payload.sizeInstalledExpected << "\n";
+        stream << "  }";
+    }
+
+    stream << "\n}\n";
+    return stream.str();
+}
+
 RqPackageLayout RqPackageReader::load(
     const std::filesystem::path& packagePath,
     const std::filesystem::path& workRoot,
-    const std::filesystem::path& stateRoot
+    const std::filesystem::path& stateRoot,
+    const ReqPackConfig& config
 ) {
     if (!std::filesystem::is_regular_file(packagePath)) {
         throw std::runtime_error("rqp package not found: " + packagePath.string());
@@ -541,6 +833,16 @@ RqPackageLayout RqPackageReader::load(
 
     if (!rq_architecture_matches(layout.metadata.architecture, rq_host_architecture())) {
         throw std::runtime_error("package architecture does not match host");
+    }
+
+    const std::shared_ptr<const HostInfoSnapshot> hostSnapshot = HostInfoService::currentSnapshot();
+    const std::set<std::string> hostSystems = rq_host_system_tokens(*hostSnapshot);
+    const auto aliases = rq_merged_system_aliases(config);
+    if (!rq_system_matches(layout.metadata.systems, hostSystems, aliases)) {
+        throw std::runtime_error(
+            "package system does not match host\npackage systems: " + rq_join_systems(layout.metadata.systems) +
+            "\nhost systems: " + rq_join_systems(std::vector<std::string>(hostSystems.begin(), hostSystems.end()))
+        );
     }
 
     if (!layout.hooks.contains("install")) {

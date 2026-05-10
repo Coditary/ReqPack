@@ -71,6 +71,7 @@ struct PackageInfo {
 	std::string section;
 	std::string packageType;
 	std::string architecture;
+	std::string targetSystems;
 	std::string license;
 	std::string author;
 	std::string maintainer;

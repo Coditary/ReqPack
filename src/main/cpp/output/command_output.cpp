@@ -112,6 +112,7 @@ std::vector<CommandOutputField> package_info_to_fields(const PackageInfo& info) 
 	append_field(fields, "Section", info.section);
 	append_field(fields, "Type", info.packageType);
 	append_field(fields, "Architecture", info.architecture);
+	append_field(fields, "Target Systems", info.targetSystems);
 	append_field(fields, "License", info.license);
 	append_field(fields, "Author", info.author);
 	append_field(fields, "Maintainer", info.maintainer);
@@ -157,6 +158,7 @@ std::vector<std::vector<std::string>> package_list_infos_to_rows(const std::vect
 		row.push_back(item.version);
 		row.push_back(item.packageType);
 		row.push_back(item.architecture);
+		row.push_back(item.targetSystems);
 		row.push_back(package_row_description(item));
 		rows.push_back(std::move(row));
 	}
@@ -176,6 +178,7 @@ std::vector<std::vector<std::string>> package_search_infos_to_rows(const std::ve
 		row.push_back(item.version);
 		row.push_back(item.packageType);
 		row.push_back(item.architecture);
+		row.push_back(item.targetSystems);
 		row.push_back(package_row_description(item));
 		rows.push_back(std::move(row));
 	}
@@ -196,6 +199,7 @@ std::vector<std::vector<std::string>> package_outdated_infos_to_rows(const std::
 		row.push_back(item.latestVersion);
 		row.push_back(item.packageType);
 		row.push_back(item.architecture);
+		row.push_back(item.targetSystems);
 		row.push_back(package_row_description(item));
 		rows.push_back(std::move(row));
 	}

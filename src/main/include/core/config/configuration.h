@@ -7,6 +7,8 @@
 #include <variant>
 #include <vector>
 
+#include "core/common/build_info.h"
+
 enum class SeverityLevel {
     UNASSIGNED,
     LOW,
@@ -173,7 +175,7 @@ struct DownloaderConfig {
     bool followRedirects{true};
     long connectTimeoutSeconds{10};
     long requestTimeoutSeconds{60};
-    std::string userAgent{"ReqPack/0.1.0"};
+    std::string userAgent{reqpack_user_agent()};
     std::map<std::string, std::string> pluginSources{};
 };
 
@@ -243,6 +245,7 @@ struct SbomConfig {
 struct RqpConfig {
     std::vector<std::string> repositories{};
     std::string statePath{};
+    std::map<std::string, std::vector<std::string>> systemAliases{};
 };
 
 struct SelfUpdateConfig {
@@ -331,7 +334,7 @@ struct DisplayConfig {
 
 struct ReqPackConfig {
     std::string applicationName{"ReqPack"};
-    std::string version{"0.1.0"};
+    std::string version{reqpack_build_release_id()};
 
     LoggingConfig logging{};
     SecurityConfig security{};

@@ -3,6 +3,8 @@ project(ReqPack LANGUAGES CXX)
 enable_language(C)
 enable_testing()
 
+set(REQPACK_RELEASE_ID "dev" CACHE STRING "Build/release identity shown by rqp version output")
+
 option(REQPACK_ENABLE_COVERAGE "Build ReqPack targets with coverage instrumentation" OFF)
 option(REQPACK_ENABLE_PROFILING "Build ReqPack targets with profiling instrumentation" OFF)
 option(REQPACK_LINK_STATIC_LUA "Prefer static Lua library when available" OFF)
@@ -420,6 +422,7 @@ target_link_libraries(core_integration_tests PRIVATE
 )
 
 target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)
+target_compile_definitions(ReqPack PRIVATE REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}")
 target_compile_definitions(exec_rules_unit_tests PRIVATE
     SOL_ALL_SAFETIES_ON=1
     REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
@@ -434,11 +437,13 @@ target_compile_definitions(core_unit_tests PRIVATE
     SOL_ALL_SAFETIES_ON=1
     REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
     REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
+    REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}"
 )
 target_compile_definitions(core_integration_tests PRIVATE
     SOL_ALL_SAFETIES_ON=1
     REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
     REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
+    REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}"
 )
 
 include(CTest)

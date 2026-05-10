@@ -66,6 +66,27 @@ std::vector<std::string> load_string_array(const boost::optional<const ptree&>& 
     return result;
 }
 
+std::vector<std::string> parse_string_or_array_field(const ptree& tree, const std::string& key) {
+    if (const auto node = tree.get_child_optional(key)) {
+        if (node->empty()) {
+            if (const auto stringValue = tree.get_optional<std::string>(key)) {
+                return {stringValue.value()};
+            }
+            return {};
+        }
+
+        std::vector<std::string> values;
+        for (const auto& [childKey, child] : node.value()) {
+            if (!childKey.empty()) {
+                throw std::runtime_error("repository package field must be string or array of strings: " + key);
+            }
+            values.push_back(child.get_value<std::string>());
+        }
+        return values;
+    }
+    return {};
+}
+
 bool is_valid_sha256(const std::string& value) {
     return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char ch) {
         return std::isxdigit(ch) != 0;
@@ -114,7 +135,8 @@ RqRepositoryIndex rq_repository_parse_index(const std::string& content, const st
         package.version = required_string(child, "version");
         package.release = required_int(child, "release");
         package.revision = required_int(child, "revision");
-        package.architecture = required_string(child, "architecture");
+        package.architecture = rq_normalize_architecture(child.get<std::string>("architecture", {}));
+        package.systems = rq_normalize_systems(parse_string_or_array_field(child, "system"));
         package.summary = required_string(child, "summary");
         package.url = required_string(child, "url");
         package.packageSha256 = to_lower(child.get<std::string>("packageSha256", {}));
@@ -132,9 +154,12 @@ std::optional<RqRepositoryPackage> rq_repository_resolve_package(
     const std::vector<RqRepositoryIndex>& indexes,
     const std::string& name,
     const std::string& version,
-    const std::string& hostArchitecture
+    const std::string& hostArchitecture,
+    const std::set<std::string>& hostSystems,
+    const ReqPackConfig& config
 ) {
     std::optional<RqRepositoryPackage> best;
+    const auto aliases = rq_merged_system_aliases(config);
 
     for (const RqRepositoryIndex& index : indexes) {
         for (const RqRepositoryPackage& package : index.packages) {
@@ -145,6 +170,9 @@ std::optional<RqRepositoryPackage> rq_repository_resolve_package(
                 continue;
             }
             if (!rq_architecture_matches(package.architecture, hostArchitecture)) {
+                continue;
+            }
+            if (!rq_system_matches(package.systems, hostSystems, aliases)) {
                 continue;
             }
             if (!best.has_value() || is_better_candidate(package, best.value())) {

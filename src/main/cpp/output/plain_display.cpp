@@ -287,11 +287,26 @@ bool PlainDisplay::isPackageSummaryTable() const {
 	        && tableHeaders[4] == "Description")
 	    || (tableHeaders.size() == 6
 	        && tableHeaders[0] == "Name"
+	        && tableHeaders[1] == "Version"
+	        && tableHeaders[2] == "Type"
+	        && tableHeaders[3] == "Architecture"
+	        && tableHeaders[4] == "Target Systems"
+	        && tableHeaders[5] == "Description")
+	    || (tableHeaders.size() == 6
+	        && tableHeaders[0] == "Name"
 	        && tableHeaders[1] == "Installed"
 	        && tableHeaders[2] == "Latest"
 	        && tableHeaders[3] == "Type"
 	        && tableHeaders[4] == "Architecture"
 	        && tableHeaders[5] == "Description")
+	    || (tableHeaders.size() == 7
+	        && tableHeaders[0] == "Name"
+	        && tableHeaders[1] == "Installed"
+	        && tableHeaders[2] == "Latest"
+	        && tableHeaders[3] == "Type"
+	        && tableHeaders[4] == "Architecture"
+	        && tableHeaders[5] == "Target Systems"
+	        && tableHeaders[6] == "Description")
 	    || (tableHeaders.size() == 4
 	        && tableHeaders[0] == "System"
 	        && tableHeaders[1] == "Name"
@@ -307,11 +322,28 @@ bool PlainDisplay::isPackageSummaryTable() const {
 	    || (tableHeaders.size() == 7
 	        && tableHeaders[0] == "System"
 	        && tableHeaders[1] == "Name"
+	        && tableHeaders[2] == "Version"
+	        && tableHeaders[3] == "Type"
+	        && tableHeaders[4] == "Architecture"
+	        && tableHeaders[5] == "Target Systems"
+	        && tableHeaders[6] == "Description")
+	    || (tableHeaders.size() == 7
+	        && tableHeaders[0] == "System"
+	        && tableHeaders[1] == "Name"
 	        && tableHeaders[2] == "Installed"
 	        && tableHeaders[3] == "Latest"
 	        && tableHeaders[4] == "Type"
 	        && tableHeaders[5] == "Architecture"
-	        && tableHeaders[6] == "Description");
+	        && tableHeaders[6] == "Description")
+	    || (tableHeaders.size() == 8
+	        && tableHeaders[0] == "System"
+	        && tableHeaders[1] == "Name"
+	        && tableHeaders[2] == "Installed"
+	        && tableHeaders[3] == "Latest"
+	        && tableHeaders[4] == "Type"
+	        && tableHeaders[5] == "Architecture"
+	        && tableHeaders[6] == "Target Systems"
+	        && tableHeaders[7] == "Description");
 }
 
 void PlainDisplay::renderFieldValueTable() const {
@@ -345,6 +377,7 @@ void PlainDisplay::renderWrappedPackageTable() const {
 	    && std::find(tableHeaders.begin(), tableHeaders.end(), "Latest") != tableHeaders.end();
 	const bool extended = std::find(tableHeaders.begin(), tableHeaders.end(), "Type") != tableHeaders.end()
 	    && std::find(tableHeaders.begin(), tableHeaders.end(), "Architecture") != tableHeaders.end();
+	const bool hasTargetSystems = std::find(tableHeaders.begin(), tableHeaders.end(), "Target Systems") != tableHeaders.end();
 	const size_t systemIndex = hasSystem ? 0 : static_cast<size_t>(-1);
 	const size_t nameIndex = hasSystem ? 1 : 0;
 	const size_t versionIndex = outdated ? static_cast<size_t>(-1) : (hasSystem ? 2 : 1);
@@ -352,7 +385,8 @@ void PlainDisplay::renderWrappedPackageTable() const {
 	const size_t latestIndex = outdated ? (hasSystem ? 3 : 2) : static_cast<size_t>(-1);
 	const size_t typeIndex = extended ? (outdated ? (hasSystem ? 4 : 3) : (hasSystem ? 3 : 2)) : static_cast<size_t>(-1);
 	const size_t archIndex = extended ? (outdated ? (hasSystem ? 5 : 4) : (hasSystem ? 4 : 3)) : static_cast<size_t>(-1);
-	const size_t summaryIndex = outdated ? (hasSystem ? 6 : 5) : (extended ? (hasSystem ? 5 : 4) : (hasSystem ? 3 : 2));
+	const size_t targetSystemsIndex = hasTargetSystems ? (outdated ? (hasSystem ? 6 : 5) : (extended ? (hasSystem ? 5 : 4) : static_cast<size_t>(-1))) : static_cast<size_t>(-1);
+	const size_t summaryIndex = outdated ? (hasSystem ? (hasTargetSystems ? 7 : 6) : (hasTargetSystems ? 6 : 5)) : (extended ? (hasSystem ? (hasTargetSystems ? 6 : 5) : (hasTargetSystems ? 5 : 4)) : (hasSystem ? 3 : 2));
 
 	std::vector<size_t> widths(tableHeaders.size(), 0);
 	auto preferredWidthFor = [&](size_t index) {
@@ -381,6 +415,9 @@ void PlainDisplay::renderWrappedPackageTable() const {
 		if (extended && index == archIndex) {
 			return static_cast<size_t>(12);
 		}
+		if (hasTargetSystems && index == targetSystemsIndex) {
+			return static_cast<size_t>(12);
+		}
 		return std::max(tableHeaders[index].size(), static_cast<size_t>(12));
 	};
 
@@ -400,6 +437,9 @@ void PlainDisplay::renderWrappedPackageTable() const {
 		}
 		if (extended && index == archIndex) {
 			return static_cast<size_t>(8);
+		}
+		if (hasTargetSystems && index == targetSystemsIndex) {
+			return static_cast<size_t>(6);
 		}
 		return tableHeaders[index].size();
 	};
@@ -440,6 +480,9 @@ void PlainDisplay::renderWrappedPackageTable() const {
 	                                                       : std::min(preferredSummaryWidth, availableWidth);
 	const size_t maxNonSummaryWidth = availableWidth > desiredSummaryWidth ? availableWidth - desiredSummaryWidth : 0;
 	size_t remaining = usedNonSummaryWidth() > maxNonSummaryWidth ? usedNonSummaryWidth() - maxNonSummaryWidth : 0;
+	if (hasTargetSystems) {
+		shrinkColumn(targetSystemsIndex, remaining);
+	}
 	shrinkColumn(nameIndex, remaining);
 	if (hasSystem) {
 		shrinkColumn(systemIndex, remaining);
@@ -459,6 +502,9 @@ void PlainDisplay::renderWrappedPackageTable() const {
 	const size_t minSummaryHeaderWidth = tableHeaders[summaryIndex].size();
 	if (summaryWidth < minSummaryHeaderWidth) {
 		remaining = minSummaryHeaderWidth - summaryWidth;
+		if (hasTargetSystems) {
+			shrinkColumn(targetSystemsIndex, remaining);
+		}
 		shrinkColumn(nameIndex, remaining);
 		if (hasSystem) {
 			shrinkColumn(systemIndex, remaining);
