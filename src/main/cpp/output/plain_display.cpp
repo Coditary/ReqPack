@@ -177,6 +177,7 @@ std::string PlainDisplay::renderBar(int percent) const {
 		case DisplayMode::OUTDATED:return "OUTDATED";
 		case DisplayMode::INFO:    return "INFO";
 		case DisplayMode::SNAPSHOT:return "SNAPSHOT";
+		case DisplayMode::PACK:    return "PACK";
 		case DisplayMode::SERVE:   return "SERVE";
 		case DisplayMode::REMOTE:  return "REMOTE";
 		case DisplayMode::ENSURE:  return "ENSURE";

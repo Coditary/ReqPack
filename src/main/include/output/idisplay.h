@@ -18,6 +18,7 @@ enum class DisplayMode {
 	OUTDATED,
 	INFO,
 	SNAPSHOT,
+	PACK,
 	SERVE,
 	REMOTE,
 	ENSURE,

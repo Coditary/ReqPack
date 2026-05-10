@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <sol/sol.hpp>
 #include <string>
 #include <vector>
@@ -31,6 +32,8 @@ private:
 	ReqPackConfig m_config;
 	std::vector<std::string> m_tempDirectories;
 	std::vector<PluginEventRecord> m_recentEvents;
+	std::vector<std::string> m_recentArtifacts;
+	std::vector<std::filesystem::path> m_runtimeWriteRoots;
 	mutable std::atomic<bool> m_silentRuntimeOutput{false};
 	ExecOverride m_execOverride;
 
@@ -68,17 +71,20 @@ public:
     
 	std::vector<Package> getRequirements() override;
     std::vector<std::string> getCategories() override;
-    std::vector<Package> getMissingPackages(const std::vector<Package>& packages) override;
+	std::vector<Package> getMissingPackages(const std::vector<Package>& packages) override;
+	bool supportsPack() const override;
 	bool supportsProxyResolution() const override;
 	bool supportsResolvePackage() const override;
 	std::vector<PluginEventRecord> takeRecentEvents() override;
+	std::vector<std::string> takeRecentArtifacts() override;
 
-    bool install(const PluginCallContext& context, const std::vector<Package>& packages) override;
-    bool installLocal(const PluginCallContext& context, const std::string& path) override;
-    bool remove(const PluginCallContext& context, const std::vector<Package>& packages) override;
-    bool update(const PluginCallContext& context, const std::vector<Package>& packages) override;
+	bool install(const PluginCallContext& context, const std::vector<Package>& packages) override;
+	bool installLocal(const PluginCallContext& context, const std::string& path) override;
+	bool remove(const PluginCallContext& context, const std::vector<Package>& packages) override;
+	bool update(const PluginCallContext& context, const std::vector<Package>& packages) override;
+	bool pack(const PluginCallContext& context, const std::string& projectPath, const std::string& outputPath, const std::vector<std::string>& flags) override;
 
-    std::vector<PackageInfo> list(const PluginCallContext& context) override;
+	std::vector<PackageInfo> list(const PluginCallContext& context) override;
     std::vector<PackageInfo> outdated(const PluginCallContext& context) override;
     std::vector<PackageInfo> search(const PluginCallContext& context, const std::string& prompt) override;
     PackageInfo info(const PluginCallContext& context, const std::string& packageName) override;

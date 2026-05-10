@@ -225,6 +225,7 @@ DisplayMode displayModeFromAction(ActionType action) {
 			case ActionType::INFO:    return DisplayMode::INFO;
 			case ActionType::OUTDATED: return DisplayMode::OUTDATED;
 			case ActionType::SNAPSHOT: return DisplayMode::SNAPSHOT;
+			case ActionType::PACK: return DisplayMode::PACK;
 			case ActionType::SERVE: return DisplayMode::SERVE;
 			case ActionType::REMOTE: return DisplayMode::REMOTE;
 			case ActionType::SBOM:    return DisplayMode::SBOM;
@@ -1902,6 +1903,8 @@ bool Executer::dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const {
 			return plugin->remove(context, taskGroup.packages);
 		case ActionType::UPDATE:
 			return plugin->update(context, taskGroup.packages);
+		case ActionType::PACK:
+			return plugin->supportsPack() && plugin->pack(context, taskGroup.localPath, {}, taskGroup.flags);
 		case ActionType::SEARCH:
 		case ActionType::LIST:
 		case ActionType::INFO:

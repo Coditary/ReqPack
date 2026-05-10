@@ -1284,6 +1284,56 @@ end
 function plugin.shutdown() return true end
 )";
 
+const char* PACK_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pack", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.outdated(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.pack(context, projectPath, outputPath, flags)
+  local artifact = outputPath
+  if artifact == nil or artifact == "" then
+    artifact = projectPath .. "/dist/demo.pkg"
+  end
+  context.exec.run("mkdir -p '" .. artifact:match("(.+)/[^/]+$") .. "' && printf '%s' 'native-artifact' > '" .. artifact .. "'")
+  context.artifacts.register(artifact)
+  return true
+end
+function plugin.shutdown() return true end
+)";
+
+const char* PACK_NO_ARTIFACT_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pack", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.outdated(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.pack(context, projectPath, outputPath, flags)
+  return true
+end
+function plugin.shutdown() return true end
+)";
+
 }  // namespace
 
 TEST_CASE("orchestrator list command loads plugin from workspace plugins directory", "[integration][orchestrator][service]") {
@@ -4716,4 +4766,128 @@ TEST_CASE("orchestrator sys plugin delegates install to additional linux backend
         CHECK(log.find(testCase.installNeedle) != std::string::npos);
         CHECK(log.find(testCase.logicalNeedle) != std::string::npos);
     }
+}
+
+TEST_CASE("orchestrator pack builds builtin rqp and install can consume it", "[integration][orchestrator][service][pack]") {
+    TempDir tempDir{"reqpack-orchestrator-pack-builtin"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    const std::filesystem::path installLog = tempDir.path() / "installed.txt";
+
+    write_file(projectRoot / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"demo\",\n"
+        "  \"version\": \"1.2.3\",\n"
+        "  \"release\": 2,\n"
+        "  \"revision\": 1,\n"
+        "  \"summary\": \"demo\",\n"
+        "  \"description\": \"demo package\",\n"
+        "  \"license\": \"MIT\",\n"
+        "  \"vendor\": \"ReqPack Tests\",\n"
+        "  \"maintainerEmail\": \"tests@example.org\",\n"
+        "  \"url\": \"https://example.test/demo.rqp\"\n"
+        "}\n");
+    write_file(projectRoot / "reqpack.lua", R"(
+return {
+  apiVersion = 1,
+  hooks = {
+    install = "scripts/install.lua"
+  }
+}
+)");
+    write_file(projectRoot / "scripts" / "install.lua",
+        "context.fs.copy(context.paths.payloadDir .. '/share/hello.txt', '" + installLog.string() + "')\n"
+        "return true\n");
+    write_file(projectRoot / "payload-tree" / "share" / "hello.txt", "hello\n");
+
+    const std::string packOutput = run_reqpack(tempDir.path(), configPath, {"pack", projectRoot.string(), "--output", (tempDir.path() / "dist" / "demo.rqp").string(), "--force"});
+    CHECK(packOutput.find("PACK") != std::string::npos);
+    CHECK(packOutput.find("artifact:") != std::string::npos);
+    CHECK(std::filesystem::exists(tempDir.path() / "dist" / "demo.rqp"));
+
+    int status = 0;
+    const std::string installOutput = run_reqpack_with_home_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {"install", (tempDir.path() / "dist" / "demo.rqp").string()},
+        status
+    );
+    CHECK(status == 0);
+    CHECK(installOutput.find("INSTALL done:  1 ok,  0 skipped,  0 failed") != std::string::npos);
+    CHECK(std::filesystem::exists(installLog));
+}
+
+TEST_CASE("orchestrator pack passes external payload dir to builtin builder", "[integration][orchestrator][service][pack]") {
+    TempDir tempDir{"reqpack-orchestrator-pack-external-payload"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    const std::filesystem::path payloadRoot = tempDir.path() / "rootfs";
+
+    write_file(projectRoot / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"external\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"release\": 1,\n"
+        "  \"revision\": 0,\n"
+        "  \"summary\": \"external\",\n"
+        "  \"description\": \"external package\",\n"
+        "  \"license\": \"MIT\",\n"
+        "  \"vendor\": \"ReqPack Tests\",\n"
+        "  \"maintainerEmail\": \"tests@example.org\",\n"
+        "  \"url\": \"https://example.test/external.rqp\"\n"
+        "}\n");
+    write_file(projectRoot / "reqpack.lua", "return { apiVersion = 1, hooks = { install = 'scripts/install.lua' } }\n");
+    write_file(projectRoot / "scripts" / "install.lua", "return true\n");
+    write_file(payloadRoot / "opt" / "tool.txt", "payload\n");
+
+    const std::string output = run_reqpack(
+        tempDir.path(),
+        configPath,
+        {"pack", projectRoot.string(), "--payload-dir", payloadRoot.string(), "--output", (tempDir.path() / "external.rqp").string(), "--force"}
+    );
+    CHECK(output.find("PACK") != std::string::npos);
+    CHECK(std::filesystem::exists(tempDir.path() / "external.rqp"));
+}
+
+TEST_CASE("orchestrator pack dispatches to plugin pack", "[integration][orchestrator][service][pack]") {
+    TempDir tempDir{"reqpack-orchestrator-pack-plugin"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path projectRoot = tempDir.path() / "native-project";
+    std::filesystem::create_directories(projectRoot);
+    add_plugin_script(pluginDirectory, "demo", PACK_PLUGIN);
+
+    const std::filesystem::path outputPath = tempDir.path() / "dist" / "demo.pkg";
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"pack", "demo", projectRoot.string(), "--output", outputPath.string(), "--force"});
+
+    CHECK(output.find("PACK") != std::string::npos);
+    CHECK(output.find("artifact:") != std::string::npos);
+    CHECK(std::filesystem::exists(outputPath));
+    CHECK(read_file(outputPath) == "native-artifact");
+}
+
+TEST_CASE("orchestrator pack fails when plugin reports success without artifact", "[integration][orchestrator][service][pack]") {
+    TempDir tempDir{"reqpack-orchestrator-pack-plugin-no-artifact"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path projectRoot = tempDir.path() / "native-project";
+    std::filesystem::create_directories(projectRoot);
+    add_plugin_script(pluginDirectory, "demo", PACK_NO_ARTIFACT_PLUGIN);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(
+        tempDir.path(),
+        configPath,
+        tempDir.path(),
+        {"pack", "demo", projectRoot.string()},
+        status
+    );
+
+    CHECK(status != 0);
+    CHECK(output.find("did not register any output artifact") != std::string::npos);
 }

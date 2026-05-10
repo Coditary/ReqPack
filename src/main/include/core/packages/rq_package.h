@@ -74,6 +74,21 @@ struct RqStateSource {
     std::string identity;
 };
 
+struct RqPackageBuildRequest {
+    std::filesystem::path projectRoot;
+    std::filesystem::path outputPath;
+    std::optional<std::filesystem::path> payloadRoot;
+    bool force{false};
+    bool interactive{true};
+};
+
+struct RqPackageBuildResult {
+    RqMetadata metadata;
+    std::string identity;
+    std::filesystem::path outputPath;
+    bool hasPayload{false};
+};
+
 std::string rq_host_architecture();
 std::string rq_package_identity(const RqMetadata& metadata);
 bool rq_architecture_matches(const std::string& packageArchitecture, const std::string& hostArchitecture);
@@ -91,6 +106,7 @@ std::string rq_join_systems(const std::vector<std::string>& systems);
 RqMetadata rq_parse_metadata_json(const std::string& content);
 std::string rq_metadata_json(const RqMetadata& metadata);
 std::map<std::string, std::string> rq_parse_reqpack_hooks(const std::filesystem::path& reqpackLuaPath);
+RqPackageBuildResult rq_build_package(const RqPackageBuildRequest& request, const ReqPackConfig& config = default_reqpack_config());
 
 class RqPackageReader {
 public:
@@ -98,6 +114,7 @@ public:
         const std::filesystem::path& packagePath,
         const std::filesystem::path& workRoot,
         const std::filesystem::path& stateRoot,
-        const ReqPackConfig& config = default_reqpack_config()
+        const ReqPackConfig& config = default_reqpack_config(),
+        bool validateHostCompatibility = true
     );
 };

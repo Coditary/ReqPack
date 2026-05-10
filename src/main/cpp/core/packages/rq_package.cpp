@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <optional>
@@ -34,7 +35,28 @@ struct TarEntry {
     char type{'0'};
     std::uint64_t size{0};
     std::string data;
+    std::string linkTarget;
 };
+
+struct TarWriteEntry {
+    std::string path;
+    char type{'0'};
+    std::string data;
+    std::string linkTarget;
+    std::uint32_t mode{0644};
+};
+
+struct PayloadBuildArtifacts {
+    bool hasPayload{false};
+    std::optional<RqPayloadMetadata> metadata;
+    std::string archiveBytes;
+    std::string hashContent;
+};
+
+std::string sha256_hex(const std::string& bytes);
+std::string load_payload_hash(const std::string& hashFileContent);
+std::string zstd_decompress(const std::string& compressed);
+void validate_outer_entry_path(const std::string& rawPath);
 
 std::string trim(std::string value) {
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) {
@@ -58,7 +80,9 @@ std::string read_file(const std::filesystem::path& path) {
 }
 
 void write_file(const std::filesystem::path& path, const std::string& content) {
-    std::filesystem::create_directories(path.parent_path());
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output.is_open()) {
         throw std::runtime_error("failed to write file: " + path.string());
@@ -256,6 +280,7 @@ std::vector<TarEntry> parse_tar_entries(const std::string& content) {
 
         const std::uint64_t size = parse_tar_octal(header + 124, 12);
         const char type = header[156] == '\0' ? '0' : header[156];
+        const std::string linkTarget = parse_tar_string(header + 157, 100);
         std::string path = parse_tar_string(header, 100);
         const std::string prefix = parse_tar_string(header + 345, 155);
         if (!prefix.empty()) {
@@ -293,10 +318,411 @@ std::vector<TarEntry> parse_tar_entries(const std::string& content) {
             .type = type,
             .size = size,
             .data = std::move(data),
+            .linkTarget = linkTarget,
         });
     }
 
     return entries;
+}
+
+bool exists_no_error(const std::filesystem::path& path) {
+    std::error_code error;
+    return std::filesystem::exists(path, error) && !error;
+}
+
+bool is_regular_file_no_error(const std::filesystem::path& path) {
+    std::error_code error;
+    return std::filesystem::is_regular_file(path, error) && !error;
+}
+
+bool is_directory_no_error(const std::filesystem::path& path) {
+    std::error_code error;
+    return std::filesystem::is_directory(path, error) && !error;
+}
+
+std::filesystem::path absolute_path(const std::filesystem::path& path) {
+    std::error_code error;
+    const std::filesystem::path resolved = std::filesystem::absolute(path, error);
+    if (error) {
+        throw std::runtime_error("failed to resolve path: " + path.string());
+    }
+    return resolved;
+}
+
+std::string path_string(const std::filesystem::path& path) {
+    return path.generic_string();
+}
+
+void validate_payload_metadata_shape(const RqPayloadMetadata& payload) {
+    if (payload.path != "payload/payload.tar.zst") {
+        throw std::runtime_error("unsupported payload path");
+    }
+    if (payload.archive != "tar" || payload.compression != "zstd" || payload.hashAlgorithm != "sha256" || payload.hashFile != "hashes/payload.sha256") {
+        throw std::runtime_error("unsupported payload metadata values");
+    }
+}
+
+void validate_payload_symlink_target(const std::string& path, const std::string& linkTarget) {
+    if (linkTarget.empty()) {
+        throw std::runtime_error("invalid payload symlink target: " + path);
+    }
+    if (std::filesystem::path(linkTarget).is_absolute()) {
+        throw std::runtime_error("invalid payload symlink target: " + path);
+    }
+}
+
+void validate_payload_entry(const TarEntry& entry) {
+    if (entry.type != '0' && entry.type != '\0' && entry.type != '5' && entry.type != '2') {
+        throw std::runtime_error("unsupported payload tar entry type");
+    }
+
+    const std::filesystem::path relativePath(entry.path);
+    if (path_has_invalid_segments(relativePath)) {
+        throw std::runtime_error("invalid payload path: " + entry.path);
+    }
+
+    if (entry.type == '2') {
+        validate_payload_symlink_target(entry.path, entry.linkTarget);
+    }
+}
+
+std::vector<TarEntry> validate_payload_archive_bytes(const std::string& compressedBytes) {
+    const std::vector<TarEntry> entries = parse_tar_entries(zstd_decompress(compressedBytes));
+    for (const TarEntry& entry : entries) {
+        validate_payload_entry(entry);
+    }
+    return entries;
+}
+
+std::uint64_t payload_installed_size(const std::vector<TarEntry>& entries) {
+    std::uint64_t installedSize = 0;
+    for (const TarEntry& entry : entries) {
+        if (entry.type == '0' || entry.type == '\0') {
+            installedSize += entry.size;
+        }
+    }
+    return installedSize;
+}
+
+void validate_hook_path(const std::string& hookPathText) {
+    const std::filesystem::path hookPath(hookPathText);
+    if (path_has_invalid_segments(hookPath)) {
+        throw std::runtime_error("invalid hook path: " + hookPathText);
+    }
+    validate_outer_entry_path(hookPathText);
+}
+
+void validate_hook_files(const std::map<std::string, std::string>& hooks, const std::filesystem::path& root) {
+    for (const auto& [hookName, hookPathText] : hooks) {
+        if (hookPathText.empty()) {
+            throw std::runtime_error("hook path missing: " + hookName);
+        }
+        validate_hook_path(hookPathText);
+        if (!is_regular_file_no_error(root / hookPathText)) {
+            throw std::runtime_error("hook file not found: " + hookPathText);
+        }
+    }
+}
+
+void write_tar_octal(char* field, const std::size_t length, const std::uint64_t value) {
+    std::memset(field, '0', length);
+    std::ostringstream stream;
+    stream << std::oct << value;
+    const std::string octal = stream.str();
+    if (octal.size() + 1 > length) {
+        throw std::runtime_error("tar field overflow");
+    }
+    const std::size_t offset = length - octal.size() - 1;
+    std::memcpy(field + offset, octal.data(), octal.size());
+    field[length - 1] = '\0';
+}
+
+void write_tar_checksum(char* field, const std::size_t length, const unsigned int value) {
+    std::memset(field, ' ', length);
+    std::ostringstream stream;
+    stream << std::oct << value;
+    const std::string octal = stream.str();
+    if (octal.size() + 2 > length) {
+        throw std::runtime_error("tar checksum overflow");
+    }
+    const std::size_t offset = length - octal.size() - 2;
+    std::memcpy(field + offset, octal.data(), octal.size());
+    field[length - 2] = '\0';
+    field[length - 1] = ' ';
+}
+
+struct TarPathFields {
+    std::string name;
+    std::string prefix;
+};
+
+TarPathFields split_tar_path_fields(const std::string& path) {
+    if (path.size() <= 100) {
+        return TarPathFields{.name = path};
+    }
+    if (path.size() > 255) {
+        throw std::runtime_error("archive path too long: " + path);
+    }
+
+    std::size_t separator = path.rfind('/');
+    while (separator != std::string::npos) {
+        const std::string prefix = path.substr(0, separator);
+        const std::string name = path.substr(separator + 1);
+        if (!prefix.empty() && prefix.size() <= 155 && !name.empty() && name.size() <= 100) {
+            return TarPathFields{.name = name, .prefix = prefix};
+        }
+        if (separator == 0) {
+            break;
+        }
+        separator = path.rfind('/', separator - 1);
+    }
+
+    throw std::runtime_error("archive path too long: " + path);
+}
+
+std::array<char, TAR_BLOCK_SIZE> tar_header_for_entry(const TarWriteEntry& entry) {
+    const TarPathFields pathFields = split_tar_path_fields(entry.path);
+    if (entry.type == '2' && entry.linkTarget.size() > 100) {
+        throw std::runtime_error("payload symlink target too long: " + entry.path);
+    }
+
+    std::array<char, TAR_BLOCK_SIZE> header{};
+    std::memcpy(header.data(), pathFields.name.data(), pathFields.name.size());
+    write_tar_octal(header.data() + 100, 8, entry.mode);
+    write_tar_octal(header.data() + 108, 8, 0);
+    write_tar_octal(header.data() + 116, 8, 0);
+    write_tar_octal(header.data() + 124, 12, entry.type == '0' ? static_cast<std::uint64_t>(entry.data.size()) : 0);
+    write_tar_octal(header.data() + 136, 12, 0);
+    std::memset(header.data() + 148, ' ', 8);
+    header[156] = entry.type;
+    if (entry.type == '2' && !entry.linkTarget.empty()) {
+        std::memcpy(header.data() + 157, entry.linkTarget.data(), entry.linkTarget.size());
+    }
+    std::memcpy(header.data() + 257, "ustar", 5);
+    std::memcpy(header.data() + 263, "00", 2);
+    if (!pathFields.prefix.empty()) {
+        std::memcpy(header.data() + 345, pathFields.prefix.data(), pathFields.prefix.size());
+    }
+
+    unsigned int checksum = 0;
+    for (const unsigned char byte : header) {
+        checksum += byte;
+    }
+    write_tar_checksum(header.data() + 148, 8, checksum);
+    return header;
+}
+
+void append_tar_entry_bytes(std::string& output, const TarWriteEntry& entry) {
+    const std::array<char, TAR_BLOCK_SIZE> header = tar_header_for_entry(entry);
+    output.append(header.data(), header.size());
+    if (entry.type == '0') {
+        output += entry.data;
+        const std::size_t padding = (TAR_BLOCK_SIZE - (entry.data.size() % TAR_BLOCK_SIZE)) % TAR_BLOCK_SIZE;
+        output.append(padding, '\0');
+    }
+}
+
+std::string tar_bytes_from_entries(std::vector<TarWriteEntry> entries) {
+    std::sort(entries.begin(), entries.end(), [](const TarWriteEntry& left, const TarWriteEntry& right) {
+        if (left.path != right.path) {
+            return left.path < right.path;
+        }
+        return left.type < right.type;
+    });
+
+    std::string output;
+    for (const TarWriteEntry& entry : entries) {
+        append_tar_entry_bytes(output, entry);
+    }
+    output.append(TAR_BLOCK_SIZE * 2, '\0');
+    return output;
+}
+
+std::string zstd_compress(const std::string& content) {
+    std::string output(ZSTD_compressBound(content.size()), '\0');
+    const std::size_t result = ZSTD_compress(output.data(), output.size(), content.data(), content.size(), 3);
+    if (ZSTD_isError(result)) {
+        throw std::runtime_error(std::string("zstd compress failed: ") + ZSTD_getErrorName(result));
+    }
+    output.resize(result);
+    return output;
+}
+
+std::vector<TarWriteEntry> collect_payload_tree_entries(const std::filesystem::path& payloadRoot, std::uint64_t& installedSize) {
+    if (!is_directory_no_error(payloadRoot)) {
+        throw std::runtime_error("payload directory not found: " + payloadRoot.string());
+    }
+
+    std::vector<TarWriteEntry> entries;
+    std::error_code error;
+    for (auto it = std::filesystem::recursive_directory_iterator(payloadRoot, error);
+         it != std::filesystem::recursive_directory_iterator();
+         it.increment(error)) {
+        if (error) {
+            throw std::runtime_error("failed to walk payload tree: " + payloadRoot.string());
+        }
+
+        const std::filesystem::path relativePath = std::filesystem::relative(it->path(), payloadRoot, error);
+        if (error) {
+            throw std::runtime_error("failed to resolve payload tree path: " + it->path().string());
+        }
+        if (relativePath.empty()) {
+            continue;
+        }
+
+        if (path_has_invalid_segments(relativePath)) {
+            throw std::runtime_error("invalid payload path: " + path_string(relativePath));
+        }
+
+        const std::filesystem::file_status status = it->symlink_status(error);
+        if (error) {
+            throw std::runtime_error("failed to inspect payload tree entry: " + it->path().string());
+        }
+
+        const std::string archivePath = path_string(relativePath);
+        if (std::filesystem::is_symlink(status)) {
+            const std::filesystem::path linkTarget = std::filesystem::read_symlink(it->path(), error);
+            if (error) {
+                throw std::runtime_error("failed to read payload symlink: " + it->path().string());
+            }
+            validate_payload_symlink_target(archivePath, path_string(linkTarget));
+            entries.push_back(TarWriteEntry{
+                .path = archivePath,
+                .type = '2',
+                .linkTarget = path_string(linkTarget),
+                .mode = 0777,
+            });
+            continue;
+        }
+        if (std::filesystem::is_directory(status)) {
+            entries.push_back(TarWriteEntry{
+                .path = archivePath,
+                .type = '5',
+                .mode = 0755,
+            });
+            continue;
+        }
+        if (std::filesystem::is_regular_file(status)) {
+            installedSize += std::filesystem::file_size(it->path(), error);
+            if (error) {
+                throw std::runtime_error("failed to stat payload file: " + it->path().string());
+            }
+            entries.push_back(TarWriteEntry{
+                .path = archivePath,
+                .type = '0',
+                .data = read_file(it->path()),
+                .mode = 0644,
+            });
+            continue;
+        }
+        throw std::runtime_error("unsupported payload tree entry type: " + it->path().string());
+    }
+
+    return entries;
+}
+
+void append_control_tree_files(std::vector<TarWriteEntry>& entries, const std::filesystem::path& root, const std::filesystem::path& relativeRoot) {
+    if (!exists_no_error(root)) {
+        return;
+    }
+    if (!is_directory_no_error(root)) {
+        throw std::runtime_error("reserved entry is not directory: " + root.string());
+    }
+
+    std::error_code error;
+    for (auto it = std::filesystem::recursive_directory_iterator(root, error);
+         it != std::filesystem::recursive_directory_iterator();
+         it.increment(error)) {
+        if (error) {
+            throw std::runtime_error("failed to read reserved directory: " + root.string());
+        }
+
+        const std::filesystem::path relativePath = relativeRoot / std::filesystem::relative(it->path(), root, error);
+        if (error) {
+            throw std::runtime_error("failed to resolve reserved path: " + it->path().string());
+        }
+
+        const std::string archivePath = path_string(relativePath);
+        validate_outer_entry_path(archivePath);
+
+        const std::filesystem::file_status status = it->symlink_status(error);
+        if (error) {
+            throw std::runtime_error("failed to inspect reserved path: " + it->path().string());
+        }
+        if (std::filesystem::is_directory(status)) {
+            continue;
+        }
+        if (!std::filesystem::is_regular_file(status)) {
+            throw std::runtime_error("unsupported reserved entry type: " + archivePath);
+        }
+        entries.push_back(TarWriteEntry{
+            .path = archivePath,
+            .type = '0',
+            .data = read_file(it->path()),
+            .mode = 0644,
+        });
+    }
+}
+
+PayloadBuildArtifacts build_payload_from_prebuilt(const RqMetadata& metadata, const std::filesystem::path& projectRoot) {
+    if (!metadata.payload.has_value()) {
+        throw std::runtime_error("payload files present but metadata.payload missing");
+    }
+
+    validate_payload_metadata_shape(metadata.payload.value());
+    const std::filesystem::path payloadArchivePath = projectRoot / "payload" / "payload.tar.zst";
+    const std::filesystem::path payloadHashPath = projectRoot / "hashes" / "payload.sha256";
+    if (!is_regular_file_no_error(payloadArchivePath)) {
+        throw std::runtime_error("payload archive missing");
+    }
+    if (!is_regular_file_no_error(payloadHashPath)) {
+        throw std::runtime_error("payload hash file missing");
+    }
+
+    PayloadBuildArtifacts artifacts;
+    artifacts.hasPayload = true;
+    artifacts.archiveBytes = read_file(payloadArchivePath);
+    const std::string hashContent = read_file(payloadHashPath);
+    const std::string expectedHash = load_payload_hash(hashContent);
+    const std::string actualHash = sha256_hex(artifacts.archiveBytes);
+    if (actualHash != expectedHash) {
+        throw std::runtime_error("payload sha256 mismatch");
+    }
+
+    const std::vector<TarEntry> entries = validate_payload_archive_bytes(artifacts.archiveBytes);
+    artifacts.hashContent = actualHash + "  payload/payload.tar.zst\n";
+    artifacts.metadata = RqPayloadMetadata{
+        .path = "payload/payload.tar.zst",
+        .archive = "tar",
+        .compression = "zstd",
+        .hashAlgorithm = "sha256",
+        .hashFile = "hashes/payload.sha256",
+        .sizeCompressed = static_cast<std::uint64_t>(artifacts.archiveBytes.size()),
+        .sizeInstalledExpected = payload_installed_size(entries),
+    };
+    return artifacts;
+}
+
+PayloadBuildArtifacts build_payload_from_tree(const std::filesystem::path& payloadRoot) {
+    std::uint64_t installedSize = 0;
+    const std::vector<TarWriteEntry> payloadEntries = collect_payload_tree_entries(payloadRoot, installedSize);
+    const std::string payloadTar = tar_bytes_from_entries(payloadEntries);
+
+    PayloadBuildArtifacts artifacts;
+    artifacts.hasPayload = true;
+    artifacts.archiveBytes = zstd_compress(payloadTar);
+    const std::string hash = sha256_hex(artifacts.archiveBytes);
+    artifacts.hashContent = hash + "  payload/payload.tar.zst\n";
+    artifacts.metadata = RqPayloadMetadata{
+        .path = "payload/payload.tar.zst",
+        .archive = "tar",
+        .compression = "zstd",
+        .hashAlgorithm = "sha256",
+        .hashFile = "hashes/payload.sha256",
+        .sizeCompressed = static_cast<std::uint64_t>(artifacts.archiveBytes.size()),
+        .sizeInstalledExpected = installedSize,
+    };
+    return artifacts;
 }
 
 std::string sha256_hex(const std::string& bytes) {
@@ -530,12 +956,21 @@ std::filesystem::path make_unique_directory(const std::filesystem::path& parent,
 
 void extract_tar_to_directory(const std::string& tarContent, const std::filesystem::path& targetRoot) {
     for (const TarEntry& entry : parse_tar_entries(tarContent)) {
+        validate_payload_entry(entry);
         if (entry.type == '5') {
             const std::filesystem::path directoryPath = targetRoot / entry.path;
-            if (path_has_invalid_segments(std::filesystem::path(entry.path))) {
-                throw std::runtime_error("invalid payload path: " + entry.path);
-            }
             std::filesystem::create_directories(directoryPath);
+            continue;
+        }
+
+        if (entry.type == '2') {
+            const std::filesystem::path outputPath = targetRoot / std::filesystem::path(entry.path);
+            std::filesystem::create_directories(outputPath.parent_path());
+            std::error_code error;
+            std::filesystem::create_symlink(entry.linkTarget, outputPath, error);
+            if (error) {
+                throw std::runtime_error("failed to create payload symlink: " + entry.path);
+            }
             continue;
         }
 
@@ -543,12 +978,7 @@ void extract_tar_to_directory(const std::string& tarContent, const std::filesyst
             throw std::runtime_error("unsupported payload tar entry type");
         }
 
-        const std::filesystem::path relativePath(entry.path);
-        if (path_has_invalid_segments(relativePath)) {
-            throw std::runtime_error("invalid payload path: " + entry.path);
-        }
-
-        const std::filesystem::path outputPath = targetRoot / relativePath;
+        const std::filesystem::path outputPath = targetRoot / std::filesystem::path(entry.path);
         std::filesystem::create_directories(outputPath.parent_path());
         write_file(outputPath, entry.data);
     }
@@ -776,7 +1206,8 @@ RqPackageLayout RqPackageReader::load(
     const std::filesystem::path& packagePath,
     const std::filesystem::path& workRoot,
     const std::filesystem::path& stateRoot,
-    const ReqPackConfig& config
+    const ReqPackConfig& config,
+    const bool validateHostCompatibility
 ) {
     if (!std::filesystem::is_regular_file(packagePath)) {
         throw std::runtime_error("rqp package not found: " + packagePath.string());
@@ -831,37 +1262,30 @@ RqPackageLayout RqPackageReader::load(
     layout.stateDir = stateRoot / layout.metadata.name / layout.identity;
     layout.hooks = rq_parse_reqpack_hooks(controlDir / "reqpack.lua");
 
-    if (!rq_architecture_matches(layout.metadata.architecture, rq_host_architecture())) {
-        throw std::runtime_error("package architecture does not match host");
-    }
+    if (validateHostCompatibility) {
+        if (!rq_architecture_matches(layout.metadata.architecture, rq_host_architecture())) {
+            throw std::runtime_error("package architecture does not match host");
+        }
 
-    const std::shared_ptr<const HostInfoSnapshot> hostSnapshot = HostInfoService::currentSnapshot();
-    const std::set<std::string> hostSystems = rq_host_system_tokens(*hostSnapshot);
-    const auto aliases = rq_merged_system_aliases(config);
-    if (!rq_system_matches(layout.metadata.systems, hostSystems, aliases)) {
-        throw std::runtime_error(
-            "package system does not match host\npackage systems: " + rq_join_systems(layout.metadata.systems) +
-            "\nhost systems: " + rq_join_systems(std::vector<std::string>(hostSystems.begin(), hostSystems.end()))
-        );
+        const std::shared_ptr<const HostInfoSnapshot> hostSnapshot = HostInfoService::currentSnapshot();
+        const std::set<std::string> hostSystems = rq_host_system_tokens(*hostSnapshot);
+        const auto aliases = rq_merged_system_aliases(config);
+        if (!rq_system_matches(layout.metadata.systems, hostSystems, aliases)) {
+            throw std::runtime_error(
+                "package system does not match host\npackage systems: " + rq_join_systems(layout.metadata.systems) +
+                "\nhost systems: " + rq_join_systems(std::vector<std::string>(hostSystems.begin(), hostSystems.end()))
+            );
+        }
     }
 
     if (!layout.hooks.contains("install")) {
         throw std::runtime_error("rqp missing install hook");
     }
-
-    const std::filesystem::path installHookPath = controlDir / layout.hooks.at("install");
-    if (!std::filesystem::is_regular_file(installHookPath)) {
-        throw std::runtime_error("install hook file not found");
-    }
+    validate_hook_files(layout.hooks, controlDir);
 
     if (layout.metadata.payload.has_value()) {
         const RqPayloadMetadata& payload = layout.metadata.payload.value();
-        if (payload.path != "payload/payload.tar.zst") {
-            throw std::runtime_error("unsupported payload path");
-        }
-        if (payload.archive != "tar" || payload.compression != "zstd" || payload.hashAlgorithm != "sha256" || payload.hashFile != "hashes/payload.sha256") {
-            throw std::runtime_error("unsupported payload metadata values");
-        }
+        validate_payload_metadata_shape(payload);
         if (!payloadArchiveBytes.has_value()) {
             throw std::runtime_error("payload archive missing");
         }
@@ -876,6 +1300,7 @@ RqPackageLayout RqPackageReader::load(
         }
 
         layout.payloadArchivePath = controlDir / "payload" / "payload.tar.zst";
+        (void)validate_payload_archive_bytes(payloadArchiveBytes.value());
         extract_tar_to_directory(zstd_decompress(payloadArchiveBytes.value()), payloadDir);
         layout.hasPayload = true;
     } else if (payloadArchiveBytes.has_value() || payloadHashContent.has_value()) {
@@ -883,4 +1308,132 @@ RqPackageLayout RqPackageReader::load(
     }
 
     return layout;
+}
+
+RqPackageBuildResult rq_build_package(const RqPackageBuildRequest& request, const ReqPackConfig& config) {
+    const std::filesystem::path projectRoot = absolute_path(request.projectRoot);
+    if (!is_directory_no_error(projectRoot)) {
+        throw std::runtime_error("pack project directory not found: " + projectRoot.string());
+    }
+
+    const std::filesystem::path metadataPath = projectRoot / "metadata.json";
+    const std::filesystem::path reqpackPath = projectRoot / "reqpack.lua";
+    if (!is_regular_file_no_error(metadataPath)) {
+        throw std::runtime_error("pack project is missing metadata.json");
+    }
+    if (!is_regular_file_no_error(reqpackPath)) {
+        throw std::runtime_error("pack project is missing reqpack.lua");
+    }
+
+    RqMetadata metadata = rq_parse_metadata_json(read_file(metadataPath));
+    metadata.architecture = rq_normalize_architecture(metadata.architecture);
+    metadata.systems = rq_normalize_systems(metadata.systems);
+
+    const std::map<std::string, std::string> hooks = rq_parse_reqpack_hooks(reqpackPath);
+    validate_hook_files(hooks, projectRoot);
+
+    const bool hasEmbeddedPayloadTree = exists_no_error(projectRoot / "payload-tree");
+    const bool hasPayloadDir = exists_no_error(projectRoot / "payload");
+    const bool hasHashesDir = exists_no_error(projectRoot / "hashes");
+    const bool hasExternalPayload = request.payloadRoot.has_value();
+
+    if (hasExternalPayload && hasEmbeddedPayloadTree) {
+        throw std::runtime_error("pack input is ambiguous: use either payload-tree/ or --payload-dir, not both");
+    }
+    if (hasEmbeddedPayloadTree && (hasPayloadDir || hasHashesDir)) {
+        throw std::runtime_error("pack input is ambiguous: payload-tree/ cannot be combined with payload/ or hashes/");
+    }
+    if (hasPayloadDir != hasHashesDir) {
+        throw std::runtime_error("pack input is incomplete: payload/ and hashes/ must both be present");
+    }
+
+    PayloadBuildArtifacts payloadArtifacts;
+    if (hasExternalPayload) {
+        payloadArtifacts = build_payload_from_tree(absolute_path(request.payloadRoot.value()));
+    } else if (hasEmbeddedPayloadTree) {
+        payloadArtifacts = build_payload_from_tree(projectRoot / "payload-tree");
+    } else if (hasPayloadDir && hasHashesDir) {
+        payloadArtifacts = build_payload_from_prebuilt(metadata, projectRoot);
+    } else {
+        if (metadata.payload.has_value()) {
+            throw std::runtime_error("metadata.payload requires payload files or payload tree");
+        }
+    }
+
+    if (payloadArtifacts.hasPayload) {
+        metadata.payload = payloadArtifacts.metadata;
+    } else {
+        metadata.payload.reset();
+    }
+
+    std::filesystem::path outputPath = request.outputPath;
+    if (outputPath.empty()) {
+        outputPath = projectRoot.parent_path() / (metadata.name + ".rqp");
+    }
+    if (outputPath.is_relative()) {
+        outputPath = std::filesystem::current_path() / outputPath;
+    }
+
+    const bool force = request.force;
+    if (exists_no_error(outputPath) && !force) {
+        if (!request.interactive) {
+            throw std::runtime_error("output file already exists: " + outputPath.string() + "\nUse --force to overwrite.");
+        }
+        std::cout << outputPath.string() << " already exists. Overwrite? [y/N]\n";
+        std::cout.flush();
+        std::string answer;
+        if (!std::getline(std::cin, answer) || (answer != "y" && answer != "Y")) {
+            throw std::runtime_error("pack aborted");
+        }
+    }
+
+    std::vector<TarWriteEntry> packageEntries;
+    packageEntries.push_back(TarWriteEntry{
+        .path = "metadata.json",
+        .type = '0',
+        .data = rq_metadata_json(metadata),
+        .mode = 0644,
+    });
+    packageEntries.push_back(TarWriteEntry{
+        .path = "reqpack.lua",
+        .type = '0',
+        .data = read_file(reqpackPath),
+        .mode = 0644,
+    });
+    append_control_tree_files(packageEntries, projectRoot / "scripts", "scripts");
+
+    if (payloadArtifacts.hasPayload) {
+        packageEntries.push_back(TarWriteEntry{
+            .path = "hashes/payload.sha256",
+            .type = '0',
+            .data = payloadArtifacts.hashContent,
+            .mode = 0644,
+        });
+        packageEntries.push_back(TarWriteEntry{
+            .path = "payload/payload.tar.zst",
+            .type = '0',
+            .data = payloadArtifacts.archiveBytes,
+            .mode = 0644,
+        });
+    }
+
+    const std::string archiveBytes = tar_bytes_from_entries(packageEntries);
+    std::error_code error;
+    if (!outputPath.parent_path().empty()) {
+        std::filesystem::create_directories(outputPath.parent_path(), error);
+        if (error) {
+            throw std::runtime_error("failed to create output directory: " + outputPath.parent_path().string());
+        }
+    }
+    write_file(outputPath, archiveBytes);
+
+    const std::filesystem::path validationRoot = std::filesystem::temp_directory_path() / "reqpack-rqp-pack-validate";
+    (void)RqPackageReader::load(outputPath, validationRoot / "work", validationRoot / "state", config, false);
+
+    return RqPackageBuildResult{
+        .metadata = metadata,
+        .identity = rq_package_identity(metadata),
+        .outputPath = outputPath,
+        .hasPayload = payloadArtifacts.hasPayload,
+    };
 }

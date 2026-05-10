@@ -594,6 +594,42 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         std::filesystem::remove(tempRoot, error);
     }
 
+    SECTION("pack builtin parses project path output payload and force") {
+        const std::vector<Request> requests = cli.parse(
+            std::vector<std::string>{"pack", "./demo", "--output", "./dist/demo.rqp", "--payload-dir", "./rootfs", "--force"},
+            config
+        );
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::PACK);
+        CHECK(requests.front().system.empty());
+        CHECK(requests.front().usesLocalTarget);
+        CHECK(requests.front().localPath == "./demo");
+        CHECK(requests.front().outputPath == "./dist/demo.rqp");
+        CHECK(requests.front().payloadPath == "./rootfs");
+        CHECK(requests.front().flags == std::vector<std::string>{"force"});
+    }
+
+    SECTION("pack plugin parses known system and project path") {
+        const std::vector<Request> requests = cli.parse(
+            std::vector<std::string>{"pack", "dnf", "./project", "--output", "./dist/demo.pkg", "--force"},
+            config
+        );
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::PACK);
+        CHECK(requests.front().system == "dnf");
+        CHECK(requests.front().usesLocalTarget);
+        CHECK(requests.front().localPath == "./project");
+        CHECK(requests.front().outputPath == "./dist/demo.pkg");
+        CHECK(requests.front().payloadPath.empty());
+        CHECK(requests.front().flags == std::vector<std::string>{"force"});
+    }
+
+    SECTION("pack rejects ambiguous two argument form when first token is not known system") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"pack", "unknown-system", "./project"}, config);
+        CHECK(requests.empty());
+        CHECK(cli.parseFailed());
+    }
+
     SECTION("scoped rqp package keeps rqp system and versioned package") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "rqp:tool@1.2.3"}, config);
         REQUIRE(requests.size() == 1);

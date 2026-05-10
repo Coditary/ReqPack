@@ -365,7 +365,8 @@ bool any_write_scope_allows_path(const std::vector<PluginWriteScope>& scopes,
 std::optional<std::string> validate_execution_policy(const PluginSecurityMetadata& metadata,
                                                      const std::string& pluginId,
                                                      const std::string& pluginDirectory,
-                                                     const std::string& command) {
+                                                     const std::string& command,
+                                                     const std::vector<std::filesystem::path>& runtimeWriteRoots = {}) {
     if (std::find(metadata.capabilities.begin(), metadata.capabilities.end(), "exec") == metadata.capabilities.end()) {
         return "execution policy denied for plugin '" + pluginId + "': shell command requires capability 'exec'.";
     }
@@ -380,6 +381,12 @@ std::optional<std::string> validate_execution_policy(const PluginSecurityMetadat
     for (const std::string& rawTarget : inspection.writeTargets) {
         const std::filesystem::path targetPath = normalize_exec_path(rawTarget, workingDirectory);
         if (targetPath.empty() || is_safe_redirection_sink(targetPath)) {
+            continue;
+        }
+
+        if (std::any_of(runtimeWriteRoots.begin(), runtimeWriteRoots.end(), [&](const std::filesystem::path& allowedRoot) {
+                return path_has_prefix(targetPath, allowedRoot.lexically_normal());
+            })) {
             continue;
         }
 
@@ -1367,7 +1374,7 @@ ExecResult LuaBridge::executeCommandWithPolicy(const std::string& sourceId, cons
     }
 
     const PluginSecurityMetadata metadata = m_securityMetadata.value_or(PluginSecurityMetadata{});
-    if (const std::optional<std::string> error = validate_execution_policy(metadata, m_pluginId, m_pluginDirectory, command); error.has_value()) {
+    if (const std::optional<std::string> error = validate_execution_policy(metadata, m_pluginId, m_pluginDirectory, command, m_runtimeWriteRoots); error.has_value()) {
         return denyExecution(error.value());
     }
 
@@ -1383,7 +1390,7 @@ ExecResult LuaBridge::executeCommandWithPolicy(const std::string& sourceId, cons
     }
 
     const PluginSecurityMetadata metadata = m_securityMetadata.value_or(PluginSecurityMetadata{});
-    if (const std::optional<std::string> error = validate_execution_policy(metadata, m_pluginId, m_pluginDirectory, command); error.has_value()) {
+    if (const std::optional<std::string> error = validate_execution_policy(metadata, m_pluginId, m_pluginDirectory, command, m_runtimeWriteRoots); error.has_value()) {
         return denyExecution(error.value());
     }
 
@@ -1473,6 +1480,8 @@ bool LuaBridge::shutdown() {
         std::filesystem::remove_all(path, error);
     }
     m_tempDirectories.clear();
+    m_recentArtifacts.clear();
+    m_runtimeWriteRoots.clear();
 
     return shutdownOk;
 }
@@ -1546,6 +1555,11 @@ bool LuaBridge::supportsResolvePackage() const {
     return func.valid();
 }
 
+bool LuaBridge::supportsPack() const {
+    sol::protected_function func = m_pluginTable["pack"];
+    return func.valid();
+}
+
 bool LuaBridge::supportsProxyResolution() const {
     sol::protected_function func = m_pluginTable["resolveProxyRequest"];
     return func.valid();
@@ -1555,6 +1569,12 @@ std::vector<PluginEventRecord> LuaBridge::takeRecentEvents() {
     std::vector<PluginEventRecord> events = std::move(m_recentEvents);
     m_recentEvents.clear();
     return events;
+}
+
+std::vector<std::string> LuaBridge::takeRecentArtifacts() {
+    std::vector<std::string> artifacts = std::move(m_recentArtifacts);
+    m_recentArtifacts.clear();
+    return artifacts;
 }
 
 bool LuaBridge::install(const PluginCallContext& context, const std::vector<Package>& packages) {
@@ -1616,6 +1636,48 @@ bool LuaBridge::update(const PluginCallContext& context, const std::vector<Packa
     if (!result.valid()) {
         sol::error err = result;
         log_lua_error(m_logger, m_pluginId, std::string("Lua Error (update): ") + err.what());
+        return false;
+    }
+    return result.return_count() == 0 ? true : result.get<bool>();
+}
+
+bool LuaBridge::pack(const PluginCallContext& context, const std::string& projectPath, const std::string& outputPath, const std::vector<std::string>& flags) {
+    m_recentEvents.clear();
+    m_recentArtifacts.clear();
+
+    sol::protected_function func = m_pluginTable["pack"];
+    if (!func.valid()) {
+        return false;
+    }
+
+    auto addRuntimeRoot = [&](std::filesystem::path path) {
+        if (path.empty()) {
+            return;
+        }
+        std::error_code error;
+        if (path.is_relative()) {
+            path = std::filesystem::absolute(path, error);
+        }
+        if (!error) {
+            m_runtimeWriteRoots.push_back(path.lexically_normal());
+        }
+    };
+
+    m_runtimeWriteRoots.clear();
+    addRuntimeRoot(std::filesystem::path(projectPath));
+    if (!outputPath.empty()) {
+        const std::filesystem::path output(outputPath);
+        addRuntimeRoot(output.parent_path().empty() ? std::filesystem::current_path() : output.parent_path());
+    }
+
+    const bool silentRuntime = hasSilentRuntimeFlag(context.flags) || hasSilentRuntimeFlag(flags);
+    m_silentRuntimeOutput.store(silentRuntime);
+    auto result = func(context, projectPath, outputPath, flags);
+    m_silentRuntimeOutput.store(false);
+    m_runtimeWriteRoots.clear();
+    if (!result.valid()) {
+        sol::error err = result;
+        log_lua_error(m_logger, m_pluginId, std::string("Lua Error (pack): ") + err.what());
         return false;
     }
     return result.return_count() == 0 ? true : result.get<bool>();
@@ -1986,6 +2048,7 @@ void LuaBridge::emitEvent(const std::string& pluginId, const std::string& eventN
 }
 
 void LuaBridge::registerArtifact(const std::string& pluginId, const std::string& payload) {
+    m_recentArtifacts.push_back(payload);
     if (m_silentRuntimeOutput.load()) {
         return;
     }
@@ -2007,6 +2070,9 @@ std::string LuaBridge::createTempDirectory(const std::string& pluginId) {
         return {};
     }
     m_tempDirectories.emplace_back(created);
+    if (!m_runtimeWriteRoots.empty()) {
+        m_runtimeWriteRoots.emplace_back(std::filesystem::path(created).lexically_normal());
+    }
     return created;
 }
 

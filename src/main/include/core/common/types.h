@@ -20,6 +20,7 @@ enum class ActionType {
 	OUTDATED,
 	HOST,
 	SNAPSHOT,
+	PACK,
 	SERVE,
 	REMOTE
 };
@@ -31,6 +32,7 @@ struct Request {
 	std::vector<std::string> flags;
 	std::string outputFormat;
 	std::string outputPath;
+	std::string payloadPath;
 	std::string localPath;
 	bool usesLocalTarget{false};
 };

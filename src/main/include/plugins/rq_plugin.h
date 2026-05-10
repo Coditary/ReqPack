@@ -26,6 +26,7 @@ public:
     std::string getPluginDirectory() const override;
     std::string getScriptPath() const override;
     IPluginRuntimeHost* getRuntimeHost() override;
+    bool supportsPack() const override;
     bool supportsResolvePackage() const override;
 
     std::vector<Package> getRequirements() override;
@@ -37,6 +38,7 @@ public:
     bool installLocal(const PluginCallContext& context, const std::string& path) override;
     bool remove(const PluginCallContext& context, const std::vector<Package>& packages) override;
     bool update(const PluginCallContext& context, const std::vector<Package>& packages) override;
+    bool pack(const PluginCallContext& context, const std::string& projectPath, const std::string& outputPath, const std::vector<std::string>& flags) override;
 
     std::vector<PackageInfo> list(const PluginCallContext& context) override;
     std::vector<PackageInfo> outdated(const PluginCallContext& context) override;
@@ -44,6 +46,7 @@ public:
     PackageInfo info(const PluginCallContext& context, const std::string& packageName) override;
     std::optional<Package> resolvePackage(const PluginCallContext& context, const Package& package) override;
     std::vector<PluginEventRecord> takeRecentEvents() override;
+    std::vector<std::string> takeRecentArtifacts() override;
 
 private:
     struct ManifestEntry {
@@ -53,6 +56,7 @@ private:
 
     ReqPackConfig config_{};
     std::vector<PluginEventRecord> recentEvents_{};
+    std::vector<std::string> recentArtifacts_{};
     mutable std::vector<ManifestEntry> pendingManifest_{};
     bool installPackagePath(
         const PluginCallContext& context,

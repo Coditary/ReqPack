@@ -127,6 +127,53 @@ return {
     return packagePath;
 }
 
+std::string base_metadata_json(const std::string& name, const std::optional<std::string>& payloadBlock = std::nullopt) {
+    std::string metadata =
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"" + name + "\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"release\": 1,\n"
+        "  \"revision\": 0,\n"
+        "  \"summary\": \"test package\",\n"
+        "  \"description\": \"reader test package\",\n"
+        "  \"license\": \"MIT\",\n"
+        "  \"vendor\": \"ReqPack Tests\",\n"
+        "  \"maintainerEmail\": \"tests@example.org\",\n"
+        "  \"url\": \"https://example.test/" + name + ".rqp\"";
+    if (payloadBlock.has_value()) {
+        metadata += ",\n  \"payload\": " + payloadBlock.value();
+    }
+    metadata += "\n}\n";
+    return metadata;
+}
+
+void write_pack_project(const std::filesystem::path& root, const std::string& name) {
+    write_file(root / "metadata.json", base_metadata_json(name));
+    write_file(root / "reqpack.lua", R"(
+return {
+  apiVersion = 1,
+  hooks = {
+    install = "scripts/install.lua"
+  }
+}
+)");
+    write_file(root / "scripts" / "install.lua", "return true\n");
+}
+
+std::string payload_block_json() {
+    return
+        "{\n"
+        "    \"path\": \"payload/payload.tar.zst\",\n"
+        "    \"archive\": \"tar\",\n"
+        "    \"compression\": \"zstd\",\n"
+        "    \"hashAlgorithm\": \"sha256\",\n"
+        "    \"hashFile\": \"hashes/payload.sha256\",\n"
+        "    \"sizeCompressed\": 0,\n"
+        "    \"sizeInstalledExpected\": 0\n"
+        "  }";
+}
+
 }  // namespace
 
 TEST_CASE("rqp package reader loads valid rqp and extracts payload", "[unit][rq_package][core]") {
@@ -232,4 +279,153 @@ TEST_CASE("rqp system matching supports aliases and nosys", "[unit][rq_package][
     CHECK(rq_system_matches({"debian-family"}, std::set<std::string>{"ubuntu", "linux"}, aliases));
     CHECK(rq_system_matches({"darwin"}, std::set<std::string>{"macos", "darwin"}, aliases));
     CHECK_FALSE(rq_system_matches({"debian"}, std::set<std::string>{"fedora", "linux"}, aliases));
+}
+
+TEST_CASE("rqp package builder builds control only package", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-pack-control"};
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    write_pack_project(projectRoot, "control-only");
+
+    const RqPackageBuildResult result = rq_build_package({
+        .projectRoot = projectRoot,
+        .outputPath = tempDir.path() / "dist" / "control-only.rqp",
+        .force = true,
+        .interactive = false,
+    });
+
+    CHECK(result.metadata.name == "control-only");
+    CHECK_FALSE(result.hasPayload);
+    CHECK(std::filesystem::exists(result.outputPath));
+
+    const RqPackageLayout layout = RqPackageReader::load(result.outputPath, tempDir.path() / "work", tempDir.path() / "state", default_reqpack_config(), false);
+    CHECK(layout.metadata.name == "control-only");
+    CHECK_FALSE(layout.hasPayload);
+}
+
+TEST_CASE("rqp package builder builds payload from payload tree", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-pack-payload-tree"};
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    write_pack_project(projectRoot, "payload-tree-demo");
+    write_file(projectRoot / "payload-tree" / "bin" / "demo.txt", "hello world");
+
+    const RqPackageBuildResult result = rq_build_package({
+        .projectRoot = projectRoot,
+        .outputPath = tempDir.path() / "payload-tree-demo.rqp",
+        .force = true,
+        .interactive = false,
+    });
+
+    REQUIRE(result.metadata.payload.has_value());
+    CHECK(result.hasPayload);
+    CHECK(result.metadata.payload->path == "payload/payload.tar.zst");
+    CHECK(result.metadata.payload->hashFile == "hashes/payload.sha256");
+
+    const RqPackageLayout layout = RqPackageReader::load(result.outputPath, tempDir.path() / "work", tempDir.path() / "state", default_reqpack_config(), false);
+    CHECK(layout.hasPayload);
+    CHECK(std::filesystem::exists(layout.payloadDir / "bin" / "demo.txt"));
+}
+
+TEST_CASE("rqp package builder accepts external payload dir", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-pack-external-payload"};
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    const std::filesystem::path payloadRoot = tempDir.path() / "rootfs";
+    write_pack_project(projectRoot, "external-payload-demo");
+    write_file(payloadRoot / "etc" / "demo.conf", "x=1\n");
+
+    const RqPackageBuildResult result = rq_build_package({
+        .projectRoot = projectRoot,
+        .outputPath = tempDir.path() / "external-payload-demo.rqp",
+        .payloadRoot = payloadRoot,
+        .force = true,
+        .interactive = false,
+    });
+
+    CHECK(result.hasPayload);
+    const RqPackageLayout layout = RqPackageReader::load(result.outputPath, tempDir.path() / "work", tempDir.path() / "state", default_reqpack_config(), false);
+    CHECK(std::filesystem::exists(layout.payloadDir / "etc" / "demo.conf"));
+}
+
+TEST_CASE("rqp package builder rebuilds validated prebuilt payload", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-pack-prebuilt"};
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    write_pack_project(projectRoot, "prebuilt-demo");
+    write_file(projectRoot / "metadata.json", base_metadata_json("prebuilt-demo", payload_block_json()));
+    write_file(projectRoot / "payload-tree" / "demo.txt", "hello");
+    std::filesystem::create_directories(projectRoot / "payload");
+
+    const std::string payloadTar = (tempDir.path() / "payload.tar").string();
+    const std::string payloadTarZst = (projectRoot / "payload" / "payload.tar.zst").string();
+    REQUIRE(std::system(("tar -C " + escape_shell_arg((projectRoot / "payload-tree").string()) + " -cf " + escape_shell_arg(payloadTar) + " .").c_str()) == 0);
+    REQUIRE(std::system(("zstd -q -f " + escape_shell_arg(payloadTar) + " -o " + escape_shell_arg(payloadTarZst)).c_str()) == 0);
+    const std::string hashOutput = run_command_capture("openssl dgst -sha256 " + escape_shell_arg(payloadTarZst));
+    const std::size_t pos = hashOutput.rfind(' ');
+    REQUIRE(pos != std::string::npos);
+    const std::string hash = hashOutput.substr(pos + 1, 64);
+    write_file(projectRoot / "hashes" / "payload.sha256", hash + "  payload/payload.tar.zst\n");
+    std::filesystem::remove_all(projectRoot / "payload-tree");
+
+    const RqPackageBuildResult result = rq_build_package({
+        .projectRoot = projectRoot,
+        .outputPath = tempDir.path() / "prebuilt-demo.rqp",
+        .force = true,
+        .interactive = false,
+    });
+
+    CHECK(result.hasPayload);
+    const RqPackageLayout layout = RqPackageReader::load(result.outputPath, tempDir.path() / "work", tempDir.path() / "state", default_reqpack_config(), false);
+    CHECK(std::filesystem::exists(layout.payloadDir / "demo.txt"));
+}
+
+TEST_CASE("rqp package builder rejects ambiguous payload sources", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-pack-conflict"};
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    write_pack_project(projectRoot, "ambiguous-demo");
+    write_file(projectRoot / "payload-tree" / "demo.txt", "hello");
+    std::filesystem::create_directories(projectRoot / "payload");
+    std::filesystem::create_directories(projectRoot / "hashes");
+
+    REQUIRE_THROWS_WITH(
+        rq_build_package({
+            .projectRoot = projectRoot,
+            .outputPath = tempDir.path() / "ambiguous-demo.rqp",
+            .force = true,
+            .interactive = false,
+        }),
+        Catch::Matchers::Contains("payload-tree/")
+    );
+}
+
+TEST_CASE("rqp package builder skips host compatibility during self validation", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-pack-cross-target"};
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    write_pack_project(projectRoot, "cross-target");
+    write_file(projectRoot / "metadata.json",
+               "{\n"
+               "  \"formatVersion\": 1,\n"
+               "  \"name\": \"cross-target\",\n"
+               "  \"version\": \"1.0.0\",\n"
+               "  \"release\": 1,\n"
+               "  \"revision\": 0,\n"
+               "  \"summary\": \"test\",\n"
+               "  \"description\": \"test\",\n"
+               "  \"license\": \"MIT\",\n"
+               "  \"architecture\": \"mips64\",\n"
+               "  \"system\": [\"imaginary-os\"],\n"
+               "  \"vendor\": \"ReqPack Tests\",\n"
+               "  \"maintainerEmail\": \"tests@example.org\",\n"
+               "  \"url\": \"https://example.test/cross-target.rqp\"\n"
+               "}\n");
+
+    const RqPackageBuildResult result = rq_build_package({
+        .projectRoot = projectRoot,
+        .outputPath = tempDir.path() / "cross-target.rqp",
+        .force = true,
+        .interactive = false,
+    });
+    CHECK(std::filesystem::exists(result.outputPath));
+
+    REQUIRE_THROWS_WITH(
+        RqPackageReader::load(result.outputPath, tempDir.path() / "work-host", tempDir.path() / "state-host"),
+        Catch::Matchers::Contains("package architecture does not match host")
+    );
 }

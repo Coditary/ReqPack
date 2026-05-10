@@ -13,7 +13,7 @@
 #include "core/common/version_compare.h"
 #include "output/progress_metrics.h"
 
-#define REQPACK_API_VERSION 4
+#define REQPACK_API_VERSION 5
 
 struct ExecResult {
 	bool success{false};
@@ -200,19 +200,32 @@ public:
 	virtual bool supportsProxyResolution() const {
 		return false;
 	}
+	virtual bool supportsPack() const {
+		return false;
+	}
 	virtual bool supportsResolvePackage() const {
 		return false;
 	}
 	virtual std::vector<PluginEventRecord> takeRecentEvents() {
 		return {};
 	}
+	virtual std::vector<std::string> takeRecentArtifacts() {
+		return {};
+	}
 
     virtual bool install(const PluginCallContext& context, const std::vector<Package>& packages) = 0;
-    virtual bool installLocal(const PluginCallContext& context, const std::string& path) = 0;
-    virtual bool remove(const PluginCallContext& context, const std::vector<Package>& packages) = 0;
-    virtual bool update(const PluginCallContext& context, const std::vector<Package>& packages) = 0;
+	virtual bool installLocal(const PluginCallContext& context, const std::string& path) = 0;
+	virtual bool remove(const PluginCallContext& context, const std::vector<Package>& packages) = 0;
+	virtual bool update(const PluginCallContext& context, const std::vector<Package>& packages) = 0;
+	virtual bool pack(const PluginCallContext& context, const std::string& projectPath, const std::string& outputPath, const std::vector<std::string>& flags) {
+		(void)context;
+		(void)projectPath;
+		(void)outputPath;
+		(void)flags;
+		return false;
+	}
 
-    virtual std::vector<PackageInfo> list(const PluginCallContext& context) = 0;
+	virtual std::vector<PackageInfo> list(const PluginCallContext& context) = 0;
 
     virtual std::vector<PackageInfo> outdated(const PluginCallContext& context) = 0;
     

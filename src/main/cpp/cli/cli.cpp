@@ -96,6 +96,10 @@ bool supports_manifest_path(ActionType action) {
     return action == ActionType::INSTALL || action == ActionType::AUDIT;
 }
 
+bool action_supports_output_path(ActionType action) {
+    return action == ActionType::SBOM || action == ActionType::AUDIT || action == ActionType::SNAPSHOT || action == ActionType::PACK;
+}
+
 std::optional<std::filesystem::path> resolve_manifest_path_argument(const std::string& argument) {
     if (argument.empty()) {
         return std::nullopt;
@@ -170,9 +174,9 @@ bool is_removed_security_backend_flag(const std::string& argument) {
 
 bool current_system_prefers_package_tokens(const std::string& currentSystem, ActionType action) {
 	const std::string normalizedSystem = to_lower(currentSystem);
-	if (normalizedSystem != "sys" && normalizedSystem != "rqp") {
-		return false;
-	}
+    if (normalizedSystem != "sys" && normalizedSystem != "rqp") {
+        return false;
+    }
 
     switch (action) {
         case ActionType::INSTALL:
@@ -182,6 +186,7 @@ bool current_system_prefers_package_tokens(const std::string& currentSystem, Act
         case ActionType::INFO:
         case ActionType::SBOM:
         case ActionType::AUDIT:
+        case ActionType::PACK:
             return true;
         default:
             return false;
@@ -280,6 +285,8 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
     std::string auditOutputFormat;
     std::string auditOutputPath;
     std::string snapshotOutputPath;
+    std::string packOutputPath;
+    std::string packPayloadPath;
 
     if (arguments.empty()) {
         return requests;
@@ -365,6 +372,60 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 
     if (action == ActionType::HOST) {
         lastParseFailed_ = false;
+        return requests;
+    }
+
+    if (action == ActionType::PACK) {
+        std::vector<std::string> positional;
+        positional.reserve(requestArguments.size());
+        for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
+            const std::string& argument = requestArguments[i];
+            if (is_flag(argument)) {
+                if (argument == "--output") {
+                    if (i + 1 >= requestArguments.size()) {
+                        lastParseFailed_ = true;
+                        return {};
+                    }
+                    packOutputPath = requestArguments[++i];
+                    continue;
+                }
+                if (argument == "--payload-dir") {
+                    if (i + 1 >= requestArguments.size()) {
+                        lastParseFailed_ = true;
+                        return {};
+                    }
+                    packPayloadPath = requestArguments[++i];
+                    continue;
+                }
+                global_flags.push_back(argument.substr(2));
+                continue;
+            }
+            positional.push_back(argument);
+        }
+
+        if (positional.empty() || positional.size() > 2) {
+            lastParseFailed_ = true;
+            return {};
+        }
+
+        Request request;
+        request.action = action;
+        request.flags = global_flags;
+        request.outputPath = packOutputPath;
+        request.payloadPath = packPayloadPath;
+        request.localPath = positional.back();
+        request.usesLocalTarget = true;
+
+        if (positional.size() == 2) {
+            const std::string system = to_lower(positional.front());
+            if (!discover_systems(config).contains(system)) {
+                lastParseFailed_ = true;
+                return {};
+            }
+            request.system = system;
+        }
+
+        requests.push_back(std::move(request));
         return requests;
     }
 
@@ -505,7 +566,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
                 }
                 continue;
             }
-            if (action == ActionType::SBOM && argument == "--output") {
+            if (action_supports_output_path(action) && action == ActionType::SBOM && argument == "--output") {
                 if (i + 1 >= requestArguments.size()) {
                     lastParseFailed_ = true;
                     return {};
@@ -757,6 +818,7 @@ void Cli::print_help() {
         "  version                 Prints ReqPack version\n"
         "  test-plugin             Runs hermetic plugin conformance cases\n"
         "  snapshot                Snapshots installed packages to reqpack.lua\n"
+        "  pack                    Builds .rqp or plugin-native package artifacts\n"
         "  serve                   Reads commands from stdin and keeps process running\n"
         "  remote                  Connects to remote profile from XDG config (~/.config/reqpack fallback)\n"
         "\nConfig:\n"
@@ -1106,6 +1168,32 @@ void Cli::print_command_help(ActionType action) {
                 "  rqp snapshot --output reqpack.lua\n"
                 "  rqp snapshot --output reqpack.lua --force\n";
             break;
+        case ActionType::PACK:
+            help =
+                "Usage: rqp pack <project-dir> [options]\n"
+                "       rqp pack <system> <project-dir> [options]\n"
+                "\n"
+                "Build package artifacts from project directories.\n"
+                "With one positional path, ReqPack builds a builtin .rqp package.\n"
+                "With <system> plus path, ReqPack dispatches to plugin-native pack support if available.\n"
+                "\n"
+                "Arguments:\n"
+                "  <project-dir>           Project directory to pack\n"
+                "  <system>                Optional package manager with native pack support\n"
+                "\n"
+                "Options:\n"
+                "  -h,--help               Displays this help\n"
+                "  --output <path>         Write artifact to explicit output path\n"
+                "  --payload-dir <path>    External payload tree for builtin .rqp mode\n"
+                "  --force                 Overwrite existing output file without prompting\n"
+                "  --non-interactive       Disable all prompts\n"
+                "\n"
+                "Examples:\n"
+                "  rqp pack ./my-package\n"
+                "  rqp pack ./my-package --output ./dist/demo.rqp\n"
+                "  rqp pack ./my-package --payload-dir ./rootfs\n"
+                "  rqp pack deb ./debian-project --output ./dist/demo.deb\n";
+            break;
         case ActionType::SERVE:
             help =
                 "Usage: rqp serve --stdin [options]\n"
@@ -1210,6 +1298,9 @@ ActionType Cli::parse_action(const std::string& command) {
     }
     if (normalized_command == "snapshot") {
         return ActionType::SNAPSHOT;
+    }
+    if (normalized_command == "pack") {
+        return ActionType::PACK;
     }
     if (normalized_command == "serve") {
         return ActionType::SERVE;
