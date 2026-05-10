@@ -935,6 +935,29 @@ bool is_self_update_command(const std::vector<std::string>& arguments) {
     return true;
 }
 
+bool refresh_update_registry(const ReqPackConfig& config, Logger& logger, bool warnOnFailure) {
+    ReqPackConfig mainRegistryConfig = config;
+    mainRegistryConfig.registry.sources.clear();
+    mainRegistryConfig.downloader.pluginSources.clear();
+    RegistryDatabase registryDatabase(mainRegistryConfig);
+    if (registryDatabase.refreshMainRegistry()) {
+        return true;
+    }
+
+    if (warnOnFailure) {
+        logger.diagnostic(make_warning_diagnostic(
+            "registry",
+            "Registry refresh failed before update",
+            "ReqPack could not synchronize the main registry before running update and will continue with cached registry data if available.",
+            "Check registry.remoteUrl, network access, and local registry cache if update results look stale.",
+            {},
+            "registry",
+            "update"
+        ));
+    }
+    return false;
+}
+
 bool is_host_refresh_command(const std::vector<std::string>& arguments) {
     const std::vector<std::string> filtered = strip_config_arguments(arguments);
     if (filtered.size() != 2) {
@@ -1436,6 +1459,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (is_self_update_command(rawArguments)) {
+        (void)refresh_update_registry(config, logger, true);
         const int result = run_self_update(config, logger);
         logger.flushSync();
         curl_global_cleanup();

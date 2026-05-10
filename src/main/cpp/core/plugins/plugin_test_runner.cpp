@@ -416,7 +416,7 @@ PluginTestCase load_case_file(const std::filesystem::path& path) {
             response.result.stdoutText = optional_string_field(fakeExec, "stdout").value_or(std::string{});
             response.result.stderrText = optional_string_field(fakeExec, "stderr").value_or(std::string{});
             if (!fakeExec["success"].valid()) {
-                response.result.success = response.result.exitCode == 0 && response.result.stderrText.empty();
+                response.result.success = response.result.exitCode == 0;
             }
             testCase.fakeExec.push_back(std::move(response));
         }

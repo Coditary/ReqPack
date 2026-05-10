@@ -399,7 +399,7 @@ ExecResult run_shell_command(Logger& logger, const std::string& pluginScope, con
     }
 
     result.exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : status;
-    result.success = result.stderrText.empty() && result.exitCode == 0;
+    result.success = result.exitCode == 0;
     if (!result.success && result.stderrText.empty()) {
         result.stderrText = result.stdoutText;
     }
@@ -502,7 +502,10 @@ ExecResult run_pty_command(Logger& logger, const std::string& sourceId, const st
     }
 
     result.exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : status;
-    result.success = result.stderrText.empty() && result.exitCode == 0;
+    result.success = result.exitCode == 0;
+    if (!result.success && result.stderrText.empty()) {
+        result.stderrText = result.stdoutText;
+    }
     return result;
 }
 

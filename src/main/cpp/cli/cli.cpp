@@ -1380,6 +1380,11 @@ std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& con
 	std::set<std::string> systems;
 	const std::filesystem::path directory = config.registry.pluginDirectory;
 	const RegistrySourceMap configuredSources = collect_explicit_registry_sources(config);
+	ReqPackConfig mainRegistryConfig = config;
+	mainRegistryConfig.registry.sources.clear();
+	mainRegistryConfig.downloader.pluginSources.clear();
+	RegistryDatabase registryDatabase(mainRegistryConfig);
+	const bool mainRegistryReady = registryDatabase.refreshMainRegistry();
 
 	for (const auto& [name, entry] : configuredSources) {
 		if (!entry.alias && !name.empty() && to_lower(name) != "rqp" && to_lower(name) != "sys") {
@@ -1405,14 +1410,11 @@ std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& con
 		}
 	}
 
-	if (systems.empty()) {
-		RegistryDatabase registryDatabase(config);
-		if (registryDatabase.ensureReady()) {
-			for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
-				const std::string name = to_lower(record.name);
-				if (!record.alias && !name.empty() && name != "rqp" && name != "sys") {
-					systems.insert(name);
-				}
+	if (systems.empty() && mainRegistryReady) {
+		for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
+			const std::string name = to_lower(record.name);
+			if (!record.alias && !name.empty() && name != "rqp" && name != "sys") {
+				systems.insert(name);
 			}
 		}
 	}
