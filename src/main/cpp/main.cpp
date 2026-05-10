@@ -19,6 +19,7 @@
 #include <array>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -27,6 +28,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <poll.h>
 #include <set>
 #include <spawn.h>
 #include <sstream>
@@ -864,11 +866,227 @@ bool remove_path_quietly(const std::filesystem::path& path) {
     return !error;
 }
 
-bool extract_release_archive(const std::filesystem::path& archivePath, const std::filesystem::path& destinationPath) {
+std::string shell_escape_arg(const std::string& value) {
+    std::string escaped{"'"};
+    for (char ch : value) {
+        if (ch == '\'') {
+            escaped += "'\\''";
+            continue;
+        }
+        escaped.push_back(ch);
+    }
+    escaped.push_back('\'');
+    return escaped;
+}
+
+std::vector<std::string> split_non_empty_lines(const std::string& value) {
+    std::vector<std::string> lines;
+    std::istringstream stream(value);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (const std::optional<std::string> trimmed = trim_line(line); trimmed.has_value()) {
+            lines.push_back(trimmed.value());
+        }
+    }
+    return lines;
+}
+
+std::vector<std::string> list_release_archive_entries(const std::filesystem::path& archivePath) {
+    FILE* pipe = ::popen(("tar -tzf " + shell_escape_arg(archivePath.string())).c_str(), "r");
+    if (pipe == nullptr) {
+        return {};
+    }
+
+    std::string output;
+    char buffer[4096];
+    while (std::fgets(buffer, static_cast<int>(sizeof(buffer)), pipe) != nullptr) {
+        output += buffer;
+    }
+
+    if (::pclose(pipe) != 0) {
+        return {};
+    }
+    return split_non_empty_lines(output);
+}
+
+bool extract_release_archive(const std::filesystem::path& archivePath,
+                            const std::filesystem::path& destinationPath,
+                            const std::function<void(std::size_t, std::size_t)>& onEntryExtracted = {}) {
     if (!ensure_directory(destinationPath)) {
         return false;
     }
-    return run_process({"tar", "-xzf", archivePath.string(), "-C", destinationPath.string()}, std::filesystem::current_path());
+
+    const std::vector<std::string> entries = list_release_archive_entries(archivePath);
+    const std::size_t totalEntries = entries.empty() ? 0 : entries.size();
+    if (!onEntryExtracted) {
+        return run_process({"tar", "-xzf", archivePath.string(), "-C", destinationPath.string()}, std::filesystem::current_path());
+    }
+
+    int stdoutPipe[2];
+    int stderrPipe[2];
+    if (::pipe(stdoutPipe) != 0) {
+        return false;
+    }
+    if (::pipe(stderrPipe) != 0) {
+        (void)::close(stdoutPipe[0]);
+        (void)::close(stdoutPipe[1]);
+        return false;
+    }
+
+    posix_spawn_file_actions_t fileActions;
+    if (posix_spawn_file_actions_init(&fileActions) != 0) {
+        (void)::close(stdoutPipe[0]);
+        (void)::close(stdoutPipe[1]);
+        (void)::close(stderrPipe[0]);
+        (void)::close(stderrPipe[1]);
+        return false;
+    }
+
+    bool ready =
+        posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0 &&
+        posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe[1], STDOUT_FILENO) == 0 &&
+        posix_spawn_file_actions_adddup2(&fileActions, stderrPipe[1], STDERR_FILENO) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[0]) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[1]) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, stderrPipe[0]) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, stderrPipe[1]) == 0;
+#if defined(__linux__) || defined(__APPLE__)
+    if (ready && !std::filesystem::current_path().empty()) {
+        ready = posix_spawn_file_actions_addchdir_np(&fileActions, std::filesystem::current_path().c_str()) == 0;
+    }
+#endif
+    if (!ready) {
+        posix_spawn_file_actions_destroy(&fileActions);
+        (void)::close(stdoutPipe[0]);
+        (void)::close(stdoutPipe[1]);
+        (void)::close(stderrPipe[0]);
+        (void)::close(stderrPipe[1]);
+        return false;
+    }
+
+    const std::vector<std::string> arguments{"tar", "-xzvf", archivePath.string(), "-C", destinationPath.string()};
+    std::vector<char*> argv;
+    argv.reserve(arguments.size() + 1);
+    for (const std::string& argument : arguments) {
+        argv.push_back(const_cast<char*>(argument.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    pid_t pid = 0;
+    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), ::environ);
+    posix_spawn_file_actions_destroy(&fileActions);
+    (void)::close(stdoutPipe[1]);
+    (void)::close(stderrPipe[1]);
+    if (spawnResult != 0) {
+        (void)::close(stdoutPipe[0]);
+        (void)::close(stderrPipe[0]);
+        return false;
+    }
+
+    int stdoutFlags = fcntl(stdoutPipe[0], F_GETFL, 0);
+    int stderrFlags = fcntl(stderrPipe[0], F_GETFL, 0);
+    if (stdoutFlags >= 0) {
+        (void)fcntl(stdoutPipe[0], F_SETFL, stdoutFlags | O_NONBLOCK);
+    }
+    if (stderrFlags >= 0) {
+        (void)fcntl(stderrPipe[0], F_SETFL, stderrFlags | O_NONBLOCK);
+    }
+
+    std::string stdoutBuffer;
+    std::string stderrBuffer;
+    std::size_t extractedEntries = 0;
+    auto drain_pipe = [&](int fd, std::string& buffer, bool trackEntries) {
+        char chunk[4096];
+        while (true) {
+            const ssize_t bytesRead = ::read(fd, chunk, sizeof(chunk));
+            if (bytesRead > 0) {
+                buffer.append(chunk, static_cast<std::size_t>(bytesRead));
+                std::size_t newline = std::string::npos;
+                while ((newline = buffer.find('\n')) != std::string::npos) {
+                    std::string line = buffer.substr(0, newline);
+                    buffer.erase(0, newline + 1);
+                    if (!trackEntries) {
+                        continue;
+                    }
+                    if (const std::optional<std::string> trimmed = trim_line(line); trimmed.has_value()) {
+                        ++extractedEntries;
+                        onEntryExtracted(std::min(extractedEntries, totalEntries == 0 ? extractedEntries : totalEntries), totalEntries == 0 ? extractedEntries : totalEntries);
+                    }
+                }
+                continue;
+            }
+            if (bytesRead == 0) {
+                break;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            }
+            break;
+        }
+    };
+
+    pollfd fds[2] = {
+        {.fd = stdoutPipe[0], .events = POLLIN},
+        {.fd = stderrPipe[0], .events = POLLIN},
+    };
+
+    bool stdoutOpen = true;
+    bool stderrOpen = true;
+    while (stdoutOpen || stderrOpen) {
+        const int pollResult = ::poll(fds, 2, -1);
+        if (pollResult < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+
+        if (stdoutOpen && (fds[0].revents & (POLLIN | POLLHUP))) {
+            const std::size_t before = stdoutBuffer.size();
+            drain_pipe(stdoutPipe[0], stdoutBuffer, true);
+            if ((fds[0].revents & POLLHUP) && stdoutBuffer.size() == before) {
+                stdoutOpen = false;
+            }
+        }
+        if (stderrOpen && (fds[1].revents & (POLLIN | POLLHUP))) {
+            const std::size_t before = stderrBuffer.size();
+            drain_pipe(stderrPipe[0], stderrBuffer, false);
+            if ((fds[1].revents & POLLHUP) && stderrBuffer.size() == before) {
+                stderrOpen = false;
+            }
+        }
+        if (stdoutOpen && (fds[0].revents & (POLLERR | POLLNVAL))) {
+            stdoutOpen = false;
+        }
+        if (stderrOpen && (fds[1].revents & (POLLERR | POLLNVAL))) {
+            stderrOpen = false;
+        }
+    }
+
+    drain_pipe(stdoutPipe[0], stdoutBuffer, true);
+    drain_pipe(stderrPipe[0], stderrBuffer, false);
+    if (const std::optional<std::string> trimmed = trim_line(stdoutBuffer); trimmed.has_value()) {
+        ++extractedEntries;
+        onEntryExtracted(std::min(extractedEntries, totalEntries == 0 ? extractedEntries : totalEntries), totalEntries == 0 ? extractedEntries : totalEntries);
+    }
+
+    (void)::close(stdoutPipe[0]);
+    (void)::close(stderrPipe[0]);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) == -1) {
+        if (errno != EINTR) {
+            return false;
+        }
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0 && totalEntries > 0 && extractedEntries < totalEntries) {
+        onEntryExtracted(totalEntries, totalEntries);
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 std::optional<std::filesystem::path> locate_extracted_binary(const std::filesystem::path& directory) {
@@ -997,55 +1215,116 @@ int run_host_refresh(Logger& logger) {
 }
 
 int run_self_update(const ReqPackConfig& config, Logger& logger) {
+    constexpr std::string_view itemId = "rqp";
+    struct SelfUpdateProgressState {
+        Logger* logger{nullptr};
+        std::string itemId;
+        int rangeStart{0};
+        int rangeEnd{100};
+        int lastPercent{-1};
+        std::chrono::steady_clock::time_point lastEmit{};
+    };
+
+    const auto emit_progress = [&](int percent,
+                                   std::optional<std::uint64_t> currentBytes = std::nullopt,
+                                   std::optional<std::uint64_t> totalBytes = std::nullopt,
+                                   std::optional<std::uint64_t> bytesPerSecond = std::nullopt) {
+        logger.displayItemProgress(std::string(itemId), DisplayProgressMetrics{
+            .percent = percent,
+            .currentBytes = currentBytes,
+            .totalBytes = totalBytes,
+            .bytesPerSecond = bytesPerSecond,
+        });
+    };
+
+    const auto begin_step = [&](const std::string& step, int percent) {
+        emit_progress(percent);
+        logger.displayItemStep(std::string(itemId), step);
+    };
+
+    const auto progress_callback = [](const DownloadProgressSnapshot& snapshot, void* userData) {
+        auto* state = static_cast<SelfUpdateProgressState*>(userData);
+        if (state == nullptr || state->logger == nullptr) {
+            return 0;
+        }
+
+        const int rawPercent = snapshot.percent.value_or(0);
+        const int mappedPercent = state->rangeStart +
+            static_cast<int>(((state->rangeEnd - state->rangeStart) * static_cast<long long>(rawPercent)) / 100LL);
+        const auto now = std::chrono::steady_clock::now();
+        if (mappedPercent < state->rangeEnd && state->lastPercent >= 0 && mappedPercent <= state->lastPercent &&
+            state->lastEmit != std::chrono::steady_clock::time_point{} &&
+            now - state->lastEmit < std::chrono::milliseconds(200)) {
+            return 0;
+        }
+
+        state->lastPercent = mappedPercent;
+        state->lastEmit = now;
+        state->logger->displayItemProgress(state->itemId, DisplayProgressMetrics{
+            .percent = mappedPercent,
+            .currentBytes = snapshot.currentBytes,
+            .totalBytes = snapshot.totalBytes,
+            .bytesPerSecond = snapshot.bytesPerSecond,
+        });
+        return 0;
+    };
+
+    const auto fail_self_update = [&](const DiagnosticMessage& diagnostic) {
+        logger.displayItemFailure(std::string(itemId), diagnostic);
+        logger.displaySessionEnd(false, 0, 0, 1);
+        return 1;
+    };
+
+    logger.displaySessionBegin(DisplayMode::UPDATE, {std::string(itemId)});
+    logger.displayItemBegin(std::string(itemId), std::string(itemId));
+    begin_step("refresh registry", 0);
+    (void)refresh_update_registry(config, logger, true);
+    emit_progress(5);
+
     if (config.selfUpdate.repoUrl.empty()) {
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update is not configured",
             "No repository URL is configured for self-update.",
             "Set selfUpdate.repoUrl in config before running `rqp update` without package arguments."
         ));
-        return 1;
     }
 
     const std::optional<std::pair<std::string, std::string>> ownerRepo = parse_release_owner_repo(config.selfUpdate.repoUrl);
     if (!ownerRepo.has_value()) {
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update repository is unsupported",
             "Configured self-update repository could not be mapped to a release owner and repository name.",
             "Use repository URL that ends with `/<owner>/<repo>.git` so release API path can be derived.",
             config.selfUpdate.repoUrl
         ));
-        return 1;
     }
 
     if (config.selfUpdate.binaryDirectory.empty() || config.selfUpdate.linkPath.empty()) {
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update paths are incomplete",
             "One or more required self-update paths are missing from configuration.",
             "Configure binaryDirectory and linkPath before running self-update."
         ));
-        return 1;
     }
 
     const std::shared_ptr<const HostInfoSnapshot> snapshot = HostInfoService::currentSnapshot();
     const std::optional<std::string> releaseTarget = self_update_release_target(*snapshot);
     if (!releaseTarget.has_value()) {
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update target is unsupported",
             "ReqPack does not have a matching release target for this host architecture.",
             "Use a supported release target or install ReqPack manually for this platform.",
             snapshot->platform.target.empty() ? (snapshot->platform.arch + "-" + snapshot->platform.osFamily) : snapshot->platform.target
         ));
-        return 1;
     }
 
     const std::optional<std::filesystem::path> tempDirectory = create_self_update_temp_directory();
     if (!tempDirectory.has_value()) {
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update workspace setup failed",
             "ReqPack could not create a temporary working directory for release download.",
             "Check temporary-directory permissions and free space, then retry self-update."
         ));
-        return 1;
     }
 
     const std::filesystem::path tempPath = tempDirectory.value();
@@ -1061,18 +1340,26 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         (void)remove_path_quietly(tempPath);
     };
 
-    logger.stdout("self-update: fetch release metadata");
+    begin_step("fetch release metadata", 5);
+    SelfUpdateProgressState metadataProgressState{
+        .logger = &logger,
+        .itemId = std::string(itemId),
+        .rangeStart = 5,
+        .rangeEnd = 20,
+    };
     if (!downloader.download(
             self_update_release_api_url(config.selfUpdate, ownerRepo->first, ownerRepo->second),
-            metadataPath.string())) {
+            metadataPath.string(),
+            progress_callback,
+            &metadataProgressState)) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update metadata download failed",
             "ReqPack could not read release metadata from configured release API.",
             "Check network access, releaseApiBaseUrl, repository visibility, and selected release tag."
         ));
-        return 1;
     }
+    emit_progress(20);
 
     const std::optional<std::pair<std::string, std::string>> asset = resolve_self_update_asset(
         config.selfUpdate,
@@ -1083,59 +1370,74 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
     );
     if (!asset.has_value()) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update release asset is missing",
             "Configured release does not contain a binary archive for this host target.",
             "Publish asset `rqp-<tag>-" + releaseTarget.value() + ".tar.gz` or choose a different release tag.",
             releaseTarget.value()
         ));
-        return 1;
     }
 
-    logger.stdout("self-update: download release archive");
-    if (!downloader.download(asset->second, archivePath.string())) {
+    begin_step("download release archive", 20);
+    SelfUpdateProgressState archiveProgressState{
+        .logger = &logger,
+        .itemId = std::string(itemId),
+        .rangeStart = 20,
+        .rangeEnd = 75,
+    };
+    if (!downloader.download(asset->second,
+                             archivePath.string(),
+                             progress_callback,
+                             &archiveProgressState)) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update archive download failed",
             "ReqPack found matching release metadata, but binary archive download failed.",
             "Check release asset availability and network access, then retry self-update.",
             asset->second
         ));
-        return 1;
     }
+    emit_progress(75);
 
-    logger.stdout("self-update: extract release archive");
-    if (!extract_release_archive(archivePath, extractPath)) {
+    begin_step("extract release archive", 75);
+    if (!extract_release_archive(
+            archivePath,
+            extractPath,
+            [&](std::size_t extractedEntries, std::size_t totalEntries) {
+                if (totalEntries == 0) {
+                    return;
+                }
+                const int percent = 75 + static_cast<int>((10ULL * std::min(extractedEntries, totalEntries)) / totalEntries);
+                emit_progress(percent);
+            })) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update archive extraction failed",
             "Downloaded release archive could not be extracted on this system.",
             "Ensure `tar` is available and the release asset is a valid `.tar.gz` archive.",
             archivePath.string()
         ));
-        return 1;
     }
+    emit_progress(85);
 
     const std::optional<std::filesystem::path> extractedBinary = locate_extracted_binary(extractPath);
     if (!extractedBinary.has_value()) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update archive is invalid",
             "Release archive was extracted, but no `rqp` binary was found inside it.",
             "Republish release archive with `rqp` binary at archive root."
         ));
-        return 1;
     }
 
     if (!ensure_directory(binaryDirectory)) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update install directory setup failed",
             "ReqPack could not create binary install directory for downloaded release.",
             "Check write permissions for selfUpdate.binaryDirectory.",
             binaryDirectory.string()
         ));
-        return 1;
     }
 
     const std::filesystem::path installedBundlePath = binaryDirectory /
@@ -1144,49 +1446,48 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
     std::filesystem::remove_all(installedBundlePath, installCleanupError);
     if (installCleanupError) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update install directory cleanup failed",
             "ReqPack could not prepare destination directory for downloaded release bundle.",
             "Check filesystem permissions for selfUpdate.binaryDirectory.",
             installedBundlePath.string()
         ));
-        return 1;
     }
 
+    begin_step("install release bundle", 85);
     if (!copy_directory_contents_with_mode(extractedBinary.value().parent_path(), installedBundlePath)) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update bundle install failed",
             "Downloaded ReqPack release bundle could not be copied into configured self-update binary directory.",
             "Check filesystem permissions for selfUpdate.binaryDirectory.",
             installedBundlePath.string()
         ));
-        return 1;
     }
+    emit_progress(95);
 
     const std::filesystem::path installedBinaryPath = installedBundlePath / "rqp";
     if (!std::filesystem::exists(installedBinaryPath)) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update bundle is invalid",
             "Downloaded release bundle was copied locally, but installed executable is missing.",
             "Republish release archive with `rqp` binary at archive root.",
             installedBundlePath.string()
         ));
-        return 1;
     }
 
-    logger.stdout("self-update: update local symlink");
+    begin_step("update local symlink", 95);
     if (!replace_symlink_atomically(installedBinaryPath, linkPath)) {
         cleanup();
-        logger.diagnostic(self_update_diagnostic(
+        return fail_self_update(self_update_diagnostic(
             "Self-update symlink update failed",
             "New binary was downloaded, but ReqPack could not update configured executable symlink.",
             "Check write permissions for configured link path and parent directory.",
             config.selfUpdate.linkPath
         ));
-        return 1;
     }
+    emit_progress(98);
 
     cleanup();
     if (!HostInfoService::invalidateCache()) {
@@ -1201,12 +1502,22 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         ));
     }
 
+    begin_step("finalize", 99);
     if (previousLinkTargetPath.has_value() && previousLinkTargetPath.value() == installedBinaryPath) {
-        logger.stdout("self-update complete: already on release " + asset->first);
+        logger.emit(OutputAction::DISPLAY_MESSAGE,
+                    OutputContext{.message = "already on release " + asset->first,
+                                  .source = std::string(itemId)});
     } else {
-        logger.stdout("self-update complete: now on release " + asset->first);
+        logger.emit(OutputAction::DISPLAY_MESSAGE,
+                    OutputContext{.message = "now on release " + asset->first,
+                                  .source = std::string(itemId)});
     }
-    logger.stdout("self-update link: " + config.selfUpdate.linkPath);
+    logger.emit(OutputAction::DISPLAY_MESSAGE,
+                OutputContext{.message = "link: " + config.selfUpdate.linkPath,
+                              .source = std::string(itemId)});
+    emit_progress(100);
+    logger.displayItemSuccess(std::string(itemId));
+    logger.displaySessionEnd(true, 1, 0, 0);
     return 0;
 }
 
@@ -1459,7 +1770,6 @@ int main(int argc, char* argv[]) {
     }
 
     if (is_self_update_command(rawArguments)) {
-        (void)refresh_update_registry(config, logger, true);
         const int result = run_self_update(config, logger);
         logger.flushSync();
         curl_global_cleanup();

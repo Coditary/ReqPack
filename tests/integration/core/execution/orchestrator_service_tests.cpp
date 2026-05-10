@@ -2650,10 +2650,14 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
 
     const std::string firstOutput = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
     INFO(firstOutput);
-    CHECK(firstOutput.find("self-update: fetch release metadata") != std::string::npos);
-    CHECK(firstOutput.find("self-update: download release archive") != std::string::npos);
-    CHECK(firstOutput.find("self-update: extract release archive") != std::string::npos);
-    CHECK(firstOutput.find("self-update complete: now on release " + firstTag) != std::string::npos);
+    CHECK(firstOutput.find("UPDATE: rqp") != std::string::npos);
+    CHECK(firstOutput.find("fetch release metadata") != std::string::npos);
+    CHECK(firstOutput.find("download release archive") != std::string::npos);
+    CHECK(firstOutput.find("extract release archive") != std::string::npos);
+    CHECK(firstOutput.find("78%") != std::string::npos);
+    CHECK(firstOutput.find("81%") != std::string::npos);
+    CHECK(firstOutput.find("[rqp]  now on release " + firstTag) != std::string::npos);
+    CHECK(firstOutput.find("UPDATE done:  1 ok") != std::string::npos);
 
     const std::filesystem::path linkPath = homePath / ".local/bin/rqp";
     const std::filesystem::path binaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + firstTag + "-" + target) / "rqp";
@@ -2666,9 +2670,11 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
     write_self_update_release_api_response(releaseApiRoot, owner, repo, secondTag, target, secondArchive);
     const std::string secondOutput = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
     INFO(secondOutput);
-    CHECK(secondOutput.find("self-update: fetch release metadata") != std::string::npos);
-    CHECK(secondOutput.find("self-update: download release archive") != std::string::npos);
-    CHECK(secondOutput.find("self-update complete: now on release " + secondTag) != std::string::npos);
+    CHECK(secondOutput.find("UPDATE: rqp") != std::string::npos);
+    CHECK(secondOutput.find("fetch release metadata") != std::string::npos);
+    CHECK(secondOutput.find("download release archive") != std::string::npos);
+    CHECK(secondOutput.find("[rqp]  now on release " + secondTag) != std::string::npos);
+    CHECK(secondOutput.find("UPDATE done:  1 ok") != std::string::npos);
 
     const std::filesystem::path secondBinaryPath = homePath / ".local/share/reqpack/self/bin" / ("rqp-" + secondTag + "-" + target) / "rqp";
     REQUIRE(std::filesystem::exists(secondBinaryPath));
@@ -2791,7 +2797,9 @@ TEST_CASE("self-update refreshes main registry before downloading release", "[in
 
     const std::string output = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
     INFO(output);
-    CHECK(output.find("self-update: fetch release metadata") != std::string::npos);
+    CHECK(output.find("UPDATE: rqp") != std::string::npos);
+    CHECK(output.find("refresh registry") != std::string::npos);
+    CHECK(output.find("fetch release metadata") != std::string::npos);
 
     RegistryDatabase refreshedDatabase(seedConfig);
     REQUIRE(refreshedDatabase.ensureReady());

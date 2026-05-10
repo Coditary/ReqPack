@@ -6,6 +6,7 @@
 #include <curl/curl.h>
 
 #include <cstdio>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -13,6 +14,14 @@
 Downloader::Downloader(RegistryDatabase* database, const ReqPackConfig& config) : config(config), database(database) {}
 
 namespace {
+
+struct CurlDownloadProgressState {
+    DownloadProgressCallback callback{nullptr};
+    void* userData{nullptr};
+    int lastPercent{-1};
+    std::uint64_t lastBytes{0};
+    std::chrono::steady_clock::time_point lastTime{};
+};
 
 std::string read_file(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
@@ -140,6 +149,56 @@ bool write_script_bundle(
            write_file(targetDirectory / "scripts" / "remove.lua", "return true\n");
 }
 
+int forward_download_progress(void* userp, curl_off_t downloadTotal, curl_off_t downloadNow, curl_off_t, curl_off_t) {
+    auto* state = static_cast<CurlDownloadProgressState*>(userp);
+    if (state == nullptr || state->callback == nullptr) {
+        return 0;
+    }
+
+    DownloadProgressSnapshot snapshot;
+    if (downloadTotal > 0) {
+        snapshot.totalBytes = static_cast<std::uint64_t>(downloadTotal);
+        snapshot.currentBytes = static_cast<std::uint64_t>(std::max<curl_off_t>(0, downloadNow));
+        snapshot.percent = std::clamp(static_cast<int>((downloadNow * 100) / downloadTotal), 0, 100);
+    } else if (downloadNow > 0) {
+        snapshot.currentBytes = static_cast<std::uint64_t>(downloadNow);
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (state->lastTime != std::chrono::steady_clock::time_point{} && downloadNow >= 0) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - state->lastTime);
+        const std::uint64_t currentBytes = static_cast<std::uint64_t>(downloadNow);
+        if (elapsed.count() > 0 && currentBytes >= state->lastBytes) {
+            const std::uint64_t deltaBytes = currentBytes - state->lastBytes;
+            const long double bytesPerSecond = (static_cast<long double>(deltaBytes) * 1000.0L) /
+                                              static_cast<long double>(elapsed.count());
+            if (bytesPerSecond >= 0.0L) {
+                snapshot.bytesPerSecond = static_cast<std::uint64_t>(bytesPerSecond);
+            }
+        }
+    }
+
+    bool shouldEmit = false;
+    if (snapshot.percent.has_value()) {
+        shouldEmit = snapshot.percent.value() >= 100 || state->lastPercent < 0 || snapshot.percent.value() >= state->lastPercent + 1;
+    } else if (snapshot.currentBytes.has_value()) {
+        shouldEmit = state->lastTime == std::chrono::steady_clock::time_point{} ||
+                     now - state->lastTime >= std::chrono::milliseconds(250);
+    }
+
+    if (!shouldEmit) {
+        return 0;
+    }
+
+    state->lastTime = now;
+    state->lastBytes = static_cast<std::uint64_t>(std::max<curl_off_t>(0, downloadNow));
+    if (snapshot.percent.has_value()) {
+        state->lastPercent = snapshot.percent.value();
+    }
+
+    return state->callback(snapshot, state->userData);
+}
+
 }  // namespace
 
 bool Downloader::downloadPlugin(const std::string& system) const {
@@ -231,10 +290,24 @@ bool Downloader::downloadPlugin(const std::string& system) const {
 }
 
 bool Downloader::download(const std::string& source, const std::string& destinationPath) const {
-	return this->download_to_path(source, destinationPath);
+	return this->download_to_path(source, destinationPath, nullptr, nullptr);
+}
+
+bool Downloader::download(const std::string& source,
+                         const std::string& destinationPath,
+                         DownloadProgressCallback progressCallback,
+                         void* progressUserData) const {
+	return this->download_to_path(source, destinationPath, progressCallback, progressUserData);
 }
 
 bool Downloader::download_to_path(const std::string& source, const std::filesystem::path& targetPath) const {
+	return this->download_to_path(source, targetPath, nullptr, nullptr);
+}
+
+bool Downloader::download_to_path(const std::string& source,
+                                  const std::filesystem::path& targetPath,
+                                  DownloadProgressCallback progressCallback,
+                                  void* progressUserData) const {
     std::filesystem::create_directories(targetPath.parent_path());
 
     if (!downloader_is_remote_source(source)) {
@@ -263,6 +336,15 @@ bool Downloader::download_to_path(const std::string& source, const std::filesyst
     curl_easy_setopt(curl, CURLOPT_USERAGENT, this->config.downloader.userAgent.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &Downloader::write_to_file);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
+    CurlDownloadProgressState progressState{
+        .callback = progressCallback,
+        .userData = progressUserData,
+    };
+    if (progressCallback != nullptr) {
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, &forward_download_progress);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progressState);
+    }
 
     long statusCode = 0;
     const CURLcode result = curl_easy_perform(curl);

@@ -51,6 +51,9 @@ enum class OutputAction {
 	/// context: source = itemId, message = display label.
 	DISPLAY_ITEM_BEGIN,
 
+	/// context: source = itemId, progress fields carry current metrics.
+	DISPLAY_ITEM_PROGRESS,
+
 	/// context: source = itemId, message = step label.
 	DISPLAY_ITEM_STEP,
 
@@ -216,6 +219,8 @@ public:
 	// ── Display item helpers ──────────────────────────────────────────────────
 
 	void displayItemBegin  (const std::string& itemId, const std::string& label);
+	void displayItemProgress(const std::string& itemId,
+	                        const DisplayProgressMetrics& metrics);
 	void displayItemStep   (const std::string& itemId, const std::string& step);
 	void displayItemSuccess(const std::string& itemId);
 	void displayItemFailure(const std::string& itemId, const std::string& reason);

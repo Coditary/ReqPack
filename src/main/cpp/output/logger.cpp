@@ -57,13 +57,14 @@ std::string normalize_category(const std::string& category) {
 }
 
 bool is_display_action(OutputAction action) {
-	switch (action) {
-		case OutputAction::DISPLAY_SESSION_BEGIN:
-		case OutputAction::DISPLAY_SESSION_END:
-		case OutputAction::DISPLAY_ITEM_BEGIN:
-		case OutputAction::DISPLAY_ITEM_STEP:
-		case OutputAction::DISPLAY_ITEM_SUCCESS:
-		case OutputAction::DISPLAY_ITEM_FAILURE:
+		switch (action) {
+			case OutputAction::DISPLAY_SESSION_BEGIN:
+			case OutputAction::DISPLAY_SESSION_END:
+			case OutputAction::DISPLAY_ITEM_BEGIN:
+			case OutputAction::DISPLAY_ITEM_PROGRESS:
+			case OutputAction::DISPLAY_ITEM_STEP:
+			case OutputAction::DISPLAY_ITEM_SUCCESS:
+			case OutputAction::DISPLAY_ITEM_FAILURE:
 		case OutputAction::DISPLAY_MESSAGE:
 		case OutputAction::DISPLAY_TABLE_HEADER:
 		case OutputAction::DISPLAY_TABLE_ROW:
@@ -78,18 +79,19 @@ std::string inferred_category(const OutputEvent& event) {
 	if (!event.context.category.empty()) {
 		return normalize_category(event.context.category);
 	}
-	switch (event.action) {
-		case OutputAction::PLUGIN_STATUS:
-		case OutputAction::PLUGIN_PROGRESS:
-		case OutputAction::PLUGIN_EVENT:
-		case OutputAction::PLUGIN_ARTIFACT:
-			return "plugin";
-		case OutputAction::DISPLAY_SESSION_BEGIN:
-		case OutputAction::DISPLAY_SESSION_END:
-		case OutputAction::DISPLAY_ITEM_BEGIN:
-		case OutputAction::DISPLAY_ITEM_STEP:
-		case OutputAction::DISPLAY_ITEM_SUCCESS:
-		case OutputAction::DISPLAY_ITEM_FAILURE:
+		switch (event.action) {
+			case OutputAction::PLUGIN_STATUS:
+			case OutputAction::PLUGIN_PROGRESS:
+			case OutputAction::PLUGIN_EVENT:
+			case OutputAction::PLUGIN_ARTIFACT:
+				return "plugin";
+			case OutputAction::DISPLAY_SESSION_BEGIN:
+			case OutputAction::DISPLAY_SESSION_END:
+			case OutputAction::DISPLAY_ITEM_BEGIN:
+			case OutputAction::DISPLAY_ITEM_PROGRESS:
+			case OutputAction::DISPLAY_ITEM_STEP:
+			case OutputAction::DISPLAY_ITEM_SUCCESS:
+			case OutputAction::DISPLAY_ITEM_FAILURE:
 		case OutputAction::DISPLAY_MESSAGE:
 		case OutputAction::DISPLAY_TABLE_HEADER:
 		case OutputAction::DISPLAY_TABLE_ROW:
@@ -334,6 +336,10 @@ void Logger::routeToDisplay(const OutputEvent& event) {
 			d->onItemBegin(ctx.source, ctx.message.empty() ? ctx.source : ctx.message);
 			break;
 
+		case OutputAction::DISPLAY_ITEM_PROGRESS:
+			d->onItemProgress(ctx.source, progress_metrics_from_context(ctx));
+			break;
+
 		case OutputAction::DISPLAY_ITEM_STEP:
 			d->onItemStep(ctx.source, ctx.message);
 			break;
@@ -432,6 +438,7 @@ void Logger::processEvent(const OutputEvent& event) {
 		case OutputAction::DISPLAY_SESSION_BEGIN:
 		case OutputAction::DISPLAY_SESSION_END:
 		case OutputAction::DISPLAY_ITEM_BEGIN:
+		case OutputAction::DISPLAY_ITEM_PROGRESS:
 		case OutputAction::DISPLAY_ITEM_STEP:
 		case OutputAction::DISPLAY_ITEM_SUCCESS:
 		case OutputAction::DISPLAY_ITEM_FAILURE:
@@ -728,13 +735,24 @@ void Logger::displaySessionEnd(bool success, int succeeded, int skipped, int fai
 // ─────────────────────────────────────────────────────────────────────────────
 
 void Logger::displayItemBegin(const std::string& itemId,
-                               const std::string& label) {
+                                const std::string& label) {
 	this->emit(OutputAction::DISPLAY_ITEM_BEGIN,
 	           OutputContext{.message = label, .source = itemId});
 }
 
+void Logger::displayItemProgress(const std::string& itemId,
+	                             const DisplayProgressMetrics& rawMetrics) {
+	const DisplayProgressMetrics metrics = canonicalize_progress_metrics(rawMetrics);
+	this->emit(OutputAction::DISPLAY_ITEM_PROGRESS,
+	           OutputContext{.source = itemId,
+	                         .progressPercent = metrics.percent,
+	                         .currentBytes = metrics.currentBytes,
+	                         .totalBytes = metrics.totalBytes,
+	                         .bytesPerSecond = metrics.bytesPerSecond});
+}
+
 void Logger::displayItemStep(const std::string& itemId,
-                              const std::string& step) {
+                               const std::string& step) {
 	this->emit(OutputAction::DISPLAY_ITEM_STEP,
 	           OutputContext{.message = step, .source = itemId});
 }

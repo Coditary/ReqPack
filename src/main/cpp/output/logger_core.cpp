@@ -17,20 +17,21 @@ std::string level_to_string(spdlog::level::level_enum level) {
 }
 
 std::string action_to_event_name(OutputAction action) {
-	switch (action) {
-		case OutputAction::LOG: return "log";
-		case OutputAction::DIAGNOSTIC: return "diagnostic";
-		case OutputAction::STDOUT: return "stdout";
-		case OutputAction::PLUGIN_STATUS: return "plugin_status";
-		case OutputAction::PLUGIN_PROGRESS: return "plugin_progress";
-		case OutputAction::PLUGIN_EVENT: return "plugin_event";
-		case OutputAction::PLUGIN_ARTIFACT: return "plugin_artifact";
-		case OutputAction::DISPLAY_SESSION_BEGIN: return "session_begin";
-		case OutputAction::DISPLAY_SESSION_END: return "session_end";
-		case OutputAction::DISPLAY_ITEM_BEGIN: return "item_begin";
-		case OutputAction::DISPLAY_ITEM_STEP: return "item_step";
-		case OutputAction::DISPLAY_ITEM_SUCCESS: return "item_success";
-		case OutputAction::DISPLAY_ITEM_FAILURE: return "item_failure";
+		switch (action) {
+			case OutputAction::LOG: return "log";
+			case OutputAction::DIAGNOSTIC: return "diagnostic";
+			case OutputAction::STDOUT: return "stdout";
+			case OutputAction::PLUGIN_STATUS: return "plugin_status";
+			case OutputAction::PLUGIN_PROGRESS: return "plugin_progress";
+			case OutputAction::PLUGIN_EVENT: return "plugin_event";
+			case OutputAction::PLUGIN_ARTIFACT: return "plugin_artifact";
+			case OutputAction::DISPLAY_SESSION_BEGIN: return "session_begin";
+			case OutputAction::DISPLAY_SESSION_END: return "session_end";
+			case OutputAction::DISPLAY_ITEM_BEGIN: return "item_begin";
+			case OutputAction::DISPLAY_ITEM_PROGRESS: return "item_progress";
+			case OutputAction::DISPLAY_ITEM_STEP: return "item_step";
+			case OutputAction::DISPLAY_ITEM_SUCCESS: return "item_success";
+			case OutputAction::DISPLAY_ITEM_FAILURE: return "item_failure";
 		case OutputAction::DISPLAY_MESSAGE: return "display_message";
 		case OutputAction::DISPLAY_TABLE_HEADER: return "table_header";
 		case OutputAction::DISPLAY_TABLE_ROW: return "table_row";
@@ -185,6 +186,15 @@ std::string logger_render_output_event(const OutputEvent& event) {
 			return "[display:session_end] " + event.context.payload;
 		case OutputAction::DISPLAY_ITEM_BEGIN:
 			return "[display:item_begin] "   + event.context.source + " " + event.context.message;
+		case OutputAction::DISPLAY_ITEM_PROGRESS: {
+			const std::string summary = format_progress_summary(DisplayProgressMetrics{
+				.percent = event.context.progressPercent,
+				.currentBytes = event.context.currentBytes,
+				.totalBytes = event.context.totalBytes,
+				.bytesPerSecond = event.context.bytesPerSecond,
+			});
+			return "[display:item_progress] " + event.context.source + (summary.empty() ? std::string{} : " " + summary);
+		}
 		case OutputAction::DISPLAY_ITEM_STEP:
 			return "[display:item_step] "    + event.context.source + " " + event.context.message;
 		case OutputAction::DISPLAY_ITEM_SUCCESS:

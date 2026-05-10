@@ -343,6 +343,11 @@ TEST_CASE("logger renders raw stdout log and display trace events", "[unit][logg
     }) == "[display:item_begin] dnf:ripgrep ripgrep");
 
     CHECK(logger_render_output_event(OutputEvent{
+        .action = OutputAction::DISPLAY_ITEM_PROGRESS,
+        .context = OutputContext{.source = "rqp", .progressPercent = 42, .currentBytes = 1024, .totalBytes = 2048},
+    }) == "[display:item_progress] rqp 42%  1.0 KiB / 2.0 KiB");
+
+    CHECK(logger_render_output_event(OutputEvent{
         .action = OutputAction::DISPLAY_ITEM_STEP,
         .context = OutputContext{.message = "Downloading", .source = "dnf:ripgrep"},
     }) == "[display:item_step] dnf:ripgrep Downloading");
@@ -445,6 +450,31 @@ TEST_CASE("logger routes item-scoped plugin callbacks to display lifecycle", "[u
     REQUIRE(display.failures.size() == 1);
     CHECK(display.failures[0].first == "smoke:demo");
     CHECK(display.failures[0].second == "broken");
+
+    logger.setDisplay(nullptr);
+    logger.setConsoleOutput(true);
+    logger.flushSync();
+}
+
+TEST_CASE("logger routes display item progress to display lifecycle", "[unit][logger][display]") {
+    Logger& logger = Logger::instance();
+    RecordingDisplay display;
+
+    logger.flushSync();
+    logger.setConsoleOutput(false);
+    logger.setDisplay(&display);
+
+    logger.displayItemProgress("rqp", DisplayProgressMetrics{.percent = 37, .currentBytes = 3700, .totalBytes = 10000});
+    logger.flushSync();
+
+    REQUIRE(display.progresses.size() == 1);
+    CHECK(display.progresses[0].first == "rqp");
+    REQUIRE(display.progresses[0].second.percent.has_value());
+    CHECK(display.progresses[0].second.percent.value() == 37);
+    REQUIRE(display.progresses[0].second.currentBytes.has_value());
+    CHECK(display.progresses[0].second.currentBytes.value() == 3700);
+    REQUIRE(display.progresses[0].second.totalBytes.has_value());
+    CHECK(display.progresses[0].second.totalBytes.value() == 10000);
 
     logger.setDisplay(nullptr);
     logger.setConsoleOutput(true);
