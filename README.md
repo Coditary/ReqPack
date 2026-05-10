@@ -34,6 +34,26 @@ rqp sbom --format cyclonedx-json --output sbom.json
 rqp snapshot --output reqpack.lua
 ```
 
+## CLI Cheat Sheet
+
+| Task | Command / flags |
+| --- | --- |
+| Show help | `rqp --help`, `rqp <command> -h` |
+| Dry-run before changes | `rqp install ... --dry-run` |
+| CI-safe run | `--non-interactive --stop-on-first-failure` |
+| Use more parallelism | `--jobs 8` or `--jobs-max` |
+| Use custom config | `rqp --config ~/.config/reqpack/dev.lua ...` |
+| Use custom registry or plugin dir | `rqp --registry ./registry --plugin-dir ./plugins ...` |
+| Override proxy target | `rqp -Dproxy.java.default=gradle install java ...` |
+| Strict security gate | `--abort-on-unsafe --severity-threshold high --fail-on-unresolved-version` |
+| Write structured logs | `--verbose --log-level debug --structured-log-file ./reqpack.jsonl` |
+| Export audit file | `rqp audit . --format sarif --output audit.sarif` |
+| Export SBOM file | `rqp sbom . --format cyclonedx-json --output sbom.json` |
+| Refresh host cache | `rqp host refresh` |
+| Start remote server | `rqp serve --remote --token secret` |
+
+Full flag inventory later in this README under [CLI Overrides And Terminal Flags](#cli-overrides-and-terminal-flags).
+
 ## Requirements
 
 ReqPack core currently targets:
@@ -256,21 +276,53 @@ rqp outdated dnf --type doc
 
 `search`, `list`, and `outdated` support repeatable `--arch` and `--type` filters where plugin supports them.
 
-### Safety And Automation Flags
+### CLI Overrides And Terminal Flags
 
-Useful flags you will use often:
+ReqPack can override many runtime settings directly in terminal instead of only through `config.lua`.
 
-- `--dry-run` shows plan without executing it.
-- `--non-interactive` disables prompts and uses defaults.
-- `--stop-on-first-failure` stops after first failing system.
-- `--jobs <n>` forces exact worker count for independent groups.
-- `--jobs-max` uses all logical CPU threads.
-- `--config <path>` loads custom config Lua file.
-- `--registry <path>` loads registry sources from custom path.
-- `--archive-password <value>` sets password for encrypted archives.
+Global runtime overrides accepted by CLI parser:
 
-Archive-password note:
-you can also provide archive password through `REQPACK_ARCHIVE_PASSWORD`.
+- config and registry: `--config <path>`, `--registry <path>`, `--registry-path <path>`, `--plugin-dir <path>`, `--no-auto-load-plugins`, `--no-proxy-expansion`, `-Dproxy.<name>.default=<target>`
+- execution and interaction: `--dry-run`, `--jobs <n>`, `--jobs-max`, `--stop-on-first-failure`, `--no-transaction-db`, `--non-interactive`, `--archive-password <value>`
+- security and audit policy: `--prompt-on-unsafe`, `--abort-on-unsafe`, `--severity-threshold <low|medium|high|critical>`, `--score-threshold <0.0-10.0>`, `--osv-db <path>`, `--osv-feed <url-or-path>`, `--osv-refresh <manual|periodic|always>`, `--osv-refresh-interval <seconds>`, `--osv-overlay <path>`, `--ignore-vuln <id>`, `--allow-vuln <id>`, `--fail-on-unresolved-version`, `--prompt-on-unresolved-version`, `--strict-ecosystem-mapping`, `--include-withdrawn-in-report`, `--report`, `--report-format <none|json|cyclonedx>`, `--report-output <path>`
+- logging: `--log-level <trace|debug|info|warn|error|critical>`, `--log-console`, `--no-log-console`, `--verbose`, `--log-pattern <value>`, `--log-file <path>`, `--structured-log-file <path>`, `--log-capture-display`, `--no-log-capture-display`, `--log-category <name>`, `--backtrace`
+- SBOM defaults and export behavior: `--sbom-format <table|json|cyclonedx-json>`, `--sbom-output <path>`, `--sbom-no-pretty`, `--sbom-no-dependency-edges`, `--sbom-skip-missing-packages`, `--sbom-fail-on-missing-package`
+
+Command-specific flags you can set in terminal:
+
+| Command | Flags |
+| --- | --- |
+| `install` | `--stdin` |
+| `update` | `--all` |
+| `search`, `list`, `outdated` | `--arch <value>`, `--type <value>` |
+| `audit` | `--format <table|json|cyclonedx-vex-json|sarif>`, `--output <path>`, `--force`, `--wide`, `--no-wrap` |
+| `sbom` | `--format <table|json|cyclonedx-json>`, `--output <path>`, `--force`, `--wide`, `--no-wrap` |
+| `snapshot` | `--output <path>`, `--force` |
+| `pack` | `--output <path>`, `--payload-dir <path>`, `--force` |
+| `test-plugin` | `--plugin <path-or-id>`, `--preset <name>`, `--case <file.lua>`, `--cases <directory>`, `--report <file.json>` |
+| `serve` | `--stdin`, `--remote`, `--json`, `--http`, `--https`, `--bind <addr>`, `--port <n>`, `--token <value>`, `--username <name>`, `--password <value>`, `--readonly`, `--max-connections <n>` |
+
+Important CLI notes:
+
+- `--verbose` currently turns logger console output on; it does not raise log level by itself
+- `--jobs` and `--jobs-max` cannot be combined
+- archive password can also come from `REQPACK_ARCHIVE_PASSWORD`
+- `--token` and `--username`/`--password` cannot be combined for `serve --remote`
+- `--http` and `--https` are reserved for future `serve` modes, not production-ready server protocols yet
+- `--report*` flags are accepted today, but current validator report hook is still partial
+- `--sbom-no-pretty` is accepted today, but current exporter code does not read it yet
+
+Examples:
+
+```bash
+rqp --config ~/.config/reqpack/ci.lua --log-level debug install npm react --prompt-on-unsafe
+rqp update --all --jobs-max --structured-log-file ./reqpack.jsonl
+rqp audit . --osv-feed ./test-data/osv --strict-ecosystem-mapping --output audit.sarif --format sarif
+rqp sbom npm react --sbom-skip-missing-packages --output sbom.json
+rqp serve --remote --json --bind 127.0.0.1 --port 4545 --readonly --max-connections 4
+```
+
+For full per-command help, run `rqp --help` or `rqp <command> -h`.
 
 ### Snapshot And Restore
 

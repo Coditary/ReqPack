@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -171,14 +172,9 @@ std::string try_read_text_file(const std::filesystem::path& path) {
     return buffer.str();
 }
 
-std::string plugin_version_from_script(const std::filesystem::path& scriptPath) {
-    if (const std::optional<PluginBundleLayout> layout = plugin_bundle_read_directory(scriptPath.parent_path()); layout.has_value()) {
-        return layout->metadata.version;
-    }
-
+std::string plugin_version_from_script_text(const std::string& script) {
     static const std::regex versionPattern(R"(function\s+plugin\.getVersion\s*\(\s*\)\s*return\s*["']([^"']+)["'])");
 
-    const std::string script = try_read_text_file(scriptPath);
     if (script.empty()) {
         return {};
     }
@@ -189,6 +185,14 @@ std::string plugin_version_from_script(const std::filesystem::path& scriptPath) 
     }
 
     return match[1].str();
+}
+
+std::string plugin_version_from_script(const std::filesystem::path& scriptPath) {
+    if (const std::optional<PluginBundleLayout> layout = plugin_bundle_read_directory(scriptPath.parent_path()); layout.has_value()) {
+        return layout->metadata.version;
+    }
+
+    return plugin_version_from_script_text(try_read_text_file(scriptPath));
 }
 
 PackageInfo installed_plugin_info(
@@ -224,6 +228,98 @@ PackageInfo installed_plugin_info(
 
     info.summary = description;
     info.description = description;
+    return info;
+}
+
+std::vector<std::string> search_terms_from_prompt(const std::string& prompt) {
+    std::vector<std::string> terms;
+    std::string current;
+
+    for (const char character : prompt) {
+        if (std::isspace(static_cast<unsigned char>(character)) != 0) {
+            if (!current.empty()) {
+                terms.push_back(std::move(current));
+                current.clear();
+            }
+            continue;
+        }
+
+        current.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
+    }
+
+    if (!current.empty()) {
+        terms.push_back(std::move(current));
+    }
+
+    return terms;
+}
+
+bool package_matches_search_terms(const PackageInfo& info, const std::vector<std::string>& terms) {
+    if (terms.empty()) {
+        return true;
+    }
+
+    std::string haystack;
+    const auto append = [&](const std::string& value) {
+        if (value.empty()) {
+            return;
+        }
+        if (!haystack.empty()) {
+            haystack.push_back('\n');
+        }
+        haystack += to_lower_copy(value);
+    };
+
+    append(info.name);
+    append(info.packageId);
+    append(info.version);
+    append(info.summary);
+    append(info.description);
+    append(info.sourceUrl);
+    append(info.packageType);
+
+    return std::all_of(terms.begin(), terms.end(), [&](const std::string& term) {
+        return haystack.find(term) != std::string::npos;
+    });
+}
+
+bool is_installed_rqp_package_search_item(const PackageInfo& info) {
+    return info.system == BUILTIN_RQ_PLUGIN_ID && info.installed == "true" && info.packageType.empty();
+}
+
+std::string version_from_registry_record(const RegistryRecord& record) {
+    if (!record.bundlePath.empty()) {
+        if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_root(record.bundlePath, record.name); layout.has_value()) {
+            return layout->metadata.version;
+        }
+    }
+
+    std::error_code error;
+    const std::filesystem::path sourcePath(record.source);
+    if (std::filesystem::exists(sourcePath, error) && !error && std::filesystem::is_directory(sourcePath, error) && !error) {
+        if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_root(sourcePath, record.name); layout.has_value()) {
+            return layout->metadata.version;
+        }
+    }
+
+    return plugin_version_from_script_text(record.script);
+}
+
+PackageInfo registry_plugin_info(const RegistryRecord& record) {
+    PackageInfo info;
+    info.system = BUILTIN_RQ_PLUGIN_ID;
+    info.name = record.name;
+    info.packageId = record.name;
+    info.version = version_from_registry_record(record);
+    info.packageType = record.alias ? "alias" : (record.role.empty() ? "plugin" : record.role);
+    info.sourceUrl = record.source;
+
+    if (record.alias && !record.source.empty()) {
+        info.summary = record.description.empty() ? ("Alias for " + record.source) : record.description;
+    } else {
+        info.summary = record.description.empty() ? "Registry plugin" : record.description;
+    }
+    info.description = info.summary;
     return info;
 }
 
@@ -774,8 +870,45 @@ std::vector<PackageInfo> RqPlugin::outdated(const PluginCallContext& context) {
 }
 
 std::vector<PackageInfo> RqPlugin::search(const PluginCallContext& context, const std::string& prompt) {
-    (void)context;
-    return {rq_info_item(prompt.empty() ? "rqp" : prompt, reqpack_build_release_id(), "rqp search not implemented yet")};
+    std::vector<PackageInfo> results;
+    std::set<std::string> emittedNames;
+    const std::vector<std::string> terms = search_terms_from_prompt(prompt);
+
+    for (PackageInfo info : this->list(context)) {
+        if (is_installed_rqp_package_search_item(info) || !package_matches_search_terms(info, terms)) {
+            continue;
+        }
+
+        const std::string normalizedName = to_lower_copy(info.name);
+        if (normalizedName.empty() || !emittedNames.insert(normalizedName).second) {
+            continue;
+        }
+
+        results.push_back(std::move(info));
+    }
+
+    RegistryDatabase registryDatabase(config_);
+    if (registryDatabase.ensureReady()) {
+        for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
+            const std::string normalizedName = to_lower_copy(record.name);
+            if (normalizedName.empty() || emittedNames.contains(normalizedName)) {
+                continue;
+            }
+
+            PackageInfo info = registry_plugin_info(record);
+            if (!package_matches_search_terms(info, terms)) {
+                continue;
+            }
+
+            emittedNames.insert(normalizedName);
+            results.push_back(std::move(info));
+        }
+    }
+
+    std::sort(results.begin(), results.end(), [](const PackageInfo& left, const PackageInfo& right) {
+        return left.name < right.name;
+    });
+    return results;
 }
 
 PackageInfo RqPlugin::info(const PluginCallContext& context, const std::string& packageName) {
