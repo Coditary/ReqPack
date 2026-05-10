@@ -437,6 +437,15 @@ bool Orchestrator::shouldRefreshPluginWrappers() const {
 	});
 }
 
+bool Orchestrator::shouldRefreshMainRegistry() const {
+	if (this->requests.empty()) {
+		return false;
+	}
+	return std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
+		return request.action == ActionType::UPDATE;
+	});
+}
+
 bool Orchestrator::shouldRunSystemWidePackageUpdates() const {
 	if (this->requests.empty()) {
 		return false;
@@ -507,6 +516,18 @@ int Orchestrator::runSystemWidePackageUpdates() {
 }
 
 int Orchestrator::run() {
+	if (this->shouldRefreshMainRegistry() && !this->registry->getDatabase()->refreshMainRegistry()) {
+		Logger::instance().diagnostic(make_warning_diagnostic(
+			"registry",
+			"Registry refresh failed before update",
+			"ReqPack could not synchronize main registry before running update and will continue with cached registry data if available.",
+			"Check registry.remoteUrl, network access, and local registry cache if update results look stale.",
+			{},
+			"registry",
+			"update"
+		));
+	}
+
 	(void)this->registry->getDatabase()->ensureReady();
 	this->registry->scanDirectory(this->config.registry.pluginDirectory);
 	const std::filesystem::path workspacePluginDirectory = std::filesystem::current_path() / "plugins";

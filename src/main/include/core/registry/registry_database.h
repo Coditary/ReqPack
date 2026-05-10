@@ -47,6 +47,7 @@ public:
     RegistryDatabase& operator=(const RegistryDatabase&) = delete;
 
     bool ensureReady() const;
+    bool refreshMainRegistry(bool* changed = nullptr) const;
     std::optional<RegistryRecord> getRecord(const std::string& name) const;
     std::optional<RegistryRecord> resolveRecord(const std::string& name) const;
     std::optional<RegistryRecord> refreshRecord(const std::string& name, bool preferLatestTag = false) const;
@@ -58,6 +59,7 @@ public:
 private:
     bool initStorage() const;
     bool bootstrap_registry() const;
+    bool sync_main_registry(bool* changed = nullptr) const;
     bool sync_records(
         const std::vector<RegistryRecord>& records,
         bool fetchPayloads,

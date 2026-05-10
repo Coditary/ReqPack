@@ -144,7 +144,7 @@ function plugin.search(context, prompt)
     local items = {}
     for line in (result.stdout or ""):gmatch("[^\r\n]+") do
         local name, summary = line:match("^%s*(%S+)%s*\t%s*(.+)$")
-        if name ~= nil and name ~= "Last" and name ~= "Matched" then
+        if name ~= nil and not tostring(name):match("^Matched$") and not tostring(name):match("^Last$") then
             local baseName, arch = split_name_arch(name)
             table.insert(items, {
                 name = baseName,

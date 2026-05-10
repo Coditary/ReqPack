@@ -136,6 +136,7 @@ std::filesystem::path write_config(const std::filesystem::path& root, const std:
         "  registry = {\n"
         "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
         "    databasePath = '" + (root / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
         "    autoLoadPlugins = true,\n"
         "    shutDownPluginsOnExit = true,\n"
         "  },\n"
@@ -180,6 +181,7 @@ std::filesystem::path write_config_with_proxy(
         "  registry = {\n"
         "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
         "    databasePath = '" + (root / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
         "    autoLoadPlugins = true,\n"
         "    shutDownPluginsOnExit = true,\n"
         "  },\n"
@@ -221,6 +223,7 @@ std::filesystem::path write_config_with_rq_repositories(
         "  registry = {\n"
         "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
         "    databasePath = '" + (root / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
         "    autoLoadPlugins = true,\n"
         "    shutDownPluginsOnExit = true,\n"
         "  },\n"
@@ -260,6 +263,7 @@ std::filesystem::path write_config_with_maven_repositories(
         "  registry = {\n"
         "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
         "    databasePath = '" + (root / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
         "    autoLoadPlugins = true,\n"
         "    shutDownPluginsOnExit = true,\n"
         "  },\n"
@@ -2574,6 +2578,7 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
         "  registry = {\n"
         "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
         "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
         "    autoLoadPlugins = true,\n"
         "  },\n"
         "  interaction = {\n"
@@ -2640,6 +2645,204 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
     CHECK(sysLog.find("python3-pip") != std::string::npos);
 }
 
+TEST_CASE("self-update refreshes main registry before downloading release", "[integration][orchestrator][service][self-update]") {
+    TempDir tempDir{"reqpack-wrapper-self-update-registry-refresh"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path homePath = tempDir.path() / "home";
+    const std::filesystem::path releaseApiRoot = tempDir.path() / "release-api";
+    const std::filesystem::path releaseAssetRoot = tempDir.path() / "release-assets";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path remoteRegistry = tempDir.path() / "remote-registry";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+    std::filesystem::create_directories(homePath);
+
+    init_git_repository(remoteRegistry);
+    write_file(remoteRegistry / "registry" / "a" / "apt.json", R"({
+  "schemaVersion": 1,
+  "name": "apt",
+  "source": "https://example.test/apt.lua",
+  "description": "apt old",
+  "role": "package-manager",
+  "privilegeLevel": "none"
+})");
+    require_command_success(
+        "git -C " + escape_shell_arg(remoteRegistry.string()) + " add registry" +
+        " && git -C " + escape_shell_arg(remoteRegistry.string()) + " commit -m 'initial'"
+    );
+
+    ReqPackConfig defaults = default_reqpack_config();
+    defaults.registry.remoteUrl.clear();
+    ReqPackConfig seedConfig = defaults;
+    seedConfig.registry.pluginDirectory = pluginDirectory.string();
+    seedConfig.registry.databasePath = (tempDir.path() / "registry-db").string();
+    seedConfig.registry.remoteUrl = std::string{"git+"} + remoteRegistry.string();
+    seedConfig.registry.remoteBranch = "main";
+    seedConfig.registry.remotePluginsPath = "registry";
+    RegistryDatabase seedDatabase(seedConfig);
+    REQUIRE(seedDatabase.ensureReady());
+    REQUIRE(seedDatabase.getMetaValue("lastCommit").has_value());
+    const std::string firstCommit = seedDatabase.getMetaValue("lastCommit").value();
+
+    write_file(remoteRegistry / "registry" / "a" / "apt.json", R"({
+  "schemaVersion": 1,
+  "name": "apt",
+  "source": "https://example.test/apt.lua",
+  "description": "apt new",
+  "role": "package-manager",
+  "privilegeLevel": "sudo"
+})");
+    require_command_success(
+        "git -C " + escape_shell_arg(remoteRegistry.string()) + " add registry" +
+        " && git -C " + escape_shell_arg(remoteRegistry.string()) + " commit -m 'update registry'"
+    );
+
+    const std::string owner = "coditary";
+    const std::string repo = "ReqPack";
+    const std::string target = HostInfoService::currentSnapshot()->platform.target;
+    REQUIRE((target == "x86_64-linux" || target == "aarch64-linux" || target == "x86_64-darwin" || target == "aarch64-darwin"));
+    const std::string tag = "v1.0.0";
+    const std::filesystem::path archive = create_self_update_release_archive(releaseAssetRoot, "v1", tag, target);
+    write_self_update_release_api_response(releaseApiRoot, owner, repo, tag, target, archive);
+
+    write_file(configPath,
+        "return {\n"
+        "  logging = {\n"
+        "    consoleOutput = true,\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    remoteUrl = 'git+" + remoteRegistry.string() + "',\n"
+        "    remoteBranch = 'main',\n"
+        "    remotePluginsPath = 'registry',\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  selfUpdate = {\n"
+        "    repoUrl = 'https://git.example.test/" + owner + "/" + repo + ".git',\n"
+        "    releaseApiBaseUrl = 'file://" + releaseApiRoot.string() + "',\n"
+        "    releaseTag = 'latest',\n"
+        "    binaryDirectory = '" + (homePath / ".local/share/reqpack/self/bin").string() + "',\n"
+        "    linkPath = '" + (homePath / ".local/bin/rqp").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    const std::string output = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
+    INFO(output);
+    CHECK(output.find("self-update: fetch release metadata") != std::string::npos);
+
+    RegistryDatabase refreshedDatabase(seedConfig);
+    REQUIRE(refreshedDatabase.ensureReady());
+    REQUIRE(refreshedDatabase.getMetaValue("lastCommit").has_value());
+    CHECK(refreshedDatabase.getMetaValue("lastCommit").value() != firstCommit);
+    REQUIRE(refreshedDatabase.getRecord("apt").has_value());
+    CHECK(refreshedDatabase.getRecord("apt")->description == "apt new");
+    CHECK(refreshedDatabase.getRecord("apt")->privilegeLevel == "sudo");
+}
+
+TEST_CASE("update all refreshes main registry before expanding plugin wrappers", "[integration][orchestrator][service][plugin-update]") {
+    TempDir tempDir{"reqpack-plugin-wrapper-update-all-main-registry"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path remoteRegistry = tempDir.path() / "remote-registry";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+
+    init_git_repository(remoteRegistry);
+    const std::filesystem::path pipRepoPath = tempDir.path() / "pip-origin";
+    const std::filesystem::path npmRepoPath = tempDir.path() / "npm-origin";
+    init_git_repository(pipRepoPath);
+    commit_plugin_source_version(pipRepoPath, "pip", "v1", "1.0.0", "v1.0.0");
+    commit_plugin_source_version(pipRepoPath, "pip", "v2", "1.2.0", "v1.2.0");
+    commit_plugin_source_version(pipRepoPath, "pip", "head", "9.9.9-dev");
+    init_git_repository(npmRepoPath);
+    commit_plugin_source_version(npmRepoPath, "npm", "v1", "2.0.0", "v2.0.0");
+    commit_plugin_source_version(npmRepoPath, "npm", "v2", "2.1.0", "v2.1.0");
+    commit_plugin_source_version(npmRepoPath, "npm", "head", "9.9.9-dev");
+
+    write_file(remoteRegistry / "registry" / "p" / "pip.json", std::string{
+        "{\n"
+        "  \"schemaVersion\": 1,\n"
+        "  \"name\": \"pip\",\n"
+        "  \"source\": \"git+" + pipRepoPath.string() + "\",\n"
+        "  \"description\": \"pip plugin\",\n"
+        "  \"role\": \"package-manager\",\n"
+        "  \"privilegeLevel\": \"none\"\n"
+        "}\n"
+    });
+    require_command_success(
+        "git -C " + escape_shell_arg(remoteRegistry.string()) + " add registry" +
+        " && git -C " + escape_shell_arg(remoteRegistry.string()) + " commit -m 'initial registry'"
+    );
+
+    ReqPackConfig defaults = default_reqpack_config();
+    defaults.registry.remoteUrl.clear();
+    ReqPackConfig seedConfig = defaults;
+    seedConfig.registry.pluginDirectory = pluginDirectory.string();
+    seedConfig.registry.databasePath = (tempDir.path() / "registry-db").string();
+    seedConfig.registry.remoteUrl = std::string{"git+"} + remoteRegistry.string();
+    seedConfig.registry.remoteBranch = "main";
+    seedConfig.registry.remotePluginsPath = "registry";
+    RegistryDatabase seedDatabase(seedConfig);
+    REQUIRE(seedDatabase.ensureReady());
+
+    write_file(remoteRegistry / "registry" / "n" / "npm.json", std::string{
+        "{\n"
+        "  \"schemaVersion\": 1,\n"
+        "  \"name\": \"npm\",\n"
+        "  \"source\": \"git+" + npmRepoPath.string() + "\",\n"
+        "  \"description\": \"npm plugin\",\n"
+        "  \"role\": \"package-manager\",\n"
+        "  \"privilegeLevel\": \"none\"\n"
+        "}\n"
+    });
+    require_command_success(
+        "git -C " + escape_shell_arg(remoteRegistry.string()) + " add registry" +
+        " && git -C " + escape_shell_arg(remoteRegistry.string()) + " commit -m 'add npm registry entry'"
+    );
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    remoteUrl = 'git+" + remoteRegistry.string() + "',\n"
+        "    remoteBranch = 'main',\n"
+        "    remotePluginsPath = 'registry',\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "}\n");
+
+    REQUIRE_FALSE(std::filesystem::exists(pluginDirectory / "pip" / "run.lua"));
+    REQUIRE_FALSE(std::filesystem::exists(pluginDirectory / "npm" / "run.lua"));
+
+    const std::string output = run_reqpack(workspace, configPath, {"update", "--all"});
+    INFO(output);
+    CHECK(output.find("UPDATE done:  2 ok") != std::string::npos);
+    CHECK(read_file(pluginDirectory / "pip" / "run.lua").find("1.2.0") != std::string::npos);
+    CHECK(read_file(pluginDirectory / "npm" / "run.lua").find("2.1.0") != std::string::npos);
+}
+
 TEST_CASE("host refresh rewrites cached host snapshot", "[integration][orchestrator][service][host]") {
     TempDir tempDir{"reqpack-host-refresh"};
     const std::filesystem::path workspace = tempDir.path() / "workspace";
@@ -2693,6 +2896,7 @@ TEST_CASE("update plugin refreshes git-backed wrapper to newest tagged version",
         "  registry = {\n"
         "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
         "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
         "    autoLoadPlugins = true,\n"
         "    sources = {\n"
         "      pip = { source = 'git+" + pluginRepoPath.string() + "' },\n"
@@ -2769,6 +2973,7 @@ TEST_CASE("update --all refreshes all known plugin wrappers", "[integration][orc
         "  registry = {\n"
         "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
         "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
         "    autoLoadPlugins = true,\n"
         "    sources = {\n"
         "      pip = { source = 'git+" + pipRepoPath.string() + "' },\n"
@@ -2837,6 +3042,7 @@ TEST_CASE("update --all refreshes configured sources before plugins exist locall
         "  registry = {\n"
         "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
         "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
         "    autoLoadPlugins = true,\n"
         "    sources = {\n"
         "      pip = { source = 'git+" + pipRepoPath.string() + "' },\n"

@@ -34,6 +34,7 @@ public:
 	int run();
 
 private:
+	bool shouldRefreshMainRegistry() const;
 	bool shouldRefreshPluginWrappers() const;
 	bool shouldRunSystemWidePackageUpdates() const;
 	int runPluginWrapperRefresh();

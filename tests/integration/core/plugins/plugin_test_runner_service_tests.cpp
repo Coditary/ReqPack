@@ -222,6 +222,36 @@ return {
 }
 )";
 
+const char* STDERR_SUCCESS_CASE = R"(
+return {
+  name = "install success with stderr output",
+  request = {
+    action = "install",
+    system = "demo",
+    packages = {
+      { name = "curl" }
+    }
+  },
+  fakeExec = {
+    {
+      match = "fake-pm install curl",
+      exitCode = 0,
+      stdout = "ok\n",
+      stderr = "repo sync\n",
+    }
+  },
+  expect = {
+    success = true,
+    commands = { "fake-pm install curl" },
+    events = { "installed", "success" },
+    eventPayloads = {
+      installed = "{name=curl}",
+      success = "ok",
+    },
+  }
+}
+)";
+
 const char* FAIL_CASE = R"(
 return {
   name = "install expectation mismatch",
@@ -384,8 +414,8 @@ function plugin.search(context, prompt)
 
   local items = {}
   for line in (result.stdout or ""):gmatch("[^\r\n]+") do
-    local qualifiedName, description = line:match("^(.-)\t(.+)$")
-    if qualifiedName and description then
+    local qualifiedName, description = line:match("^%s*(%S+)%s*\t%s*(.+)$")
+    if qualifiedName and description and qualifiedName ~= "Matched" and qualifiedName ~= "Last" then
       local name = trim(qualifiedName):match("^(.-)%.[^.]+$") or trim(qualifiedName)
       table.insert(items, { name = name, version = versionMap[name] or "repo", description = trim(description) })
     end
@@ -454,7 +484,7 @@ return {
     {
       match = "dnf search 'curl' --quiet",
       exitCode = 0,
-      stdout = "curl.x86_64\tTransfer tool\n",
+      stdout = "Matched fields: name (exact)\n curl.x86_64\tTransfer tool\n",
       stderr = "",
       success = true,
     },
@@ -910,6 +940,22 @@ TEST_CASE("plugin test command runs hermetic case and writes report", "[integrat
     CHECK(report.find("\"success\": true") != std::string::npos);
     CHECK(report.find("\"stdout\": [\"ok\\n\"]") != std::string::npos);
     CHECK(report.find("\"eventRecords\": [{\"name\":\"installed\",\"payload\":\"{name=curl}\"}") != std::string::npos);
+}
+
+TEST_CASE("plugin test command treats zero-exit stderr output as success by default", "[integration][plugin-test][service]") {
+    TempDir tempDir{"reqpack-plugin-test-stderr-success"};
+    const std::filesystem::path plugins = tempDir.path() / "plugins";
+    const std::filesystem::path cases = tempDir.path() / "cases";
+    write_plugin_bundle(plugins, "demo", TEST_PLUGIN);
+    write_file(cases / "install_stderr_success.lua", STDERR_SUCCESS_CASE);
+    const std::filesystem::path configPath = write_config(tempDir.path(), plugins);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {
+        "test-plugin", "--plugin", "demo", "--case", (cases / "install_stderr_success.lua").string()
+    });
+
+    CHECK(output.find("[PASS] install success with stderr output") != std::string::npos);
+    CHECK(output.find("Cases: 1, Passed: 1, Failed: 0") != std::string::npos);
 }
 
 TEST_CASE("plugin test command loads cases from directory and returns failures", "[integration][plugin-test][service]") {

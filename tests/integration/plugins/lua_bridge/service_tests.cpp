@@ -336,6 +336,28 @@ function plugin.info(context, package) return { name = package, version = "1.0.0
 function plugin.shutdown() return true end
 )";
 
+const char* STDERR_SUCCESS_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return "stderr-success" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "exec" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages)
+  local result = context.exec.run("printf 'repo-refresh\\n' >&2")
+  return result.success and result.exitCode == 0 and result.stdout == "repo-refresh\n" and result.stderr == ""
+end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.init() return true end
+function plugin.shutdown() return true end
+)";
+
 const char* REPOSITORY_PLUGIN = R"(
 plugin = {}
 
@@ -587,6 +609,21 @@ TEST_CASE("lua bridge install exposes context namespaces and runtime host servic
     CHECK(output.find("global-exec") != std::string::npos);
     CHECK(output.find("progress=41%  16.4 MiB / 40.0 MiB  2.5 MiB/s") != std::string::npos);
     CHECK(output.find("line_progress: 16.4/40.0@2.5") != std::string::npos);
+}
+
+TEST_CASE("lua bridge treats zero-exit stderr output as successful exec", "[integration][lua_bridge][service]") {
+    TempDir tempDir{"reqpack-lua-bridge-stderr-success"};
+    ReqPackConfig config;
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins" / "stderr-success";
+    const std::filesystem::path scriptPath = write_plugin_bundle(pluginDirectory, "stderr-success", STDERR_SUCCESS_PLUGIN);
+
+    LuaBridge bridge(scriptPath.string(), config);
+    REQUIRE(bridge.init());
+
+    CHECK(bridge.install(
+        make_context(bridge, config),
+        {Package{.action = ActionType::INSTALL, .system = "stderr-success", .name = "demo"}}
+    ));
 }
 
 TEST_CASE("lua bridge exposes ordered repositories for current plugin", "[integration][lua_bridge][service]") {

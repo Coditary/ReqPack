@@ -238,7 +238,7 @@ rqp update apt:curl npm:express
 
 Update behavior is worth knowing:
 
-- `rqp update` downloads ReqPack release binary for current host from configured release source.
+- `rqp update` refreshes local registry first, then downloads ReqPack release binary for current host from configured release source.
 - `rqp update --all` refreshes all known plugin wrappers.
 - `rqp update <system>` without package names refreshes that plugin wrapper.
 - `rqp update <system> --all` updates all packages for that system.
