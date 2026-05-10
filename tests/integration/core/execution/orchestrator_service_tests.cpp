@@ -2441,6 +2441,61 @@ TEST_CASE("orchestrator list and info read installed rqp state", "[integration][
     CHECK(infoOutput.find("test package") != std::string::npos);
 }
 
+TEST_CASE("orchestrator rqp search reads local registry records", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-rqp-search-registry"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path registrySourceRoot = tempDir.path() / "registry-sources";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+
+    add_plugin_script(registrySourceRoot, "pip", ORCHESTRATOR_PLUGIN);
+    add_plugin_script(registrySourceRoot, "dnf", ORCHESTRATOR_PLUGIN);
+
+    write_file(configPath,
+        "return {\n"
+        "  security = {\n"
+        "    autoFetch = false,\n"
+        "  },\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "    sources = {\n"
+        "      pip = { source = '" + (registrySourceRoot / "pip").string() + "', description = 'Python package manager plugin' },\n"
+        "      dnf = { source = '" + (registrySourceRoot / "dnf").string() + "', description = 'Fedora package manager plugin' },\n"
+        "    },\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (tempDir.path() / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"search", "rqp", "PYTHON"});
+
+    INFO(output);
+    CHECK(output.find("SEARCH: rqp") != std::string::npos);
+    CHECK(output.find("pip") != std::string::npos);
+    CHECK(output.find("1.0.0") != std::string::npos);
+    CHECK(output.find("Python package") != std::string::npos);
+    CHECK(output.find("manager plugin") != std::string::npos);
+    CHECK(output.find("search not implemented yet") == std::string::npos);
+    CHECK(output.find("dnf") == std::string::npos);
+}
+
 TEST_CASE("orchestrator remove rqp package deletes state and artifacts", "[integration][orchestrator][service]") {
     TempDir tempDir{"reqpack-orchestrator-rqp-remove"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
