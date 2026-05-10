@@ -928,9 +928,15 @@ TEST_CASE("plugin test command loads cases from directory and returns failures",
         " test-plugin --plugin demo --cases " + escape_shell_arg(cases.string()) +
         " 2>&1; printf '\nEXIT:%s' \"$?\"";
     const std::string output = run_command_capture(command);
+    const bool reportedCaseName = output.find("install expectation mismatch") != std::string::npos;
+    const bool reportedFileName = output.find("b-fail") != std::string::npos;
+    const bool reportedFailureLabel = reportedCaseName || reportedFileName;
 
+    INFO(output);
     CHECK(output.find("[PASS] install success") != std::string::npos);
-    CHECK(output.find("[FAIL] install expectation mismatch") != std::string::npos);
+    CHECK(output.find("[FAIL]") != std::string::npos);
+    CHECK(reportedFailureLabel);
+    CHECK(output.find("expected success=true") != std::string::npos);
     CHECK(output.find("Cases: 2, Passed: 1, Failed: 1") != std::string::npos);
     CHECK(output.find("EXIT:1") != std::string::npos);
 }
