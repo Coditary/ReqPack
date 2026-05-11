@@ -16,6 +16,14 @@ struct DownloadProgressSnapshot {
     std::optional<std::uint64_t> bytesPerSecond{};
 };
 
+struct DownloadFailureDetails {
+    std::string source{};
+    bool remote{false};
+    CURLcode curlCode{CURLE_OK};
+    long httpStatus{0};
+    std::string message{};
+};
+
 using DownloadProgressCallback = int(*)(const DownloadProgressSnapshot& snapshot, void* userData);
 
 class Downloader {
@@ -31,15 +39,27 @@ public:
     bool download(const std::string& source, const std::string& destinationPath) const;
     bool download(const std::string& source,
                   const std::string& destinationPath,
+                  DownloadFailureDetails* failureDetails) const;
+    bool download(const std::string& source,
+                  const std::string& destinationPath,
                   DownloadProgressCallback progressCallback,
                   void* progressUserData) const;
+    bool download(const std::string& source,
+                  const std::string& destinationPath,
+                  DownloadProgressCallback progressCallback,
+                  void* progressUserData,
+                  DownloadFailureDetails* failureDetails) const;
 
 private:
     bool download_to_path(const std::string& source, const std::filesystem::path& targetPath) const;
     bool download_to_path(const std::string& source,
                           const std::filesystem::path& targetPath,
+                          DownloadFailureDetails* failureDetails) const;
+    bool download_to_path(const std::string& source,
+                          const std::filesystem::path& targetPath,
                           DownloadProgressCallback progressCallback,
-                          void* progressUserData) const;
+                          void* progressUserData,
+                          DownloadFailureDetails* failureDetails) const;
     std::string resolve_plugin_name(const std::string& system) const;
     std::optional<RegistryRecord> plugin_record_for(const std::string& system) const;
     std::filesystem::path plugin_target_path(const std::string& system) const;

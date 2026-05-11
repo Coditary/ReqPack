@@ -256,6 +256,19 @@ TEST_CASE("downloader public download copies local files and reports missing sou
         CHECK_FALSE(downloader.download((tempDir.path() / "missing.lua").string(), target.string()));
         CHECK_FALSE(std::filesystem::exists(target));
     }
+
+    SECTION("missing local file exposes failure details") {
+        const std::filesystem::path missing = tempDir.path() / "missing.lua";
+        const std::filesystem::path target = tempDir.path() / "plugins" / "dnf" / "run.lua";
+        DownloadFailureDetails failureDetails;
+
+        CHECK_FALSE(downloader.download(missing.string(), target.string(), &failureDetails));
+        CHECK(failureDetails.source == missing.string());
+        CHECK_FALSE(failureDetails.remote);
+        CHECK(failureDetails.curlCode == CURLE_OK);
+        CHECK(failureDetails.httpStatus == 0);
+        CHECK_FALSE(failureDetails.message.empty());
+    }
 }
 
 TEST_CASE("downloader rejects plugin download when disabled or database unavailable", "[unit][downloader][service]") {

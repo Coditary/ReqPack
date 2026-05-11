@@ -587,6 +587,17 @@ std::string git_head_commit(const std::filesystem::path& path) {
     return line;
 }
 
+std::string first_non_empty_line(const std::string& text) {
+    std::istringstream input(text);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty()) {
+            return line;
+        }
+    }
+    return {};
+}
+
 void write_self_update_source_tree(const std::filesystem::path& root, const std::string& versionLabel) {
     write_file(root / "CMakeLists.txt",
         "cmake_minimum_required(VERSION 3.15)\n"
@@ -2706,6 +2717,119 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
     CHECK(sysLog.find("python3-pip") != std::string::npos);
 }
 
+TEST_CASE("self-update metadata download failures include actionable transfer details", "[integration][orchestrator][service][self-update]") {
+    TempDir tempDir{"reqpack-wrapper-self-update-metadata-error"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path homePath = tempDir.path() / "home";
+    const std::filesystem::path releaseApiRoot = tempDir.path() / "release-api";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+    std::filesystem::create_directories(homePath);
+    std::filesystem::create_directories(pluginDirectory);
+
+    const std::string owner = "coditary";
+    const std::string repo = "ReqPack";
+    const std::string metadataUrl = "file://" + (releaseApiRoot / "repos" / owner / repo / "releases" / "latest").string();
+
+    write_file(configPath,
+        "return {\n"
+        "  logging = {\n"
+        "    consoleOutput = true,\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
+        "    autoLoadPlugins = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  selfUpdate = {\n"
+        "    repoUrl = 'https://git.example.test/" + owner + "/" + repo + ".git',\n"
+        "    releaseApiBaseUrl = 'file://" + releaseApiRoot.string() + "',\n"
+        "    releaseTag = 'latest',\n"
+        "    binaryDirectory = '" + (homePath / ".local/share/reqpack/self/bin").string() + "',\n"
+        "    linkPath = '" + (homePath / ".local/bin/rqp").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    const std::string output = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
+    INFO(output);
+    CHECK(output.find("Self-update metadata download failed") != std::string::npos);
+    CHECK(output.find("url: " + metadataUrl) != std::string::npos);
+    CHECK(output.find("curl:") != std::string::npos);
+    CHECK(output.find("Check network access, releaseApiBaseUrl, repository visibility, and selected release tag.") != std::string::npos);
+}
+
+TEST_CASE("self-update missing asset failure names expected archive", "[integration][orchestrator][service][self-update]") {
+    TempDir tempDir{"reqpack-wrapper-self-update-missing-asset"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path homePath = tempDir.path() / "home";
+    const std::filesystem::path releaseApiRoot = tempDir.path() / "release-api";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+    std::filesystem::create_directories(homePath);
+    std::filesystem::create_directories(pluginDirectory);
+
+    const std::string owner = "coditary";
+    const std::string repo = "ReqPack";
+    const std::string tag = "v1.0.0";
+    const std::string target = HostInfoService::currentSnapshot()->platform.target;
+    REQUIRE((target == "x86_64-linux" || target == "aarch64-linux" || target == "x86_64-darwin" || target == "aarch64-darwin"));
+    write_file(releaseApiRoot / "repos" / owner / repo / "releases" / "latest",
+        "{\n"
+        "  \"tag_name\": \"" + tag + "\",\n"
+        "  \"assets\": [\n"
+        "    {\n"
+        "      \"name\": \"checksums.txt\",\n"
+        "      \"browser_download_url\": \"file://" + (tempDir.path() / "checksums.txt").string() + "\"\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+
+    write_file(configPath,
+        "return {\n"
+        "  logging = {\n"
+        "    consoleOutput = true,\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    remoteUrl = '',\n"
+        "    autoLoadPlugins = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  selfUpdate = {\n"
+        "    repoUrl = 'https://git.example.test/" + owner + "/" + repo + ".git',\n"
+        "    releaseApiBaseUrl = 'file://" + releaseApiRoot.string() + "',\n"
+        "    releaseTag = 'latest',\n"
+        "    binaryDirectory = '" + (homePath / ".local/share/reqpack/self/bin").string() + "',\n"
+        "    linkPath = '" + (homePath / ".local/bin/rqp").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    const std::string output = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
+    INFO(output);
+    CHECK(output.find("Self-update release asset is missing") != std::string::npos);
+    CHECK(output.find("release tag: " + tag) != std::string::npos);
+    CHECK(output.find("release target: " + target) != std::string::npos);
+    CHECK(output.find("expected asset: rqp-" + tag + "-" + target + ".tar.gz") != std::string::npos);
+    CHECK(output.find("available assets: checksums.txt") != std::string::npos);
+}
+
 TEST_CASE("self-update refreshes main registry before downloading release", "[integration][orchestrator][service][self-update]") {
     TempDir tempDir{"reqpack-wrapper-self-update-registry-refresh"};
     const std::filesystem::path workspace = tempDir.path() / "workspace";
@@ -2808,6 +2932,122 @@ TEST_CASE("self-update refreshes main registry before downloading release", "[in
     REQUIRE(refreshedDatabase.getRecord("apt").has_value());
     CHECK(refreshedDatabase.getRecord("apt")->description == "apt new");
     CHECK(refreshedDatabase.getRecord("apt")->privilegeLevel == "sudo");
+}
+
+TEST_CASE("self-update registry refresh strips leaked LD_LIBRARY_PATH for git", "[integration][orchestrator][service][self-update]") {
+    TempDir tempDir{"reqpack-wrapper-self-update-registry-env-sanitize"};
+    const std::filesystem::path workspace = tempDir.path() / "workspace";
+    const std::filesystem::path homePath = tempDir.path() / "home";
+    const std::filesystem::path releaseApiRoot = tempDir.path() / "release-api";
+    const std::filesystem::path releaseAssetRoot = tempDir.path() / "release-assets";
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path remoteRegistry = tempDir.path() / "remote-registry";
+    const std::filesystem::path fakeBinDirectory = tempDir.path() / "fake-bin";
+    const std::filesystem::path gitProbeLog = tempDir.path() / "git-probe.log";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    std::filesystem::create_directories(workspace);
+    std::filesystem::create_directories(homePath);
+    std::filesystem::create_directories(fakeBinDirectory);
+
+    init_git_repository(remoteRegistry);
+    write_file(remoteRegistry / "registry" / "a" / "apt.json", R"({
+  "schemaVersion": 1,
+  "name": "apt",
+  "source": "https://example.test/apt.lua",
+  "description": "apt old",
+  "role": "package-manager",
+  "privilegeLevel": "none"
+})");
+    require_command_success(
+        "git -C " + escape_shell_arg(remoteRegistry.string()) + " add registry" +
+        " && git -C " + escape_shell_arg(remoteRegistry.string()) + " commit -m 'initial'"
+    );
+
+    ReqPackConfig defaults = default_reqpack_config();
+    defaults.registry.remoteUrl.clear();
+    ReqPackConfig seedConfig = defaults;
+    seedConfig.registry.pluginDirectory = pluginDirectory.string();
+    seedConfig.registry.databasePath = (tempDir.path() / "registry-db").string();
+    seedConfig.registry.remoteUrl = std::string{"git+"} + remoteRegistry.string();
+    seedConfig.registry.remoteBranch = "main";
+    seedConfig.registry.remotePluginsPath = "registry";
+    RegistryDatabase seedDatabase(seedConfig);
+    REQUIRE(seedDatabase.ensureReady());
+
+    write_file(remoteRegistry / "registry" / "a" / "apt.json", R"({
+  "schemaVersion": 1,
+  "name": "apt",
+  "source": "https://example.test/apt.lua",
+  "description": "apt refreshed",
+  "role": "package-manager",
+  "privilegeLevel": "sudo"
+})");
+    require_command_success(
+        "git -C " + escape_shell_arg(remoteRegistry.string()) + " add registry" +
+        " && git -C " + escape_shell_arg(remoteRegistry.string()) + " commit -m 'refresh registry'"
+    );
+
+    const std::string realGitPath = first_non_empty_line(run_command_capture("command -v git"));
+    REQUIRE_FALSE(realGitPath.empty());
+    write_file(fakeBinDirectory / "git",
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"${LD_LIBRARY_PATH-<unset>}\" >> \"$REQPACK_TEST_GIT_PROBE\"\n"
+        "exec " + realGitPath + " \"$@\"\n");
+    require_command_success("chmod +x " + escape_shell_arg((fakeBinDirectory / "git").string()));
+
+    const std::string owner = "coditary";
+    const std::string repo = "ReqPack";
+    const std::string tag = "v1.0.0";
+    const std::string target = HostInfoService::currentSnapshot()->platform.target;
+    REQUIRE((target == "x86_64-linux" || target == "aarch64-linux" || target == "x86_64-darwin" || target == "aarch64-darwin"));
+    const std::filesystem::path archive = create_self_update_release_archive(releaseAssetRoot, "v1", tag, target);
+    write_self_update_release_api_response(releaseApiRoot, owner, repo, tag, target, archive);
+
+    write_file(configPath,
+        "return {\n"
+        "  logging = {\n"
+        "    consoleOutput = true,\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    remoteUrl = 'git+" + remoteRegistry.string() + "',\n"
+        "    remoteBranch = 'main',\n"
+        "    remotePluginsPath = 'registry',\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  selfUpdate = {\n"
+        "    repoUrl = 'https://git.example.test/" + owner + "/" + repo + ".git',\n"
+        "    releaseApiBaseUrl = 'file://" + releaseApiRoot.string() + "',\n"
+        "    releaseTag = 'latest',\n"
+        "    binaryDirectory = '" + (homePath / ".local/share/reqpack/self/bin").string() + "',\n"
+        "    linkPath = '" + (homePath / ".local/bin/rqp").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    const std::string output = run_reqpack_with_home_and_env(
+        workspace,
+        configPath,
+        homePath,
+        {
+            {"PATH", fakeBinDirectory.string() + ":/usr/bin:/bin"},
+            {"LD_LIBRARY_PATH", "/tmp/reqpack-bad-lib-path"},
+            {"REQPACK_TEST_GIT_PROBE", gitProbeLog.string()},
+        },
+        {"update"}
+    );
+    INFO(output);
+    CHECK(output.find("UPDATE done:  1 ok") != std::string::npos);
+
+    const std::string gitProbe = read_file(gitProbeLog);
+    CHECK(gitProbe.find("/tmp/reqpack-bad-lib-path") == std::string::npos);
 }
 
 TEST_CASE("update all refreshes main registry before expanding plugin wrappers", "[integration][orchestrator][service][plugin-update]") {

@@ -5,8 +5,10 @@
 
 #include <curl/curl.h>
 
+#include <cerrno>
 #include <cstdio>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -199,6 +201,35 @@ int forward_download_progress(void* userp, curl_off_t downloadTotal, curl_off_t 
     return state->callback(snapshot, state->userData);
 }
 
+void reset_download_failure(DownloadFailureDetails* failureDetails, const std::string& source, bool remote) {
+    if (failureDetails == nullptr) {
+        return;
+    }
+
+    failureDetails->source = source;
+    failureDetails->remote = remote;
+    failureDetails->curlCode = CURLE_OK;
+    failureDetails->httpStatus = 0;
+    failureDetails->message.clear();
+}
+
+void set_download_failure(DownloadFailureDetails* failureDetails,
+                          const std::string& source,
+                          bool remote,
+                          const std::string& message,
+                          CURLcode curlCode = CURLE_OK,
+                          long httpStatus = 0) {
+    if (failureDetails == nullptr) {
+        return;
+    }
+
+    failureDetails->source = source;
+    failureDetails->remote = remote;
+    failureDetails->curlCode = curlCode;
+    failureDetails->httpStatus = httpStatus;
+    failureDetails->message = message;
+}
+
 }  // namespace
 
 bool Downloader::downloadPlugin(const std::string& system) const {
@@ -290,29 +321,69 @@ bool Downloader::downloadPlugin(const std::string& system) const {
 }
 
 bool Downloader::download(const std::string& source, const std::string& destinationPath) const {
-	return this->download_to_path(source, destinationPath, nullptr, nullptr);
+	return this->download_to_path(source, destinationPath, nullptr, nullptr, nullptr);
+}
+
+bool Downloader::download(const std::string& source,
+                          const std::string& destinationPath,
+                          DownloadFailureDetails* failureDetails) const {
+	return this->download_to_path(source, destinationPath, nullptr, nullptr, failureDetails);
 }
 
 bool Downloader::download(const std::string& source,
                          const std::string& destinationPath,
                          DownloadProgressCallback progressCallback,
                          void* progressUserData) const {
-	return this->download_to_path(source, destinationPath, progressCallback, progressUserData);
+	return this->download_to_path(source, destinationPath, progressCallback, progressUserData, nullptr);
+}
+
+bool Downloader::download(const std::string& source,
+                         const std::string& destinationPath,
+                         DownloadProgressCallback progressCallback,
+                         void* progressUserData,
+                         DownloadFailureDetails* failureDetails) const {
+	return this->download_to_path(source, destinationPath, progressCallback, progressUserData, failureDetails);
 }
 
 bool Downloader::download_to_path(const std::string& source, const std::filesystem::path& targetPath) const {
-	return this->download_to_path(source, targetPath, nullptr, nullptr);
+	return this->download_to_path(source, targetPath, nullptr, nullptr, nullptr);
+}
+
+bool Downloader::download_to_path(const std::string& source,
+                                  const std::filesystem::path& targetPath,
+                                  DownloadFailureDetails* failureDetails) const {
+	return this->download_to_path(source, targetPath, nullptr, nullptr, failureDetails);
 }
 
 bool Downloader::download_to_path(const std::string& source,
                                   const std::filesystem::path& targetPath,
                                   DownloadProgressCallback progressCallback,
-                                  void* progressUserData) const {
-    std::filesystem::create_directories(targetPath.parent_path());
+                                  void* progressUserData,
+                                  DownloadFailureDetails* failureDetails) const {
+    const bool remoteSource = downloader_is_remote_source(source);
+    reset_download_failure(failureDetails, source, remoteSource);
 
-    if (!downloader_is_remote_source(source)) {
+    std::error_code directoryError;
+    if (!targetPath.parent_path().empty()) {
+        std::filesystem::create_directories(targetPath.parent_path(), directoryError);
+    }
+    if (directoryError) {
+        set_download_failure(failureDetails,
+                             source,
+                             remoteSource,
+                             "create_directories failed for '" + targetPath.parent_path().string() + "': " + directoryError.message());
+        return false;
+    }
+
+    if (!remoteSource) {
         std::error_code error;
         std::filesystem::copy_file(source, targetPath, std::filesystem::copy_options::overwrite_existing, error);
+        if (error) {
+            set_download_failure(failureDetails,
+                                 source,
+                                 false,
+                                 "copy_file failed for '" + source + "': " + error.message());
+        }
         return !error;
     }
 
@@ -320,20 +391,21 @@ bool Downloader::download_to_path(const std::string& source,
 
     FILE* file = std::fopen(tempPath.string().c_str(), "wb");
     if (file == nullptr) {
+        set_download_failure(failureDetails,
+                             source,
+                             true,
+                             "fopen failed for '" + tempPath.string() + "': " + std::strerror(errno));
         return false;
     }
 
     CURL* curl = curl_easy_init();
     if (curl == nullptr) {
         std::fclose(file);
+        set_download_failure(failureDetails, source, true, "curl_easy_init failed");
         return false;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, source.c_str());
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, this->config.downloader.followRedirects ? 1L : 0L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, this->config.downloader.connectTimeoutSeconds);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, this->config.downloader.requestTimeoutSeconds);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, this->config.downloader.userAgent.c_str());
+    downloader_configure_curl_handle(curl, this->config, source);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &Downloader::write_to_file);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
     CurlDownloadProgressState progressState{
@@ -354,6 +426,12 @@ bool Downloader::download_to_path(const std::string& source,
 
     if (result != CURLE_OK || statusCode >= 400) {
         std::filesystem::remove(tempPath);
+        set_download_failure(failureDetails,
+                             source,
+                             true,
+                             {},
+                             result,
+                             statusCode);
         return false;
     }
 
@@ -361,6 +439,10 @@ bool Downloader::download_to_path(const std::string& source,
     std::filesystem::rename(tempPath, targetPath, renameError);
     if (renameError) {
         std::filesystem::remove(tempPath);
+        set_download_failure(failureDetails,
+                             source,
+                             true,
+                             "rename failed for '" + tempPath.string() + "': " + renameError.message());
         return false;
     }
 

@@ -1,5 +1,9 @@
 #include "core/download/downloader_core.h"
 
+#include "core/common/network_environment.h"
+
+#include <curl/curl.h>
+
 #include <algorithm>
 #include <cctype>
 
@@ -39,4 +43,17 @@ std::filesystem::path downloader_temp_path_for_target(const std::filesystem::pat
 
 std::filesystem::path downloader_plugin_target_path(const ReqPackConfig& config, const std::string& system) {
     return std::filesystem::path(config.registry.pluginDirectory) / system / "run.lua";
+}
+
+void downloader_configure_curl_handle(CURL* curl, const ReqPackConfig& config, const std::string& source) {
+    if (curl == nullptr) {
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, source.c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, config.downloader.followRedirects ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, config.downloader.connectTimeoutSeconds);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, config.downloader.requestTimeoutSeconds);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, config.downloader.userAgent.c_str());
+    reqpack_apply_curl_ca_bundle(curl);
 }

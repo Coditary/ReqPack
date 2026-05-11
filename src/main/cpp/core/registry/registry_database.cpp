@@ -2,7 +2,9 @@
 #include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database_core.h"
 #include "core/registry/registry_json_parser.h"
+#include "core/download/downloader_core.h"
 #include "core/common/version_compare.h"
+#include "core/common/network_environment.h"
 #include "output/diagnostic.h"
 #include "output/logger.h"
 
@@ -25,8 +27,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
-
-extern char** environ;
 
 namespace {
 
@@ -322,8 +322,16 @@ ProcessResult run_process_capture(const std::vector<std::string>& arguments) {
     }
     argv.push_back(nullptr);
 
+    std::vector<std::string> environmentStorage = reqpack_sanitized_process_environment();
+    std::vector<char*> environmentPointers;
+    environmentPointers.reserve(environmentStorage.size() + 1);
+    for (std::string& entry : environmentStorage) {
+        environmentPointers.push_back(entry.data());
+    }
+    environmentPointers.push_back(nullptr);
+
     pid_t pid = 0;
-    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), ::environ);
+    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), environmentPointers.data());
     posix_spawn_file_actions_destroy(&fileActions);
     (void)::close(stdoutPipe[1]);
     (void)::close(stderrPipe[1]);
@@ -716,11 +724,7 @@ std::optional<std::string> fetch_text(const ReqPackConfig& config, const std::st
         return std::nullopt;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, source.c_str());
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, config.downloader.followRedirects ? 1L : 0L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, config.downloader.connectTimeoutSeconds);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, config.downloader.requestTimeoutSeconds);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, config.downloader.userAgent.c_str());
+    downloader_configure_curl_handle(curl, config, source);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &write_to_string);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
 

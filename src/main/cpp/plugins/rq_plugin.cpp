@@ -2,6 +2,7 @@
 
 #include "core/archive/archive_resolver.h"
 #include "core/common/build_info.h"
+#include "core/common/network_environment.h"
 #include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database.h"
 #include "core/packages/rq_package.h"
@@ -476,6 +477,7 @@ public:
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
         const std::string userAgent = reqpack_user_agent();
         curl_easy_setopt(curl, CURLOPT_USERAGENT, userAgent.c_str());
+        reqpack_apply_curl_ca_bundle(curl);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &write_to_file);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
 

@@ -3,7 +3,7 @@ project(ReqPack LANGUAGES CXX)
 enable_language(C)
 enable_testing()
 
-set(REQPACK_RELEASE_ID "v1.2.5" CACHE STRING "Build/release identity shown by rqp version output")
+set(REQPACK_RELEASE_ID "v1.2.6" CACHE STRING "Build/release identity shown by rqp version output")
 
 option(REQPACK_ENABLE_COVERAGE "Build ReqPack targets with coverage instrumentation" OFF)
 option(REQPACK_ENABLE_PROFILING "Build ReqPack targets with profiling instrumentation" OFF)
@@ -146,6 +146,7 @@ set(SOURCES
     src/main/cpp/plugins/lua_bridge.cpp
     src/main/cpp/plugins/rq_plugin.cpp
     src/main/cpp/core/archive/archive_resolver.cpp
+    src/main/cpp/core/common/network_environment.cpp
     src/main/cpp/core/common/version_compare.cpp
     src/main/cpp/core/config/configuration.cpp
     src/main/cpp/core/download/downloader.cpp
@@ -237,6 +238,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/download/downloader.cpp
     src/main/cpp/core/download/downloader_core.cpp
     src/main/cpp/core/history/history_manager.cpp
+    src/main/cpp/core/common/network_environment.cpp
     src/main/cpp/core/packages/rq_package.cpp
     src/main/cpp/core/packages/rq_repository.cpp
     src/main/cpp/core/plugins/plugin_test_runner.cpp
@@ -257,6 +259,7 @@ add_dependencies(core_integration_tests ReqPack)
 add_executable(core_unit_tests
     tests/cpp/test_main.cpp
     tests/unit/core/common/version_compare_tests.cpp
+    tests/unit/core/common/network_environment_tests.cpp
     tests/unit/core/config/configuration_cli_tests.cpp
     tests/unit/core/config/configuration_parse_tests.cpp
     tests/unit/core/download/downloader_tests.cpp
@@ -290,6 +293,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/export/sbom_exporter.cpp
     src/main/cpp/core/export/snapshot_exporter.cpp
     src/main/cpp/core/history/history_manager.cpp
+    src/main/cpp/core/common/network_environment.cpp
     src/main/cpp/core/packages/rq_package.cpp
     src/main/cpp/core/packages/rq_repository.cpp
     src/main/cpp/core/planning/planner_core.cpp

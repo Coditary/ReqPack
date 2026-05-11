@@ -14,6 +14,18 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+    return 0
+  fi
+  if need_cmd sudo; then
+    sudo "$@"
+    return 0
+  fi
+  die "Need root privileges to install missing tools. Install them manually, then rerun install.sh."
+}
+
 die() {
   printf '%s\n' "$1" >&2
   exit 1
@@ -112,8 +124,13 @@ ensure_linux_tools() {
   if need_cmd curl && need_cmd tar && need_cmd python3 && need_cmd git; then
     return 0
   fi
+  if need_cmd dnf; then
+    run_as_root dnf install -y \
+      ca-certificates curl git python3 tar
+    return 0
+  fi
   if need_cmd apt-get; then
-    sudo apt-get install -y --no-install-recommends \
+    run_as_root apt-get install -y --no-install-recommends \
       ca-certificates curl git python3 tar
     return 0
   fi

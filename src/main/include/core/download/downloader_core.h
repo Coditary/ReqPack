@@ -2,6 +2,8 @@
 
 #include "core/config/configuration.h"
 
+#include <curl/curl.h>
+
 #include <filesystem>
 #include <string>
 
@@ -12,3 +14,4 @@ bool downloader_is_valid_plugin_script(const std::string& script);
 bool downloader_is_remote_source(const std::string& source);
 std::filesystem::path downloader_temp_path_for_target(const std::filesystem::path& targetPath);
 std::filesystem::path downloader_plugin_target_path(const ReqPackConfig& config, const std::string& system);
+void downloader_configure_curl_handle(CURL* curl, const ReqPackConfig& config, const std::string& source);

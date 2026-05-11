@@ -1,5 +1,6 @@
 #include "cli/cli.h"
 #include "core/common/build_info.h"
+#include "core/common/network_environment.h"
 #include "core/config/configuration.h"
 #include "core/download/downloader.h"
 #include "core/host/host_info.h"
@@ -34,8 +35,6 @@
 #include <sstream>
 #include <string_view>
 #include <sys/wait.h>
-
-extern char** environ;
 
 namespace {
 
@@ -565,8 +564,16 @@ bool run_process(const std::vector<std::string>& arguments, const std::filesyste
     }
     argv.push_back(nullptr);
 
+    std::vector<std::string> environmentStorage = reqpack_sanitized_process_environment();
+    std::vector<char*> environmentPointers;
+    environmentPointers.reserve(environmentStorage.size() + 1);
+    for (std::string& entry : environmentStorage) {
+        environmentPointers.push_back(entry.data());
+    }
+    environmentPointers.push_back(nullptr);
+
     pid_t pid = 0;
-    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), ::environ);
+    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), environmentPointers.data());
     posix_spawn_file_actions_destroy(&fileActions);
     if (spawnResult != 0) {
         return false;
@@ -714,6 +721,10 @@ std::string release_tag_for_config(const SelfUpdateConfig& config) {
     return configured.empty() ? std::string{"latest"} : configured;
 }
 
+std::string self_update_expected_asset_name(const std::string& tagName, const std::string& releaseTarget) {
+    return "rqp-" + tagName + "-" + releaseTarget + ".tar.gz";
+}
+
 std::optional<std::pair<std::string, std::string>> parse_release_owner_repo(const std::string& repoUrl) {
     const std::string trimmed = trim_copy(repoUrl);
     if (trimmed.empty()) {
@@ -779,6 +790,38 @@ std::string self_update_release_api_url(const SelfUpdateConfig& config, const st
     return base + "/repos/" + owner + "/" + repo + "/releases/tags/" + tag;
 }
 
+std::string self_update_download_failure_details(const std::string& url, const DownloadFailureDetails& failureDetails) {
+    std::ostringstream details;
+    bool emitted = false;
+    const auto append = [&](const std::string& line) {
+        if (line.empty()) {
+            return;
+        }
+        if (emitted) {
+            details << '\n';
+        }
+        details << line;
+        emitted = true;
+    };
+
+    append("url: " + url);
+    if (failureDetails.httpStatus > 0) {
+        append("http status: " + std::to_string(failureDetails.httpStatus));
+    }
+    if (failureDetails.curlCode != CURLE_OK) {
+        append("curl: " + std::to_string(static_cast<int>(failureDetails.curlCode)) +
+               " (" + std::string{curl_easy_strerror(failureDetails.curlCode)} + ")");
+    }
+    if (!failureDetails.message.empty()) {
+        append("details: " + failureDetails.message);
+    }
+    if (url.rfind("https://", 0) == 0) {
+        const std::string caBundlePath = reqpack_ca_bundle_path();
+        append("ca bundle: " + (caBundlePath.empty() ? std::string{"not found"} : caBundlePath));
+    }
+    return details.str();
+}
+
 std::optional<ptree> load_json_tree(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input) {
@@ -792,6 +835,59 @@ std::optional<ptree> load_json_tree(const std::filesystem::path& path) {
     } catch (...) {
         return std::nullopt;
     }
+}
+
+std::string self_update_missing_asset_details(const SelfUpdateConfig& config,
+                                             const std::filesystem::path& metadataPath,
+                                             const std::string& releaseTarget) {
+    std::ostringstream details;
+    bool emitted = false;
+    const auto append = [&](const std::string& line) {
+        if (line.empty()) {
+            return;
+        }
+        if (emitted) {
+            details << '\n';
+        }
+        details << line;
+        emitted = true;
+    };
+
+    const std::optional<ptree> tree = load_json_tree(metadataPath);
+    const std::string tagName = tree.has_value() ? trim_copy(tree->get<std::string>("tag_name", {})) : std::string{};
+    const std::string configuredTag = release_tag_for_config(config);
+    const std::string effectiveTag = tagName.empty() ? configuredTag : tagName;
+    const std::string assetTag = effectiveTag == "latest" ? std::string{"<tag>"} : effectiveTag;
+
+    append("release tag: " + effectiveTag);
+    append("release target: " + releaseTarget);
+    append("expected asset: " + self_update_expected_asset_name(assetTag, releaseTarget));
+
+    if (tree.has_value()) {
+        const boost::optional<const ptree&> assets = tree->get_child_optional("assets");
+        if (assets) {
+            std::vector<std::string> assetNames;
+            for (const auto& child : assets.get()) {
+                const std::string assetName = trim_copy(child.second.get<std::string>("name", {}));
+                if (!assetName.empty()) {
+                    assetNames.push_back(assetName);
+                }
+            }
+            if (!assetNames.empty()) {
+                std::ostringstream available;
+                available << "available assets: ";
+                for (std::size_t index = 0; index < assetNames.size(); ++index) {
+                    if (index != 0) {
+                        available << ", ";
+                    }
+                    available << assetNames[index];
+                }
+                append(available.str());
+            }
+        }
+    }
+
+    return details.str();
 }
 
 std::optional<std::pair<std::string, std::string>> resolve_self_update_asset(
@@ -816,7 +912,7 @@ std::optional<std::pair<std::string, std::string>> resolve_self_update_asset(
         return std::nullopt;
     }
 
-    const std::string expectedAssetName = "rqp-" + tagName + "-" + releaseTarget + ".tar.gz";
+    const std::string expectedAssetName = self_update_expected_asset_name(tagName, releaseTarget);
     for (const auto& child : assets.get()) {
         const std::string assetName = trim_copy(child.second.get<std::string>("name", {}));
         if (assetName != expectedAssetName) {
@@ -1029,8 +1125,16 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
     }
     argv.push_back(nullptr);
 
+    std::vector<std::string> environmentStorage = reqpack_sanitized_process_environment();
+    std::vector<char*> environmentPointers;
+    environmentPointers.reserve(environmentStorage.size() + 1);
+    for (std::string& entry : environmentStorage) {
+        environmentPointers.push_back(entry.data());
+    }
+    environmentPointers.push_back(nullptr);
+
     pid_t pid = 0;
-    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), ::environ);
+    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), environmentPointers.data());
     posix_spawn_file_actions_destroy(&fileActions);
     (void)::close(stdoutPipe[1]);
     (void)::close(stderrPipe[1]);
@@ -1399,6 +1503,7 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
     const std::filesystem::path binaryDirectory(config.selfUpdate.binaryDirectory);
     const std::optional<std::filesystem::path> previousLinkTargetPath = current_link_target_path(linkPath);
     Downloader downloader(nullptr, config);
+    const std::string metadataUrl = self_update_release_api_url(config.selfUpdate, ownerRepo->first, ownerRepo->second);
 
     const auto cleanup = [&tempPath]() {
         (void)remove_path_quietly(tempPath);
@@ -1411,16 +1516,19 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         .rangeStart = 5,
         .rangeEnd = 20,
     };
+    DownloadFailureDetails metadataFailureDetails;
     if (!downloader.download(
-            self_update_release_api_url(config.selfUpdate, ownerRepo->first, ownerRepo->second),
+            metadataUrl,
             metadataPath.string(),
             progress_callback,
-            &metadataProgressState)) {
+            &metadataProgressState,
+            &metadataFailureDetails)) {
         cleanup();
         return fail_self_update(self_update_diagnostic(
             "Self-update metadata download failed",
             "ReqPack could not read release metadata from configured release API.",
-            "Check network access, releaseApiBaseUrl, repository visibility, and selected release tag."
+            "Check network access, releaseApiBaseUrl, repository visibility, and selected release tag.",
+            self_update_download_failure_details(metadataUrl, metadataFailureDetails)
         ));
     }
     emit_progress(20);
@@ -1433,12 +1541,13 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         metadataPath
     );
     if (!asset.has_value()) {
+        const std::string assetDetails = self_update_missing_asset_details(config.selfUpdate, metadataPath, releaseTarget.value());
         cleanup();
         return fail_self_update(self_update_diagnostic(
             "Self-update release asset is missing",
             "Configured release does not contain a binary archive for this host target.",
             "Publish asset `rqp-<tag>-" + releaseTarget.value() + ".tar.gz` or choose a different release tag.",
-            releaseTarget.value()
+            assetDetails
         ));
     }
 
@@ -1449,16 +1558,18 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
         .rangeStart = 20,
         .rangeEnd = 75,
     };
+    DownloadFailureDetails archiveFailureDetails;
     if (!downloader.download(asset->second,
                              archivePath.string(),
                              progress_callback,
-                             &archiveProgressState)) {
+                             &archiveProgressState,
+                             &archiveFailureDetails)) {
         cleanup();
         return fail_self_update(self_update_diagnostic(
             "Self-update archive download failed",
             "ReqPack found matching release metadata, but binary archive download failed.",
             "Check release asset availability and network access, then retry self-update.",
-            asset->second
+            self_update_download_failure_details(asset->second, archiveFailureDetails)
         ));
     }
     emit_progress(75);
