@@ -3,10 +3,12 @@
 #include <filesystem>
 #include <sol/sol.hpp>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <memory>
 #include <atomic>
 #include <functional>
+#include <cstdint>
 
 #include "core/config/configuration.h"
 #include "core/common/types.h"
@@ -34,10 +36,20 @@ private:
 	std::vector<PluginEventRecord> m_recentEvents;
 	std::vector<std::string> m_recentArtifacts;
 	std::vector<std::filesystem::path> m_runtimeWriteRoots;
+	struct RuntimeBindingContext {
+		IPluginRuntimeHost* host{nullptr};
+		std::string pluginId;
+		std::string sourceId;
+		std::vector<std::string> flags;
+	};
+	std::unordered_map<std::uint64_t, RuntimeBindingContext> m_runtimeBindingContexts;
+	std::uint64_t m_nextRuntimeBindingContextId{0};
 	mutable std::atomic<bool> m_silentRuntimeOutput{false};
 	ExecOverride m_execOverride;
 
 	PluginCallContext makeContext(const std::vector<std::string>& flags) const;
+	std::uint64_t retainRuntimeBindingContext(const PluginCallContext& context);
+	const RuntimeBindingContext* runtimeBindingContext(std::uint64_t contextId) const;
 	void register_context_types();
 	void register_reqpack_namespace();
 	bool validatePluginContract() const;
