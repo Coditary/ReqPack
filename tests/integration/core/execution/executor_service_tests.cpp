@@ -641,6 +641,14 @@ local function shell_quote(value)
   return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
 end
 
+local function copy_packages(packages)
+  local missing = {}
+  for _, package in ipairs(packages) do
+    missing[#missing + 1] = package
+  end
+  return missing
+end
+
 local function append_line(path, line)
   reqpack.exec.run("printf '%s\\n' " .. shell_quote(line) .. " >> " .. shell_quote(path))
 end
@@ -649,16 +657,19 @@ function plugin.getName() return REQPACK_PLUGIN_ID end
 function plugin.getVersion() return "1.0.0" end
 function plugin.getRequirements() return {} end
 function plugin.getCategories() return { "pkg", "parallel" } end
-function plugin.getMissingPackages(packages) return packages end
+function plugin.getMissingPackages(packages) return copy_packages(packages) end
 function plugin.install(context, packages)
   local log_path = context.plugin.dir .. "/parallel.log"
+  local shared_log_path = context.plugin.dir .. "/../parallel.shared.log"
   local sleep_value = "0.4"
   if packages[1] ~= nil and packages[1].version ~= nil and packages[1].version ~= "" then
     sleep_value = packages[1].version
   end
   append_line(log_path, "start\t" .. REQPACK_PLUGIN_ID)
+  append_line(shared_log_path, "start\t" .. REQPACK_PLUGIN_ID)
   reqpack.exec.run("sleep " .. sleep_value)
   append_line(log_path, "end\t" .. REQPACK_PLUGIN_ID)
+  append_line(shared_log_path, "end\t" .. REQPACK_PLUGIN_ID)
   return true
 end
 function plugin.installLocal(context, path) return true end
@@ -1299,17 +1310,28 @@ TEST_CASE("executor runs independent task groups in parallel when jobs exceed on
     boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "alpha", .name = "one", .version = "0.4"}, graph);
     boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "beta", .name = "two", .version = "0.4"}, graph);
 
-    const auto startedAt = std::chrono::steady_clock::now();
     executer.execute(&graph);
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count();
 
     const std::string alphaLog = read_file(tempDir.path() / "plugins" / "alpha" / "parallel.log");
     const std::string betaLog = read_file(tempDir.path() / "plugins" / "beta" / "parallel.log");
+    const std::string sharedLog = read_file(tempDir.path() / "plugins" / "parallel.shared.log");
     CHECK(alphaLog.find("start\talpha") != std::string::npos);
     CHECK(alphaLog.find("end\talpha") != std::string::npos);
     CHECK(betaLog.find("start\tbeta") != std::string::npos);
     CHECK(betaLog.find("end\tbeta") != std::string::npos);
-    CHECK(elapsedMs < 700);
+
+    const std::size_t alphaStart = sharedLog.find("start\talpha");
+    const std::size_t betaStart = sharedLog.find("start\tbeta");
+    const std::size_t alphaEnd = sharedLog.find("end\talpha");
+    const std::size_t betaEnd = sharedLog.find("end\tbeta");
+    REQUIRE(alphaStart != std::string::npos);
+    REQUIRE(betaStart != std::string::npos);
+    REQUIRE(alphaEnd != std::string::npos);
+    REQUIRE(betaEnd != std::string::npos);
+    CHECK(alphaStart < alphaEnd);
+    CHECK(betaStart < betaEnd);
+    CHECK(alphaStart < std::min(alphaEnd, betaEnd));
+    CHECK(betaStart < std::min(alphaEnd, betaEnd));
 }
 
 TEST_CASE("executor keeps same-system task groups serialized even when jobs exceed one", "[integration][executor][service]") {
