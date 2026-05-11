@@ -891,6 +891,56 @@ std::vector<std::string> split_non_empty_lines(const std::string& value) {
     return lines;
 }
 
+std::string normalize_archive_entry_name(std::string value) {
+    value = trim_copy(value);
+    while (value.rfind("./", 0) == 0) {
+        value.erase(0, 2);
+    }
+    return value;
+}
+
+std::optional<std::string> detect_archive_entry_from_tar_output(
+    const std::string& rawLine,
+    const std::set<std::string>& expectedEntries
+) {
+    std::vector<std::string> candidates;
+    const std::string trimmed = trim_copy(rawLine);
+    if (trimmed.empty()) {
+        return std::nullopt;
+    }
+    candidates.push_back(trimmed);
+    if (trimmed.rfind("x ", 0) == 0) {
+        candidates.push_back(trim_copy(trimmed.substr(2)));
+    }
+
+    for (std::string candidate : candidates) {
+        if (const std::size_t comma = candidate.find(','); comma != std::string::npos) {
+            candidate = trim_copy(candidate.substr(0, comma));
+        }
+        candidate = normalize_archive_entry_name(candidate);
+        if (candidate.empty()) {
+            continue;
+        }
+        if (expectedEntries.empty()) {
+            return candidate;
+        }
+        if (expectedEntries.find(candidate) != expectedEntries.end()) {
+            return candidate;
+        }
+        if (!candidate.empty() && candidate.back() == '/') {
+            const std::string withoutSlash = candidate.substr(0, candidate.size() - 1);
+            if (expectedEntries.find(withoutSlash) != expectedEntries.end()) {
+                return withoutSlash;
+            }
+            continue;
+        }
+        if (expectedEntries.find(candidate + "/") != expectedEntries.end()) {
+            return candidate + "/";
+        }
+    }
+    return std::nullopt;
+}
+
 std::vector<std::string> list_release_archive_entries(const std::filesystem::path& archivePath) {
     FILE* pipe = ::popen(("tar -tzf " + shell_escape_arg(archivePath.string())).c_str(), "r");
     if (pipe == nullptr) {
@@ -918,6 +968,13 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
 
     const std::vector<std::string> entries = list_release_archive_entries(archivePath);
     const std::size_t totalEntries = entries.empty() ? 0 : entries.size();
+    std::set<std::string> expectedEntries;
+    for (const std::string& entry : entries) {
+        const std::string normalized = normalize_archive_entry_name(entry);
+        if (!normalized.empty()) {
+            expectedEntries.insert(normalized);
+        }
+    }
     if (!onEntryExtracted) {
         return run_process({"tar", "-xzf", archivePath.string(), "-C", destinationPath.string()}, std::filesystem::current_path());
     }
@@ -995,6 +1052,18 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
     std::string stdoutBuffer;
     std::string stderrBuffer;
     std::size_t extractedEntries = 0;
+    std::set<std::string> extractedEntryNames;
+    const auto record_entry = [&](const std::string& line) {
+        const std::optional<std::string> entry = detect_archive_entry_from_tar_output(line, expectedEntries);
+        if (!entry.has_value()) {
+            return;
+        }
+        if (!extractedEntryNames.insert(entry.value()).second) {
+            return;
+        }
+        extractedEntries = extractedEntryNames.size();
+        onEntryExtracted(std::min(extractedEntries, totalEntries == 0 ? extractedEntries : totalEntries), totalEntries == 0 ? extractedEntries : totalEntries);
+    };
     auto drain_pipe = [&](int fd, std::string& buffer, bool trackEntries) {
         char chunk[4096];
         while (true) {
@@ -1008,10 +1077,7 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
                     if (!trackEntries) {
                         continue;
                     }
-                    if (const std::optional<std::string> trimmed = trim_line(line); trimmed.has_value()) {
-                        ++extractedEntries;
-                        onEntryExtracted(std::min(extractedEntries, totalEntries == 0 ? extractedEntries : totalEntries), totalEntries == 0 ? extractedEntries : totalEntries);
-                    }
+                    record_entry(line);
                 }
                 continue;
             }
@@ -1053,7 +1119,7 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
         }
         if (stderrOpen && (fds[1].revents & (POLLIN | POLLHUP))) {
             const std::size_t before = stderrBuffer.size();
-            drain_pipe(stderrPipe[0], stderrBuffer, false);
+            drain_pipe(stderrPipe[0], stderrBuffer, true);
             if ((fds[1].revents & POLLHUP) && stderrBuffer.size() == before) {
                 stderrOpen = false;
             }
@@ -1067,11 +1133,9 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
     }
 
     drain_pipe(stdoutPipe[0], stdoutBuffer, true);
-    drain_pipe(stderrPipe[0], stderrBuffer, false);
-    if (const std::optional<std::string> trimmed = trim_line(stdoutBuffer); trimmed.has_value()) {
-        ++extractedEntries;
-        onEntryExtracted(std::min(extractedEntries, totalEntries == 0 ? extractedEntries : totalEntries), totalEntries == 0 ? extractedEntries : totalEntries);
-    }
+    drain_pipe(stderrPipe[0], stderrBuffer, true);
+    record_entry(stdoutBuffer);
+    record_entry(stderrBuffer);
 
     (void)::close(stdoutPipe[0]);
     (void)::close(stderrPipe[0]);
@@ -1812,6 +1876,7 @@ int main(int argc, char* argv[]) {
 
         try {
             const PluginTestRunReport report = run_plugin_test_cases(config, pluginTest.invocation);
+            logger.flushSync();
             print_plugin_test_report(report, std::cout);
             logger.flushSync();
             curl_global_cleanup();
