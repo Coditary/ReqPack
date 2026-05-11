@@ -38,8 +38,9 @@ jobs:
 
       - name: Install sol2 headers
         run: |
-          git clone --depth 1 -b "${SOL2_VERSION}" https://github.com/ThePhD/sol2.git
-          echo "SOL2_INCLUDE_DIR=${GITHUB_WORKSPACE}/sol2/include" >> "$GITHUB_ENV"
+          mkdir -p "${{ github.workspace }}/third_party"
+          bash .github/scripts/setup-sol2.sh "${{ github.workspace }}/third_party/include"
+          echo "SOL2_INCLUDE_DIR=${{ github.workspace }}/third_party/include" >> "$GITHUB_ENV"
 
       - name: Configure coverage build
         run: |

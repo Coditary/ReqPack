@@ -18,7 +18,7 @@ install -d "$sol_dir" "$cache_sol_dir"
 for header in sol.hpp config.hpp forward.hpp; do
     if [ ! -f "$cache_sol_dir/$header" ]; then
         tmp_file="$cache_sol_dir/$header.tmp"
-        curl -fsSL "${base_url}/$header" -o "$tmp_file"
+        curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL "${base_url}/$header" -o "$tmp_file"
         mv "$tmp_file" "$cache_sol_dir/$header"
     fi
     install -m 0644 "$cache_sol_dir/$header" "$sol_dir/$header"
