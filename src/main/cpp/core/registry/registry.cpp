@@ -501,6 +501,20 @@ bool Registry::loadPlugin(const std::string& name) {
     }
 }
 
+void Registry::unloadPlugin(const std::string& name) {
+    const std::string resolvedName = this->resolvePluginName(name);
+    auto it = m_plugins.find(resolvedName);
+    if (it != m_plugins.end()) {
+        if (m_states[resolvedName] == PluginState::ACTIVE && it->second != nullptr) {
+            it->second->shutdown();
+        }
+        m_plugins.erase(it);
+    }
+
+    m_pluginPaths.erase(resolvedName);
+    m_states.erase(resolvedName);
+}
+
 bool Registry::isLoaded(const std::string& name) const {
     auto it = m_states.find(this->resolvePluginName(name));
     return (it != m_states.end() && it->second == PluginState::ACTIVE);

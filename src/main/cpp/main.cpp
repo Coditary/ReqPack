@@ -100,12 +100,12 @@ DiagnosticMessage stdin_parse_diagnostic(std::size_t lineNumber, const std::stri
     );
 }
 
-DiagnosticMessage stdin_install_only_diagnostic(std::size_t lineNumber) {
+DiagnosticMessage stdin_action_only_diagnostic(std::size_t lineNumber, const std::string& action) {
     return make_error_diagnostic(
         "cli",
-        "stdin line " + std::to_string(lineNumber) + ": only install commands are allowed here",
-        "`rqp install --stdin` accepts only install subcommands.",
-        "Use `rqp serve --stdin` for mixed commands, or keep stdin input to install commands only.",
+        "stdin line " + std::to_string(lineNumber) + ": only " + action + " commands are allowed here",
+        "`rqp " + action + " --stdin` accepts only " + action + " subcommands.",
+        "Use `rqp serve --stdin` for mixed commands, or keep stdin input to " + action + " commands only.",
         {},
         "stdin",
         "batch",
@@ -113,12 +113,12 @@ DiagnosticMessage stdin_install_only_diagnostic(std::size_t lineNumber) {
     );
 }
 
-DiagnosticMessage stdin_empty_batch_diagnostic() {
+DiagnosticMessage stdin_empty_batch_diagnostic(const std::string& action) {
     return make_error_diagnostic(
         "cli",
-        "stdin contained no install commands",
-        "Only comments or empty lines were provided to install batch mode.",
-        "Pipe at least one `install ...` command into rqp or use normal CLI arguments.",
+        "stdin contained no " + action + " commands",
+        "Only comments or empty lines were provided to " + action + " batch mode.",
+        "Pipe at least one payload line or `" + action + " ...` command into rqp, or use normal CLI arguments.",
         {},
         "stdin",
         "batch"
@@ -250,6 +250,14 @@ std::string to_lower(std::string value) {
     return value;
 }
 
+bool is_known_action_token(const std::string& value) {
+    const std::string normalized = to_lower(value);
+    return normalized == "install" || normalized == "remove" || normalized == "update" || normalized == "search" ||
+           normalized == "list" || normalized == "info" || normalized == "ensure" || normalized == "sbom" ||
+           normalized == "audit" || normalized == "outdated" || normalized == "host" || normalized == "snapshot" ||
+           normalized == "pack" || normalized == "serve" || normalized == "remote";
+}
+
 bool is_existing_path(const std::string& value) {
     std::error_code error;
     return std::filesystem::exists(std::filesystem::path(value), error) && !error;
@@ -274,9 +282,9 @@ std::vector<std::string> strip_config_arguments(const std::vector<std::string>& 
     return filtered;
 }
 
-bool is_install_stdin_command(const std::vector<std::string>& arguments) {
+bool is_action_stdin_command(const std::vector<std::string>& arguments, const std::string& action) {
     const std::vector<std::string> filtered = strip_config_arguments(arguments);
-    return filtered.size() >= 2 && filtered.front() == "install" && contains_flag(filtered, "--stdin");
+    return filtered.size() >= 2 && to_lower(filtered.front()) == action && contains_flag(filtered, "--stdin");
 }
 
 std::vector<std::string> inherited_stream_arguments(const std::vector<std::string>& arguments) {
@@ -287,7 +295,7 @@ std::vector<std::string> inherited_stream_arguments(const std::vector<std::strin
 
     for (const std::string& argument : filtered) {
         if (!actionSeen) {
-            if (argument == "install" || argument == "serve") {
+            if (argument == "install" || argument == "remove" || argument == "update" || argument == "serve") {
                 actionSeen = true;
             }
             continue;
@@ -534,6 +542,18 @@ std::vector<std::string> merged_stream_command_arguments(
     merged.insert(merged.end(), commandTokens.begin(), commandTokens.end());
     merged.insert(merged.end(), inheritedArguments.begin(), inheritedArguments.end());
     return merged;
+}
+
+std::vector<std::string> action_stdin_payload_tokens(const std::vector<std::string>& commandTokens, const std::string& action) {
+    if (!commandTokens.empty() && (to_lower(commandTokens.front()) == action || is_known_action_token(commandTokens.front()))) {
+        return commandTokens;
+    }
+
+    std::vector<std::string> expanded;
+    expanded.reserve(commandTokens.size() + 1);
+    expanded.push_back(action);
+    expanded.insert(expanded.end(), commandTokens.begin(), commandTokens.end());
+    return expanded;
 }
 
 bool run_process(const std::vector<std::string>& arguments, const std::filesystem::path& workingDirectory) {
@@ -1313,6 +1333,12 @@ bool is_self_update_command(const std::vector<std::string>& arguments) {
         if (argument == "--all") {
             return false;
         }
+        if (argument == "--stdin" || argument == "--dry-run" || argument == "--prompt-on-unsafe" ||
+            argument == "--abort-on-unsafe" || argument == "--severity-threshold" ||
+            argument == "--score-threshold" || argument == "--jobs" || argument == "--jobs-max" ||
+            argument == "--stop-on-first-failure") {
+            return false;
+        }
         if (argument.rfind("--", 0) == 0) {
             continue;
         }
@@ -1696,7 +1722,13 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
     return 0;
 }
 
-int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::vector<std::string>& inheritedArguments) {
+int run_stdin_action_batch(
+    Cli& cli,
+    const ReqPackConfig& config,
+    const std::vector<std::string>& inheritedArguments,
+    const ActionType expectedAction,
+    const std::string& actionName
+) {
     Logger& logger = Logger::instance();
     const std::vector<StdinCommand> commands = read_stdin_commands(std::cin);
     std::vector<Request> requests;
@@ -1714,7 +1746,8 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
             return 1;
         }
 
-        const std::vector<std::string> mergedTokens = merged_stream_command_arguments(commandTokens, inheritedArguments);
+        const std::vector<std::string> actionTokens = action_stdin_payload_tokens(commandTokens, actionName);
+        const std::vector<std::string> mergedTokens = merged_stream_command_arguments(actionTokens, inheritedArguments);
         const ReqPackConfigOverrides mergedOverrides = extract_cli_config_overrides(mergedTokens);
         if (mergedOverrides.errorMessage.has_value()) {
             logger.diagnostic(config_override_diagnostic("stdin line " + std::to_string(command.lineNumber) + ": " + mergedOverrides.errorMessage.value()));
@@ -1732,8 +1765,8 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
         }
 
         for (const Request& request : parsed) {
-            if (request.action != ActionType::INSTALL) {
-                logger.diagnostic(stdin_install_only_diagnostic(command.lineNumber));
+            if (request.action != expectedAction) {
+                logger.diagnostic(stdin_action_only_diagnostic(command.lineNumber, actionName));
                 return 1;
             }
             requests.push_back(request);
@@ -1741,7 +1774,7 @@ int run_stdin_install_batch(Cli& cli, const ReqPackConfig& config, const std::ve
     }
 
     if (requests.empty()) {
-        logger.diagnostic(stdin_empty_batch_diagnostic());
+        logger.diagnostic(stdin_empty_batch_diagnostic(actionName));
         return 1;
     }
 
@@ -1938,8 +1971,20 @@ int main(int argc, char* argv[]) {
         return result;
     }
 
-    if (is_install_stdin_command(rawArguments)) {
-        const int result = run_stdin_install_batch(cli, config, inherited_stream_arguments(rawArguments));
+    if (is_action_stdin_command(rawArguments, "install")) {
+        const int result = run_stdin_action_batch(cli, config, inherited_stream_arguments(rawArguments), ActionType::INSTALL, "install");
+        curl_global_cleanup();
+        return result;
+    }
+
+    if (is_action_stdin_command(rawArguments, "remove")) {
+        const int result = run_stdin_action_batch(cli, config, inherited_stream_arguments(rawArguments), ActionType::REMOVE, "remove");
+        curl_global_cleanup();
+        return result;
+    }
+
+    if (is_action_stdin_command(rawArguments, "update")) {
+        const int result = run_stdin_action_batch(cli, config, inherited_stream_arguments(rawArguments), ActionType::UPDATE, "update");
         curl_global_cleanup();
         return result;
     }
@@ -1960,6 +2005,25 @@ int main(int argc, char* argv[]) {
 
     if (is_version_command(rawArguments)) {
         logger.stdout(config.applicationName + " " + reqpack_build_release_id());
+        logger.flushSync();
+        curl_global_cleanup();
+        return 0;
+    }
+
+    const std::vector<std::string> filteredArguments = strip_config_arguments(rawArguments);
+    if (filteredArguments.size() == 1 && filteredArguments.front() == "info") {
+        CommandOutput output;
+        output.mode = DisplayMode::INFO;
+        output.sessionItems = {"rqp"};
+        output.blocks.push_back(make_command_field_value_block({
+            {.key = "System", .value = "rqp"},
+            {.key = "Name", .value = config.applicationName},
+            {.key = "Version", .value = reqpack_build_release_id()},
+            {.key = "Description", .value = "ReqPack self metadata"},
+        }));
+        output.success = true;
+        output.succeeded = 1;
+        render_command_output(output);
         logger.flushSync();
         curl_global_cleanup();
         return 0;

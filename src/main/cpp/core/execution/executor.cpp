@@ -22,6 +22,7 @@
 namespace {
 
 constexpr const char* INTERNAL_SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";
+constexpr const char* INTERNAL_ENSURE_ORDER_FLAG_PREFIX = "__reqpack-internal-ensure-order=";
 
 DiagnosticMessage resolution_failure_diagnostic(const std::string& details, const std::string& scope) {
 	return make_error_diagnostic(
@@ -186,6 +187,23 @@ std::vector<PackageInfo> apply_package_result_filters(std::vector<PackageInfo> r
 	return results;
 }
 
+std::vector<PackageInfo> apply_requested_package_subset(std::vector<PackageInfo> results, const std::vector<std::string>& packageSpecifiers) {
+	if (packageSpecifiers.empty()) {
+		return results;
+	}
+
+	std::set<std::string> requestedNames;
+	for (const std::string& specifier : packageSpecifiers) {
+		const std::size_t versionSeparator = specifier.find('@');
+		requestedNames.insert(specifier.substr(0, versionSeparator));
+	}
+
+	results.erase(std::remove_if(results.begin(), results.end(), [&](const PackageInfo& info) {
+		return info.name.empty() || !requestedNames.contains(info.name);
+	}), results.end());
+	return results;
+}
+
 bool samePackage(const Package& left, const Package& right) {
 	return left.action == right.action &&
 		left.system == right.system &&
@@ -200,6 +218,13 @@ std::string packageRequestSpec(const Package& package) {
 		return package.name;
 	}
 	return package.name + "-" + package.version;
+}
+
+std::string package_item_id(const std::string& system, const Package& package) {
+	if (package.version.empty()) {
+		return system + ":" + package.name;
+	}
+	return system + ":" + package.name + "@" + package.version;
 }
 
 bool actionUsesDesiredStateFilter(const ActionType action) {
@@ -309,6 +334,21 @@ bool is_remove_action(ActionType action) {
 	return action == ActionType::REMOVE;
 }
 
+std::optional<std::size_t> internal_ensure_order(const Package& package) {
+	const std::string prefix(INTERNAL_ENSURE_ORDER_FLAG_PREFIX);
+	for (const std::string& flag : package.flags) {
+		if (flag.rfind(prefix, 0) != 0) {
+			continue;
+		}
+		try {
+			return static_cast<std::size_t>(std::stoul(flag.substr(prefix.size())));
+		} catch (...) {
+			return std::nullopt;
+		}
+	}
+	return std::nullopt;
+}
+
 struct ParallelExecutionState {
 	std::mutex mutex;
 	std::condition_variable condition;
@@ -355,7 +395,9 @@ std::vector<PackageInfo> Executer::list(const Request& request) const {
 	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
 	TaskGroup taskGroup{.action = ActionType::LIST, .system = resolvedRequest->system};
 	taskGroup.flags = resolvedRequest->flags;
-	return apply_package_result_filters(plugin->list(this->buildPluginContext(plugin, taskGroup)), resolvedRequest->flags);
+	std::vector<PackageInfo> results = plugin->list(this->buildPluginContext(plugin, taskGroup));
+	results = apply_requested_package_subset(std::move(results), resolvedRequest->packages);
+	return apply_package_result_filters(std::move(results), resolvedRequest->flags);
 }
 
 std::vector<PackageInfo> Executer::outdated(const Request& request) const {
@@ -373,7 +415,9 @@ std::vector<PackageInfo> Executer::outdated(const Request& request) const {
 	IPlugin* plugin = this->registry->getPlugin(resolvedRequest->system);
 	TaskGroup taskGroup{.action = ActionType::OUTDATED, .system = resolvedRequest->system};
 	taskGroup.flags = resolvedRequest->flags;
-	return apply_package_result_filters(plugin->outdated(this->buildPluginContext(plugin, taskGroup)), resolvedRequest->flags);
+	std::vector<PackageInfo> results = plugin->outdated(this->buildPluginContext(plugin, taskGroup));
+	results = apply_requested_package_subset(std::move(results), resolvedRequest->packages);
+	return apply_package_result_filters(std::move(results), resolvedRequest->flags);
 }
 
 std::vector<PackageInfo> Executer::search(const Request& request) const {
@@ -473,9 +517,9 @@ std::optional<Request> Executer::resolveRequest(const Request& request, std::str
 	return resolver.resolveRequest(request, errorMessage);
 }
 
-void Executer::execute(Graph *graph) {
+bool Executer::execute(Graph *graph) {
 	if (graph == nullptr) {
-		return;
+		return false;
 	}
 
 	const int requestedItemCount = this->requestedItemCount;
@@ -486,12 +530,12 @@ void Executer::execute(Graph *graph) {
 	if (this->config.execution.useTransactionDb) {
 		this->startTransactionDb();
 		if (this->transactionDatabase == nullptr || !this->transactionDatabase->ensureReady()) {
-			return;
+			return false;
 		}
 	}
 
 	if (this->config.execution.checkVirtualFileSystemWrite && !this->canWriteToVirtualFileSystem()) {
-		return;
+		return false;
 	}
 
 	std::vector<TaskGroup> taskGroups;
@@ -507,7 +551,7 @@ void Executer::execute(Graph *graph) {
 			}
 		}
 		if (this->transactionDatabase->getActiveRun().has_value()) {
-			return;
+			return false;
 		}
 		this->activeRunId.clear();
 	}
@@ -522,7 +566,7 @@ void Executer::execute(Graph *graph) {
 		}
 		this->activeRunId = this->transactionDatabase->createRun(this->collectPackages(taskGroups), runFlags);
 		if (this->activeRunId.empty()) {
-			return;
+			return false;
 		}
 	}
 
@@ -535,7 +579,7 @@ void Executer::execute(Graph *graph) {
 				itemIds.push_back(tg.system + ":local");
 			} else {
 				for (const Package& pkg : tg.packages) {
-					itemIds.push_back(tg.system + ":" + pkg.name);
+					itemIds.push_back(package_item_id(tg.system, pkg));
 				}
 			}
 		}
@@ -579,6 +623,10 @@ void Executer::execute(Graph *graph) {
 			this->deleteCommittedTransactions();
 		}
 	}
+
+	return std::none_of(allRecords.begin(), allRecords.end(), [](const TransactionRecord& record) {
+		return record.status != "success";
+	});
 }
 
 std::vector<Package> Executer::normalizedRequirements(const Package& package) const {
@@ -867,12 +915,15 @@ std::vector<bool> Executer::updateSystems(const std::vector<Request>& requests) 
 		updateTasks[index].taskGroup = preloadGroups[index];
 	}
 
-	auto execute_update = [&](const TaskGroup& taskGroup) {
+		auto execute_update = [&](const TaskGroup& taskGroup) {
 		if (this->securityGateway.isGatewaySystem(taskGroup.system)) {
 			return this->dispatchTaskGroupToSecurityGateway(taskGroup);
 		}
 		if (taskGroup.pluginLoadFailed) {
 			return false;
+		}
+		if (this->config.execution.dryRun) {
+			return true;
 		}
 		return this->dispatchTaskGroupToPlugin(taskGroup);
 	};
@@ -1200,6 +1251,16 @@ std::vector<Graph::vertex_descriptor> Executer::orderedVertices(const Graph& gra
 		if (levels[a] != levels[b]) {
 			return levels[a] < levels[b];
 		}
+		const std::optional<std::size_t> ensureOrderA = internal_ensure_order(graph[a]);
+		const std::optional<std::size_t> ensureOrderB = internal_ensure_order(graph[b]);
+		if (ensureOrderA.has_value() || ensureOrderB.has_value()) {
+			if (ensureOrderA.has_value() != ensureOrderB.has_value()) {
+				return ensureOrderA.has_value();
+			}
+			if (ensureOrderA.value() != ensureOrderB.value()) {
+				return ensureOrderA.value() < ensureOrderB.value();
+			}
+		}
 		return graph[a].system < graph[b].system;
 	});
 
@@ -1494,7 +1555,7 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 	if (taskGroup.usesLocalTarget) {
 		itemId = taskGroup.system + ":local";
 	} else if (taskGroup.packages.size() == 1) {
-		itemId = taskGroup.system + ":" + taskGroup.packages.front().name;
+		itemId = package_item_id(taskGroup.system, taskGroup.packages.front());
 	}
 
 	return PluginCallContext{
@@ -1538,6 +1599,26 @@ std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGr
 			"Plugin load failed for system '" + taskGroup.system + "'",
 			"ReqPack could not load requested plugin implementation before executing operation."
 		));
+		return records;
+	}
+
+	if (this->config.execution.dryRun) {
+		if (taskGroup.usesLocalTarget) {
+			const std::string itemId = taskGroup.system + ":local";
+			Logger::instance().displayItemBegin(itemId, taskGroup.system);
+			Logger::instance().displayItemSuccess(itemId);
+		} else {
+			for (const Package& package : taskGroup.packages) {
+				const std::string itemId = package_item_id(taskGroup.system, package);
+				Logger::instance().displayItemBegin(itemId, package.name);
+				Logger::instance().displayItemSuccess(itemId);
+			}
+		}
+
+		std::vector<TransactionRecord> records = this->buildSuccessRecords(taskGroup);
+		for (TransactionRecord& record : records) {
+			record.runId = runId;
+		}
 		return records;
 	}
 
@@ -1632,13 +1713,13 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 
 	auto displaySuccess = [&](const std::vector<Package>& packages) {
 		for (const Package& package : packages) {
-			Logger::instance().displayItemSuccess(taskGroup.system + ":" + package.name);
+			Logger::instance().displayItemSuccess(package_item_id(taskGroup.system, package));
 		}
 	};
 
 	auto displayFailure = [&](const std::vector<Package>& packages, const std::string& reason) {
 		for (const Package& package : packages) {
-			Logger::instance().displayItemFailure(taskGroup.system + ":" + package.name, reason);
+			Logger::instance().displayItemFailure(package_item_id(taskGroup.system, package), reason);
 		}
 	};
 
@@ -1649,14 +1730,14 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 	};
 
 	for (const Package& package : taskGroup.packages) {
-		Logger::instance().displayItemBegin(taskGroup.system + ":" + package.name, package.name);
+		Logger::instance().displayItemBegin(package_item_id(taskGroup.system, package), package.name);
 	}
 
 	const TaskGroup& executableTaskGroup = taskGroup;
 
 	if (!this->transactionDatabase->updateItemsStatus(runId, executableTaskGroup.packages, "running")) {
 		for (const Package& package : executableTaskGroup.packages) {
-			Logger::instance().displayItemFailure(taskGroup.system + ":" + package.name,
+			Logger::instance().displayItemFailure(package_item_id(taskGroup.system, package),
 			                                   transaction_update_failure_diagnostic(taskGroup.system));
 		}
 		appendFailureRecords(executableTaskGroup.packages, "transaction update failed");
@@ -1701,7 +1782,7 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 	for (const Package& package : failedPackages) {
 		const bool unavailable = unavailablePackages.find(packageRequestSpec(package)) != unavailablePackages.end();
 		const std::string errorMessage = unavailable ? "package unavailable" : "plugin action failed";
-		Logger::instance().displayItemFailure(taskGroup.system + ":" + package.name,
+		Logger::instance().displayItemFailure(package_item_id(taskGroup.system, package),
 		                                   package_failure_diagnostic(taskGroup.system, package.name, unavailable));
 		appendFailureRecord(package, errorMessage);
 	}

@@ -447,6 +447,21 @@ std::filesystem::path build_tar_gz_archive(
     return archivePath;
 }
 
+std::filesystem::path build_zstd_file_archive(
+    const std::filesystem::path& root,
+    const std::string& sourceName,
+    const std::string& content
+) {
+    const std::filesystem::path sourcePath = root / sourceName;
+    const std::filesystem::path archivePath = root / (sourceName + ".zst");
+    write_file(sourcePath, content);
+
+    const std::string zstdCommand = "zstd -q -f " + escape_shell_arg(sourcePath.string()) + " -o " +
+        escape_shell_arg(archivePath.string());
+    REQUIRE(std::system(zstdCommand.c_str()) == 0);
+    return archivePath;
+}
+
 std::filesystem::path wrap_archive_with_gpg(
     const std::filesystem::path& root,
     const std::filesystem::path& sourcePath,
@@ -2002,6 +2017,44 @@ function plugin.shutdown() return true end
     INFO(output);
     CHECK(output.find("INSTALL: apply:local") != std::string::npos);
     CHECK(output.find("1 ok") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install local zstd file resolves system by extracted filename", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-install-local-zstd-file"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+
+    add_plugin_script(pluginDirectory, "apply", R"(
+plugin = {}
+plugin.fileExtensions = { ".anvilpkg", ".anvilpkg.zst" }
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return false end
+function plugin.installLocal(context, path)
+  local state = context.plugin.dir .. "/state"
+  context.exec.run("mkdir -p '" .. state .. "'")
+  local copy = context.exec.run("test -f '" .. path .. "' && cp '" .. path .. "' '" .. state .. "/artifact.anvilpkg'")
+  return copy.success
+end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0" } end
+function plugin.shutdown() return true end
+)" );
+
+    const std::filesystem::path archivePath = build_zstd_file_archive(tempDir.path(), "artifact.anvilpkg", "hello-zstd-local");
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {"install", archivePath.string()});
+    INFO(output);
+    CHECK(output.find("INSTALL: apply:local") != std::string::npos);
+    CHECK(output.find("1 ok") != std::string::npos);
+    CHECK(read_file(pluginDirectory / "apply" / "state" / "artifact.anvilpkg") == "hello-zstd-local");
 }
 
 TEST_CASE("orchestrator install encrypted local archive accepts CLI password", "[integration][orchestrator][service]") {
@@ -3785,6 +3838,67 @@ TEST_CASE("orchestrator audit system-only request audits installed packages", "[
 
     const std::filesystem::path installMarker = pluginDirectory / "apply" / "state" / "install.txt";
     CHECK_FALSE(std::filesystem::exists(installMarker));
+}
+
+TEST_CASE("orchestrator audit resolves explicit package versions before matching findings", "[integration][orchestrator][service]") {
+    TempDir tempDir{"reqpack-orchestrator-audit-resolve-version"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path feedPath = tempDir.path() / "osv-feed.json";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+
+    write_file(feedPath, R"([
+        {
+            "id": "CVE-2026-resolved",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "resolved package issue",
+            "severity": [{"type": "CVSS_V3", "score": "8.1"}],
+            "affected": [{
+                "package": {"ecosystem": "demo-osv", "name": "resolved"},
+                "versions": ["4.5.6"]
+            }]
+        }
+    ])");
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    osvFeedUrl = '" + feedPath.string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'always',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "apply", SBOM_RESOLVE_PLUGIN);
+
+    int status = 0;
+    const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "audit",
+        "apply",
+        "resolved",
+    }, status);
+
+    CHECK(status != 0);
+    CHECK(output.find("CVE-2026-resolved") != std::string::npos);
+    CHECK(output.find("resolved package issue") != std::string::npos);
+    CHECK(output.find("version unavailable") == std::string::npos);
 }
 
 TEST_CASE("reqpack install stdin batches install commands until eof", "[integration][orchestrator][stdin]") {

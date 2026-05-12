@@ -768,6 +768,14 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().flags.empty());
     }
 
+    SECTION("snapshot preserves output path and force flag") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"snapshot", "--output", "reqpack.lua", "--force"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::SNAPSHOT);
+        CHECK(requests.front().outputPath == "reqpack.lua");
+        CHECK(requests.front().flags == std::vector<std::string>{"force"});
+    }
+
     SECTION("install rejects removed provider-specific security flags") {
         CHECK(cli.parse(std::vector<std::string>{"install", "dnf", "curl", "--snyk"}, config).empty());
         CHECK(cli.parseFailed());
@@ -796,6 +804,54 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         REQUIRE(requests.size() == 2);
         CHECK(requests[0].action == ActionType::AUDIT);
         CHECK(requests[1].action == ActionType::AUDIT);
+
+        std::error_code error;
+        std::filesystem::remove_all(manifestDir, error);
+    }
+
+    SECTION("audit manifest input preserves output format and path before manifest") {
+        const std::filesystem::path manifestDir = std::filesystem::temp_directory_path() / "reqpack-cli-audit-manifest-output-before";
+        std::filesystem::create_directories(manifestDir);
+        const std::filesystem::path manifestPath = manifestDir / "reqpack.lua";
+        {
+            std::ofstream output(manifestPath);
+            REQUIRE(output.is_open());
+            output << "return { packages = { { system = 'dnf', name = 'curl' } } }\n";
+        }
+
+        const std::vector<Request> requests = cli.parse(
+            std::vector<std::string>{"audit", "--format", "json", "--output", "report.json", manifestPath.string()},
+            config
+        );
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::AUDIT);
+        CHECK(requests.front().system == "dnf");
+        CHECK(requests.front().packages == std::vector<std::string>{"curl"});
+        CHECK(requests.front().outputPath == "report.json");
+        CHECK(requests.front().outputFormat == "json");
+
+        std::error_code error;
+        std::filesystem::remove_all(manifestDir, error);
+    }
+
+    SECTION("audit manifest input infers output format from path after manifest") {
+        const std::filesystem::path manifestDir = std::filesystem::temp_directory_path() / "reqpack-cli-audit-manifest-output-after";
+        std::filesystem::create_directories(manifestDir);
+        const std::filesystem::path manifestPath = manifestDir / "reqpack.lua";
+        {
+            std::ofstream output(manifestPath);
+            REQUIRE(output.is_open());
+            output << "return { packages = { { system = 'dnf', name = 'curl' } } }\n";
+        }
+
+        const std::vector<Request> requests = cli.parse(
+            std::vector<std::string>{"audit", manifestPath.string(), "--output", "report.sarif"},
+            config
+        );
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::AUDIT);
+        CHECK(requests.front().outputPath == "report.sarif");
+        CHECK(requests.front().outputFormat == "sarif");
 
         std::error_code error;
         std::filesystem::remove_all(manifestDir, error);

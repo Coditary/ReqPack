@@ -57,6 +57,28 @@ std::string trim_line(std::string value) {
     return value;
 }
 
+bool is_single_file_archive_suffix(const std::string& suffix) {
+    return suffix == ".gz" || suffix == ".bz2" || suffix == ".xz" || suffix == ".zst";
+}
+
+std::string single_file_archive_output_name(const std::filesystem::path& archivePath, const std::string& suffix) {
+    const std::string filename = archivePath.filename().string();
+    if (!is_single_file_archive_suffix(suffix) || filename.size() <= suffix.size()) {
+        return "payload";
+    }
+
+    const std::string outputName = filename.substr(0, filename.size() - suffix.size());
+    return outputName.empty() ? "payload" : outputName;
+}
+
+std::filesystem::path single_file_archive_output_path(
+    const std::filesystem::path& archivePath,
+    const std::filesystem::path& outputDirectory,
+    const std::string& suffix
+) {
+    return outputDirectory / single_file_archive_output_name(archivePath, suffix);
+}
+
 std::filesystem::path make_unique_directory(const std::filesystem::path& root, const std::string& prefix) {
     std::error_code error;
     std::filesystem::create_directories(root, error);
@@ -544,8 +566,8 @@ std::vector<std::string> archive_entries(
     if (suffix == ".7z") {
         return seven_zip_entries(archivePath, options.password, options.interactive, promptPath);
     }
-    if (suffix == ".gz" || suffix == ".bz2" || suffix == ".xz" || suffix == ".zst") {
-        return {"payload"};
+    if (is_single_file_archive_suffix(suffix)) {
+        return {single_file_archive_output_name(archivePath, suffix)};
     }
     return split_lines(run_command_capture("tar -tf " + escape_shell_arg(archivePath.string())));
 }
@@ -609,6 +631,7 @@ void extract_archive_layer_to_directory(
 
     const std::string archive = escape_shell_arg(archivePath.string());
     const std::string output = escape_shell_arg(outputDirectory.string());
+    const std::string singleFileOutput = escape_shell_arg(single_file_archive_output_path(archivePath, outputDirectory, suffix).string());
     if (suffix == ".zip") {
         extract_zip_archive_to_directory(archivePath, outputDirectory, options, promptPath);
     } else if (suffix == ".7z") {
@@ -620,13 +643,13 @@ void extract_archive_layer_to_directory(
             suffix == ".pkg.tar.gz" || suffix == ".pkg.tar.xz" || suffix == ".pkg.tar.zst") {
             command = "tar -xf " + archive + " -C " + output;
         } else if (suffix == ".gz") {
-            command = "gzip -cd " + archive + " > " + output + "/payload";
+            command = "gzip -cd " + archive + " > " + singleFileOutput;
         } else if (suffix == ".bz2") {
-            command = "bzip2 -cd " + archive + " > " + output + "/payload";
+            command = "bzip2 -cd " + archive + " > " + singleFileOutput;
         } else if (suffix == ".xz") {
-            command = "xz -cd " + archive + " > " + output + "/payload";
+            command = "xz -cd " + archive + " > " + singleFileOutput;
         } else if (suffix == ".zst") {
-            command = "zstd -q -d -c " + archive + " > " + output + "/payload";
+            command = "zstd -q -d -c " + archive + " > " + singleFileOutput;
         }
 
         if (command.empty() || run_command_capture_status(command).exitCode != 0) {
@@ -670,7 +693,9 @@ ProcessedArchivePath process_archive_layers(
             std::filesystem::remove_all(outputDirectory, cleanupError);
             throw;
         }
-        result.path = outputDirectory;
+        result.path = is_single_file_archive_suffix(archiveSuffix)
+            ? single_file_archive_output_path(currentPath, outputDirectory, archiveSuffix)
+            : outputDirectory;
         result.changed = true;
         return result;
     }

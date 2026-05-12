@@ -37,6 +37,8 @@ private:
 	bool shouldRefreshMainRegistry() const;
 	bool shouldRefreshPluginWrappers() const;
 	bool shouldRunSystemWidePackageUpdates() const;
+	int runPluginInstallRequests();
+	int runPluginRemoveRequests();
 	int runPluginWrapperRefresh();
 	int runSystemWidePackageUpdates();
 };

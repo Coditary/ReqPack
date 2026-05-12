@@ -605,6 +605,9 @@ bool SbomExporter::exportGraph(const Graph& graph, const Request& request) const
         const bool force = std::find(request.flags.begin(), request.flags.end(), "force") != request.flags.end();
         if (!force) {
 			Logger& logger = Logger::instance();
+			if (!this->config.interaction.interactive) {
+				return false;
+			}
 			logger.stdout(resolvedOutputPath + " already exists. Overwrite? [y/N]");
 			logger.flushSync();
             std::string answer;

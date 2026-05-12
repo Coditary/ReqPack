@@ -492,6 +492,87 @@ std::optional<std::vector<Package>> packages_from_lua_object(const sol::object& 
     return packages;
 }
 
+bool packages_match_exact_without_action(const Package& left, const Package& right) {
+    return left.system == right.system &&
+           left.name == right.name &&
+           left.version == right.version &&
+           left.sourcePath == right.sourcePath &&
+           left.localTarget == right.localTarget;
+}
+
+bool packages_match_loose_without_action(const Package& candidate, const Package& original) {
+    if (!candidate.system.empty() && candidate.system != original.system) {
+        return false;
+    }
+    if (!candidate.name.empty() && candidate.name != original.name) {
+        return false;
+    }
+    if (!candidate.version.empty() && candidate.version != original.version) {
+        return false;
+    }
+    if (!candidate.sourcePath.empty() && candidate.sourcePath != original.sourcePath) {
+        return false;
+    }
+    if (candidate.localTarget && !original.localTarget) {
+        return false;
+    }
+    return !candidate.name.empty() || !candidate.sourcePath.empty();
+}
+
+void inherit_missing_package_fields(const std::vector<Package>& sourcePackages, std::vector<Package>& packages) {
+    std::vector<bool> matched(sourcePackages.size(), false);
+
+    auto apply_defaults = [](Package& target, const Package& source) {
+        if (target.action == ActionType::UNKNOWN) {
+            target.action = source.action;
+        }
+        if (target.system.empty()) {
+            target.system = source.system;
+        }
+        if (target.name.empty()) {
+            target.name = source.name;
+        }
+        if (target.version.empty()) {
+            target.version = source.version;
+        }
+        if (target.sourcePath.empty()) {
+            target.sourcePath = source.sourcePath;
+        }
+        if (target.flags.empty()) {
+            target.flags = source.flags;
+        }
+        target.localTarget = target.localTarget || source.localTarget;
+        target.directRequest = target.directRequest || source.directRequest;
+    };
+
+    auto find_match_index = [&](const Package& candidate, const bool loose) {
+        for (std::size_t index = 0; index < sourcePackages.size(); ++index) {
+            if (matched[index]) {
+                continue;
+            }
+            const bool matches = loose
+                ? packages_match_loose_without_action(candidate, sourcePackages[index])
+                : packages_match_exact_without_action(candidate, sourcePackages[index]);
+            if (matches) {
+                return index;
+            }
+        }
+        return sourcePackages.size();
+    };
+
+    for (Package& package : packages) {
+        std::size_t matchIndex = find_match_index(package, false);
+        if (matchIndex == sourcePackages.size()) {
+            matchIndex = find_match_index(package, true);
+        }
+        if (matchIndex == sourcePackages.size()) {
+            continue;
+        }
+        matched[matchIndex] = true;
+        apply_defaults(package, sourcePackages[matchIndex]);
+    }
+}
+
 std::optional<Package> package_from_lua_object(const sol::object& value) {
     if (!value.valid()) {
         return std::nullopt;
@@ -1585,7 +1666,9 @@ std::vector<Package> LuaBridge::getMissingPackages(const std::vector<Package>& p
 
         if (const sol::object value = result.get<sol::object>(); value.valid()) {
             if (const auto missingPackages = packages_from_lua_object(value)) {
-                return missingPackages.value();
+                std::vector<Package> normalizedPackages = missingPackages.value();
+                inherit_missing_package_fields(packages, normalizedPackages);
+                return normalizedPackages;
             }
         }
 

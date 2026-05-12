@@ -1,17 +1,21 @@
-.PHONY: all clean run build test test-unit test-smoke coverage-build test-coverage profile-build profile-tests
+.PHONY: all clean run build test test-unit test-smoke coverage-build test-coverage profile-build profile-tests system-tests system-tests-parallel
 
-JOBS := $(shell command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+NPROC := $(shell command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+JOBS := $(shell expr $(NPROC) / 4)
 COVERAGE_BUILD_DIR := build/coverage
 PROFILE_BUILD_DIR := build/profile
 PROFILE_TEST_BINARIES := core_unit_tests exec_rules_unit_tests core_integration_tests
 PROFILE_GPROF_RUNS := 5
 PYTHON := python3
+LOCAL_BUILD_CMAKE_ARGS := -DREQPACK_LINK_STATIC_LUA:BOOL=OFF -DCMAKE_EXE_LINKER_FLAGS:STRING=
+LOCAL_SYSTEM_TEST_JOBS ?= $(JOBS)
+LOCAL_SYSTEM_TEST_BUILD_JOBS ?=
 
 all: build
 	cmake --build build -j$(JOBS)
 
 build:
-	cmake -S . -B build
+	cmake -S . -B build $(LOCAL_BUILD_CMAKE_ARGS)
 
 run: all
 	@echo
@@ -28,6 +32,12 @@ test-unit: all
 
 test-smoke: all
 	@ctest --test-dir build --output-on-failure -R "^integration::"
+
+system-tests:
+	@LOCAL_SYSTEM_TEST_BUILD_JOBS="$(LOCAL_SYSTEM_TEST_BUILD_JOBS)" bash scripts/run-all-local-system-tests.sh $(LOCAL_SYSTEM_TEST_SCENARIOS)
+
+system-tests-parallel:
+	@JOBS="$(LOCAL_SYSTEM_TEST_JOBS)" LOCAL_SYSTEM_TEST_BUILD_JOBS="$(LOCAL_SYSTEM_TEST_BUILD_JOBS)" bash scripts/run-all-local-system-tests-parallel.sh $(LOCAL_SYSTEM_TEST_SCENARIOS)
 
 coverage-build:
 	cmake -S . -B $(COVERAGE_BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug -DREQPACK_ENABLE_COVERAGE=ON

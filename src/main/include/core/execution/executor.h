@@ -91,7 +91,7 @@ public:
 	~Executer();
 
 	void setRequestedItemCount(int count, bool inputAlreadyFiltered = false) const;
-	void execute(Graph *graph);
+	bool execute(Graph *graph);
 	bool updateSystem(const Request& request) const;
 	std::vector<bool> updateSystems(const std::vector<Request>& requests) const;
 	std::vector<PackageInfo> list(const Request& request) const;

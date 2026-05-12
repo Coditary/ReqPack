@@ -442,7 +442,7 @@ std::optional<Package> find_matching_package(const Graph& graph, const Validatio
     return std::nullopt;
 }
 
-bool write_output_file(const std::string& rendered, const Request& request, const std::string& outputPath) {
+bool write_output_file(const std::string& rendered, const Request& request, const std::string& outputPath, const bool interactive) {
     std::filesystem::path filePath(outputPath);
     if (filePath.is_relative()) {
         filePath = std::filesystem::current_path() / filePath;
@@ -453,6 +453,9 @@ bool write_output_file(const std::string& rendered, const Request& request, cons
         const bool force = std::find(request.flags.begin(), request.flags.end(), "force") != request.flags.end();
         if (!force) {
 			Logger& logger = Logger::instance();
+			if (!interactive) {
+				return false;
+			}
 			logger.stdout(resolvedOutputPath + " already exists. Overwrite? [y/N]");
 			logger.flushSync();
             std::string answer;
@@ -843,5 +846,5 @@ bool AuditExporter::exportGraph(const Graph& graph, const std::vector<Validation
         return true;
     }
 
-    return write_output_file(rendered, request, outputPath);
+    return write_output_file(rendered, request, outputPath, this->config.interaction.interactive);
 }

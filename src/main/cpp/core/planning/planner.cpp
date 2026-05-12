@@ -15,8 +15,32 @@
 
 namespace {
 
+constexpr const char* INTERNAL_ENSURE_ORDER_FLAG_PREFIX = "__reqpack-internal-ensure-order=";
+
 std::filesystem::path requirementsMarkerPath(const ReqPackConfig& config, const std::string& system) {
 	return plugin_bundle_ready_marker_path(std::filesystem::path(config.registry.pluginDirectory) / system);
+}
+
+void set_internal_ensure_order_flag(Package& package, const std::size_t order) {
+	const std::string prefix(INTERNAL_ENSURE_ORDER_FLAG_PREFIX);
+	package.flags.erase(std::remove_if(package.flags.begin(), package.flags.end(), [&](const std::string& flag) {
+		return flag.rfind(prefix, 0) == 0;
+	}), package.flags.end());
+	package.flags.push_back(prefix + std::to_string(order));
+}
+
+void propagate_internal_ensure_order_flag(const Package& source, Package& target) {
+	const std::string prefix(INTERNAL_ENSURE_ORDER_FLAG_PREFIX);
+	const auto it = std::find_if(source.flags.begin(), source.flags.end(), [&](const std::string& flag) {
+		return flag.rfind(prefix, 0) == 0;
+	});
+	if (it == source.flags.end()) {
+		return;
+	}
+	target.flags.erase(std::remove_if(target.flags.begin(), target.flags.end(), [&](const std::string& flag) {
+		return flag.rfind(prefix, 0) == 0;
+	}), target.flags.end());
+	target.flags.push_back(*it);
 }
 
 Package resolveDependencySystem(Package dependency, const Registry* registry) {
@@ -225,7 +249,8 @@ std::vector<Request> Planner::filterRequestedPackages(const std::vector<Request>
 std::vector<Package> Planner::collectPluginDependencies(const std::vector<Request>& requests) const {
 	std::vector<Package> dependencies;
 
-	for (const Request& request : requests) {
+	for (std::size_t requestIndex = 0; requestIndex < requests.size(); ++requestIndex) {
+		const Request& request = requests[requestIndex];
 		if (this->gatewayExists(request.system)) {
 			continue;
 		}
@@ -235,7 +260,10 @@ std::vector<Package> Planner::collectPluginDependencies(const std::vector<Reques
 		}
 
 		for (Package dependency : plugin_bundle_dependency_packages(layout.value())) {
-			dependencies.push_back(resolveDependencySystem(planner_normalize_dependency(std::move(dependency), request.system), this->registry));
+			Package normalizedDependency = resolveDependencySystem(planner_normalize_dependency(std::move(dependency), request.system), this->registry);
+			normalizedDependency.action = ActionType::ENSURE;
+			set_internal_ensure_order_flag(normalizedDependency, requestIndex);
+			dependencies.push_back(std::move(normalizedDependency));
 		}
 	}
 
@@ -400,6 +428,10 @@ void Planner::addPackageToGraph(Graph& graph, const Package& package) const {
 			std::vector<Package> normalizedDependencies;
 			for (Package dependency : plugin_bundle_dependency_packages(layout.value())) {
 				Package normalizedDependency = resolveDependencySystem(planner_normalize_dependency(std::move(dependency), currentPackage.system), this->registry);
+				if (currentPackage.action == ActionType::ENSURE) {
+					normalizedDependency.action = ActionType::ENSURE;
+					propagate_internal_ensure_order_flag(currentPackage, normalizedDependency);
+				}
 				normalizedDependency.directRequest = false;
 				normalizedDependencies.push_back(std::move(normalizedDependency));
 			}

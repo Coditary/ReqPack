@@ -361,6 +361,30 @@ TEST_CASE("audit exporter reports file-open failure through logger diagnostics",
     }));
 }
 
+TEST_CASE("audit exporter aborts existing output silently when non-interactive", "[unit][audit][export]") {
+    TempDir tempDir{"reqpack-audit-existing-non-interactive"};
+    ReqPackConfig config = default_reqpack_config();
+    config.interaction.interactive = false;
+    AuditExporter exporter(nullptr, config);
+
+    Request request;
+    request.action = ActionType::AUDIT;
+    request.outputPath = (tempDir.path() / "audit.json").string();
+
+    std::ofstream existing(request.outputPath, std::ios::binary);
+    REQUIRE(existing.is_open());
+    existing << "keep-me";
+    existing.close();
+
+    RecordingDisplay display;
+    ScopedLoggerDisplay displayGuard(&display);
+
+    CHECK_FALSE(exporter.exportGraph(make_graph(), make_findings(), request));
+    Logger::instance().flushSync();
+    CHECK(read_file(request.outputPath) == "keep-me");
+    CHECK(display.messages.empty());
+}
+
 TEST_CASE("audit exporter formats maven purls in cyclonedx vex output", "[unit][audit][export]") {
     StaticMetadataProvider metadataProvider;
     metadataProvider.metadata["maven"] = PluginSecurityMetadata{

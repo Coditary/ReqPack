@@ -71,6 +71,19 @@ DiagnosticMessage mixed_local_and_package_diagnostic(const std::string& system) 
     );
 }
 
+DiagnosticMessage unknown_search_system_diagnostic(const std::string& system) {
+	return make_error_diagnostic(
+		"cli",
+		"Unknown search system: '" + system + "'",
+		"Search requires one explicit known system before query terms.",
+		"Use `rqp search <system> <query>` with installed or registered plugin name.",
+		{},
+		"cli",
+		"search",
+		{{"system", system}}
+	);
+}
+
 std::string to_lower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
@@ -93,7 +106,8 @@ bool is_url(const std::string& value) {
 }
 
 bool supports_manifest_path(ActionType action) {
-    return action == ActionType::INSTALL || action == ActionType::AUDIT;
+    return action == ActionType::INSTALL || action == ActionType::REMOVE || action == ActionType::UPDATE || action == ActionType::AUDIT ||
+           action == ActionType::LIST || action == ActionType::OUTDATED;
 }
 
 bool action_supports_output_path(ActionType action) {
@@ -166,6 +180,30 @@ bool consume_package_result_filter_flag(ActionType action,
 
 bool has_flag(const std::vector<std::string>& flags, const std::string& name) {
 	return std::find(flags.begin(), flags.end(), name) != flags.end();
+}
+
+bool matches_flag_name(const std::string& argument, const std::string& name) {
+	return argument == name || argument.rfind(name + "=", 0) == 0;
+}
+
+bool update_command_has_package_mode_flag(const std::vector<std::string>& arguments) {
+	bool updateSeen = false;
+	for (const std::string& argument : arguments) {
+		if (!updateSeen) {
+			if (to_lower(argument) == "update") {
+				updateSeen = true;
+			}
+			continue;
+		}
+
+		if (matches_flag_name(argument, "--dry-run") || matches_flag_name(argument, "--prompt-on-unsafe") ||
+		    matches_flag_name(argument, "--abort-on-unsafe") || matches_flag_name(argument, "--severity-threshold") ||
+		    matches_flag_name(argument, "--score-threshold") || matches_flag_name(argument, "--jobs") ||
+		    matches_flag_name(argument, "--jobs-max") || matches_flag_name(argument, "--stop-on-first-failure")) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool is_removed_security_backend_flag(const std::string& argument) {
@@ -447,6 +485,97 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 		}
 	}
 
+	const bool updateUsesSystemWidePackageMode = action == ActionType::UPDATE && update_command_has_package_mode_flag(arguments);
+
+    auto consume_request_flag = [&](std::size_t& index, std::vector<std::string>& flags) -> bool {
+        const std::string& argument = requestArguments[index];
+        const std::size_t previousFlagCount = flags.size();
+        if (consume_package_result_filter_flag(action, requestArguments, index, flags)) {
+            if (flags.size() == previousFlagCount) {
+                lastParseFailed_ = true;
+                return false;
+            }
+            return true;
+        }
+        if (action == ActionType::SBOM && argument == "--format") {
+            if (index + 1 >= requestArguments.size()) {
+                lastParseFailed_ = true;
+                return false;
+            }
+            sbomOutputFormat = requestArguments[++index];
+            if (!sbom_output_format_from_string(sbomOutputFormat).has_value()) {
+                lastParseFailed_ = true;
+                return false;
+            }
+            return true;
+        }
+        if (action == ActionType::SBOM && argument == "--output") {
+            if (index + 1 >= requestArguments.size()) {
+                lastParseFailed_ = true;
+                return false;
+            }
+            sbomOutputPath = requestArguments[++index];
+            return true;
+        }
+        if (action == ActionType::AUDIT && argument == "--format") {
+            if (index + 1 >= requestArguments.size()) {
+                lastParseFailed_ = true;
+                return false;
+            }
+            auditOutputFormat = requestArguments[++index];
+            if (!audit_output_format_from_string(auditOutputFormat).has_value()) {
+                lastParseFailed_ = true;
+                return false;
+            }
+            return true;
+        }
+        if (action == ActionType::AUDIT && argument == "--output") {
+            if (index + 1 >= requestArguments.size()) {
+                lastParseFailed_ = true;
+                return false;
+            }
+            auditOutputPath = requestArguments[++index];
+            return true;
+        }
+        if (action == ActionType::SNAPSHOT && argument == "--output") {
+            if (index + 1 >= requestArguments.size()) {
+                lastParseFailed_ = true;
+                return false;
+            }
+            snapshotOutputPath = requestArguments[++index];
+            return true;
+        }
+        flags.push_back(argument.substr(2));
+        return true;
+    };
+
+    auto assign_request_output_options = [&](Request& request) {
+        if (action == ActionType::SBOM) {
+            request.outputPath = sbomOutputPath;
+            if (!sbomOutputFormat.empty()) {
+                request.outputFormat = sbomOutputFormat;
+            } else if (!sbomOutputPath.empty()) {
+                request.outputFormat = to_string(SbomOutputFormat::CYCLONEDX_JSON);
+            } else {
+                request.outputFormat = to_string(config.sbom.defaultFormat);
+            }
+        }
+        if (action == ActionType::AUDIT) {
+            request.outputPath = auditOutputPath;
+            if (!auditOutputFormat.empty()) {
+                request.outputFormat = auditOutputFormat;
+            } else if (!auditOutputPath.empty()) {
+                const auto inferred = infer_audit_output_format_from_path(auditOutputPath);
+                request.outputFormat = to_string(inferred.value_or(AuditOutputFormat::CYCLONEDX_VEX_JSON));
+            } else {
+                request.outputFormat = to_string(AuditOutputFormat::TABLE);
+            }
+        }
+        if (action == ActionType::SNAPSHOT) {
+            request.outputPath = snapshotOutputPath;
+        }
+    };
+
     // Manifest mode: reqpack install <dir-path>
     // If the first non-flag argument after the action looks like a filesystem path
     // and resolves to a directory, load reqpack.lua from it.
@@ -454,6 +583,9 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
         for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
             const std::string& arg = requestArguments[i];
             if (is_flag(arg)) {
+                if (!consume_request_flag(i, global_flags)) {
+                    return {};
+                }
                 continue;
             }
 
@@ -486,7 +618,9 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
             // Collect global flags from remaining arguments after the path.
             for (std::size_t j = i + 1; j < requestArguments.size(); ++j) {
                 if (is_flag(requestArguments[j])) {
-                    global_flags.push_back(requestArguments[j].substr(2));
+                    if (!consume_request_flag(j, global_flags)) {
+                        return {};
+                    }
                 }
             }
 
@@ -499,7 +633,6 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
                     requests.push_back(Request{.action = action, .system = normalized});
                 }
                 Request& req = requests[it->second];
-                // Encode version as name@version when present — plugins can parse this.
                 const std::string pkgSpec =
                     entry.version.empty() ? entry.name : (entry.name + "@" + entry.version);
                 req.packages.push_back(pkgSpec);
@@ -513,6 +646,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
                 for (const std::string& f : global_flags) {
                     req.flags.push_back(f);
                 }
+                assign_request_output_options(req);
             }
 
             return requests;
@@ -546,63 +680,9 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 		const std::string normalized_argument = to_lower(argument);
 
 		if (is_flag(argument)) {
-			const std::size_t previousFlagCount = global_flags.size();
-			if (consume_package_result_filter_flag(action, requestArguments, i, global_flags)) {
-				if (global_flags.size() == previousFlagCount) {
-					lastParseFailed_ = true;
-					return {};
-				}
-				continue;
+			if (!consume_request_flag(i, global_flags)) {
+				return {};
 			}
-			if (action == ActionType::SBOM && argument == "--format") {
-                if (i + 1 >= requestArguments.size()) {
-                    lastParseFailed_ = true;
-                    return {};
-                }
-                sbomOutputFormat = requestArguments[++i];
-                if (!sbom_output_format_from_string(sbomOutputFormat).has_value()) {
-                    lastParseFailed_ = true;
-                    return {};
-                }
-                continue;
-            }
-            if (action_supports_output_path(action) && action == ActionType::SBOM && argument == "--output") {
-                if (i + 1 >= requestArguments.size()) {
-                    lastParseFailed_ = true;
-                    return {};
-                }
-                sbomOutputPath = requestArguments[++i];
-                continue;
-            }
-            if (action == ActionType::AUDIT && argument == "--format") {
-                if (i + 1 >= requestArguments.size()) {
-                    lastParseFailed_ = true;
-                    return {};
-                }
-                auditOutputFormat = requestArguments[++i];
-                if (!audit_output_format_from_string(auditOutputFormat).has_value()) {
-                    lastParseFailed_ = true;
-                    return {};
-                }
-                continue;
-            }
-            if (action == ActionType::AUDIT && argument == "--output") {
-                if (i + 1 >= requestArguments.size()) {
-                    lastParseFailed_ = true;
-                    return {};
-                }
-                auditOutputPath = requestArguments[++i];
-                continue;
-            }
-            if (action == ActionType::SNAPSHOT && argument == "--output") {
-                if (i + 1 >= requestArguments.size()) {
-                    lastParseFailed_ = true;
-                    return {};
-                }
-                snapshotOutputPath = requestArguments[++i];
-                continue;
-            }
-			global_flags.push_back(argument.substr(2));
 			continue;
 		}
 
@@ -610,6 +690,12 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 			ensure_request(normalized_argument);
 			current_system = normalized_argument;
 			continue;
+		}
+
+		if (action == ActionType::SEARCH && current_system.empty()) {
+			Logger::instance().diagnostic(unknown_search_system_diagnostic(argument));
+			lastParseFailed_ = true;
+			return {};
 		}
 
         // URL detection: handle before scoped-package and system-name checks.
@@ -666,10 +752,10 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
             continue;
         }
 
-        if (!current_system_prefers_package_tokens(current_system, action) && known_systems.contains(normalized_argument)) {
-            ensure_request(normalized_argument);
-            current_system = normalized_argument;
-            continue;
+		if (action != ActionType::SEARCH && !current_system_prefers_package_tokens(current_system, action) && known_systems.contains(normalized_argument)) {
+			ensure_request(normalized_argument);
+			current_system = normalized_argument;
+			continue;
         }
 
         Request& request = ensure_request(current_system);
@@ -702,30 +788,11 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 
     for (Request& request : requests) {
         request.flags = global_flags;
-        if (action == ActionType::SBOM) {
-            request.outputPath = sbomOutputPath;
-            if (!sbomOutputFormat.empty()) {
-                request.outputFormat = sbomOutputFormat;
-            } else if (!sbomOutputPath.empty()) {
-                request.outputFormat = to_string(SbomOutputFormat::CYCLONEDX_JSON);
-            } else {
-                request.outputFormat = to_string(config.sbom.defaultFormat);
-            }
+        if (action == ActionType::UPDATE && updateUsesSystemWidePackageMode && !request.system.empty() && request.system != "sys" &&
+            request.system != "rqp" && !request.usesLocalTarget && request.packages.empty() && !has_flag(request.flags, "all")) {
+            request.flags.push_back("all");
         }
-        if (action == ActionType::AUDIT) {
-            request.outputPath = auditOutputPath;
-            if (!auditOutputFormat.empty()) {
-                request.outputFormat = auditOutputFormat;
-            } else if (!auditOutputPath.empty()) {
-                const auto inferred = infer_audit_output_format_from_path(auditOutputPath);
-                request.outputFormat = to_string(inferred.value_or(AuditOutputFormat::CYCLONEDX_VEX_JSON));
-            } else {
-                request.outputFormat = to_string(AuditOutputFormat::TABLE);
-            }
-        }
-        if (action == ActionType::SNAPSHOT) {
-            request.outputPath = snapshotOutputPath;
-        }
+        assign_request_output_options(request);
     }
 
 	if (action == ActionType::UPDATE && requests.empty() && has_flag(global_flags, "all")) {
@@ -737,17 +804,14 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
 	}
 
     if (action == ActionType::SBOM && requests.empty()) {
-        Request request;
-        request.action = action;
-        request.outputPath = sbomOutputPath;
-        if (!sbomOutputFormat.empty()) {
-            request.outputFormat = sbomOutputFormat;
-        } else if (!sbomOutputPath.empty()) {
-            request.outputFormat = to_string(SbomOutputFormat::CYCLONEDX_JSON);
-        } else {
-            request.outputFormat = to_string(config.sbom.defaultFormat);
+        for (const std::string& system : discover_primary_systems(config)) {
+            Request request;
+            request.action = action;
+            request.system = system;
+            request.flags = global_flags;
+            assign_request_output_options(request);
+            requests.push_back(std::move(request));
         }
-        requests.push_back(std::move(request));
     }
 
     if (action == ActionType::AUDIT && requests.empty()) {
@@ -772,6 +836,7 @@ std::vector<Request> Cli::parse(const std::vector<std::string>& arguments, const
     if (action == ActionType::SNAPSHOT && requests.empty()) {
         Request request;
         request.action = action;
+        request.flags = global_flags;
         request.outputPath = snapshotOutputPath;
         requests.push_back(std::move(request));
     }
@@ -864,7 +929,7 @@ void Cli::print_command_help(ActionType action) {
                 "When a directory path is given (e.g. '.', './myproject', '/abs/path'),\n"
                 "rqp reads a reqpack.lua manifest from that directory and installs\n"
                 "all packages declared in it.\n"
-                "When --stdin is given, rqp reads full install commands from stdin\n"
+                "When --stdin is given, rqp reads install payload lines or full install commands\n"
                 "until EOF, then executes them as one combined install batch.\n"
                 "\n"
                 "Arguments:\n"
@@ -884,7 +949,7 @@ void Cli::print_command_help(ActionType action) {
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
-                "  --stdin                 Read install commands from stdin until EOF\n"
+                "  --stdin                 Read install payload lines or commands from stdin until EOF\n"
                 "  --dry-run               Show planned actions without executing them\n"
                 "  --prompt-on-unsafe      Prompt before installing vulnerable packages\n"
                 "  --abort-on-unsafe       Abort if vulnerable packages are found\n"
@@ -912,35 +977,54 @@ void Cli::print_command_help(ActionType action) {
             help =
                 "Usage: rqp remove <system> [<package>...] [options]\n"
                 "       rqp remove <system1>:<package> <system2>:<package> [options]\n"
+                "       rqp remove <dir-path> [options]\n"
+                "       rqp remove --stdin [options]\n"
                 "\n"
                 "Remove packages from one or more package managers.\n"
+                "When a directory path is given (e.g. '.', './myproject', '/abs/path'),\n"
+                "rqp reads a reqpack.lua manifest from that directory and removes\n"
+                "all packages declared in it.\n"
+                "When --stdin is given, rqp reads remove payload lines or full remove commands\n"
+                "until EOF, then executes them as one combined remove batch.\n"
                 "\n"
                 "Arguments:\n"
                 "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
                 "  <package>               One or more package names to remove\n"
                 "  <system>:<package>      Scoped package for a specific system\n"
+                "  <dir-path>              Directory containing a reqpack.lua manifest\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
+                "  --stdin                 Read remove commands from stdin until EOF\n"
                 "  --dry-run               Show planned actions without executing them\n"
+                "  --jobs <n>             Use exactly n workers for independent groups\n"
+                "  --jobs-max             Use all logical CPU threads as workers\n"
                 "  --stop-on-first-failure Stop after the first failing system\n"
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
                 "Examples:\n"
                 "  rqp remove apt curl\n"
                 "  rqp remove npm express brew jq\n"
-                "  rqp remove apt:curl npm:lodash\n";
+                "  rqp remove apt:curl npm:lodash\n"
+                "  rqp remove .\n"
+                "  printf 'remove dnf curl\nremove npm express\n' | rqp remove --stdin\n";
             break;
         case ActionType::UPDATE:
             help =
                 "Usage: rqp update [options]\n"
                 "       rqp update <system> [<package>...] [options]\n"
                 "       rqp update <system1>:<package> <system2>:<package> [options]\n"
+                "       rqp update <dir-path> [options]\n"
+                "       rqp update <manifest-path>/reqpack.lua [options]\n"
+                "       rqp update --stdin [options]\n"
                 "\n"
                 "Update ReqPack itself, plugin wrappers, or packages for one or more package managers.\n"
                 "Without a system argument, ReqPack downloads matching release binary from its configured release source.\n"
                 "With a system argument and no package list, ReqPack refreshes that plugin wrapper to its newest tagged version when the source is Git-backed.\n"
                 "Use '--all' with a system to update all packages for that system instead.\n"
+                "Directory and direct reqpack.lua manifest input update all declared packages.\n"
+                "When --stdin is given, rqp reads update payload lines or full update commands\n"
+                "until EOF, then executes them as one combined update batch.\n"
                 "Use 'rqp update --all' to refresh all known plugin wrappers.\n"
                 "To update a package-manager binary itself through ReqPack's wrapper layer, use 'rqp update sys <tool>'.\n"
                 "\n"
@@ -948,15 +1032,20 @@ void Cli::print_command_help(ActionType action) {
                 "  <system>                Package manager to use (e.g. apt, brew, npm)\n"
                 "  <package>               One or more package names to update (optional)\n"
                 "  <system>:<package>      Scoped package for a specific system\n"
+                "  <dir-path>              Directory containing a reqpack.lua manifest\n"
+                "  <manifest-path>         Explicit reqpack.lua manifest file\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
+                "  --stdin                 Read update payload lines or commands from stdin until EOF\n"
                 "  --dry-run               Show planned actions without executing them\n"
                 "  --all                   Update all packages for system, or all plugin wrappers without a system\n"
                 "  --prompt-on-unsafe      Prompt before applying vulnerable updates\n"
                 "  --abort-on-unsafe       Abort if vulnerable packages are found\n"
                 "  --severity-threshold    Minimum severity to flag (low/medium/high/critical)\n"
                 "  --score-threshold       Minimum CVSS score to flag (0.0-10.0)\n"
+                "  --jobs <n>             Use exactly n workers for independent groups\n"
+                "  --jobs-max             Use all logical CPU threads as workers\n"
                 "  --stop-on-first-failure Stop after the first failing system\n"
                 "  --non-interactive       Disable all prompts (use defaults)\n"
                 "\n"
@@ -965,10 +1054,13 @@ void Cli::print_command_help(ActionType action) {
                 "  rqp update --all\n"
                 "  rqp update pip\n"
                 "  rqp update pip --all\n"
-                "  rqp update apt\n"
+                "  rqp update apt --dry-run\n"
                 "  rqp update npm express brew\n"
                 "  rqp update sys pip\n"
-                "  rqp update apt:curl npm:express\n";
+                "  rqp update apt:curl npm:express\n"
+                "  rqp update .\n"
+                "  rqp update ./reqpack.lua\n"
+                "  printf 'update dnf curl\\nquill:zeno\\n' | rqp update --stdin\n";
             break;
         case ActionType::SEARCH:
             help =
@@ -995,13 +1087,15 @@ void Cli::print_command_help(ActionType action) {
             break;
         case ActionType::LIST:
             help =
-                "Usage: rqp list [<system>] [options]\n"
+                "Usage: rqp list [<system>|<dir-path>] [options]\n"
                 "\n"
                 "List installed packages for a package manager.\n"
                 "If no system is specified, all known primary systems are queried.\n"
+                "Directory input loads reqpack.lua and lists matching installed packages.\n"
                 "\n"
                 "Arguments:\n"
                 "  <system>                Package manager to list packages for (optional)\n"
+                "  <dir-path>              Directory containing a reqpack.lua manifest\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
@@ -1014,24 +1108,28 @@ void Cli::print_command_help(ActionType action) {
                 "  rqp list apt\n"
                 "  rqp list npm\n"
                 "  rqp list brew\n"
+                "  rqp list .\n"
+                "  rqp list ./project\n"
                 "  rqp list dnf --arch x86_64\n"
                 "  rqp list dnf --type doc --type devel\n";
             break;
         case ActionType::INFO:
             help =
-                "Usage: rqp info <system> <package> [options]\n"
+                "Usage: rqp info [<system> [<package>]] [options]\n"
                 "\n"
-                "Show detailed information about a package.\n"
+                "Show detailed information about ReqPack, plugin wrapper, or package.\n"
                 "\n"
                 "Arguments:\n"
-                "  <system>                Package manager to query (e.g. apt, brew, npm)\n"
-                "  <package>               Package name to get info for\n"
+                "  <system>                Package manager or plugin wrapper to query (optional)\n"
+                "  <package>               Package name to get info for (optional)\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
                 "  --non-interactive       Disable all prompts\n"
                 "\n"
                 "Examples:\n"
+                "  rqp info\n"
+                "  rqp info apt\n"
                 "  rqp info apt curl\n"
                 "  rqp info npm express\n"
                 "  rqp info brew jq\n";
@@ -1116,13 +1214,15 @@ void Cli::print_command_help(ActionType action) {
             break;
         case ActionType::OUTDATED:
             help =
-                "Usage: rqp outdated [<system>] [options]\n"
+                "Usage: rqp outdated [<system>|<dir-path>] [options]\n"
                 "\n"
                 "Show packages that have newer versions available.\n"
                 "If no system is specified, all known primary systems are queried.\n"
+                "Directory input loads reqpack.lua and shows matching outdated installed packages.\n"
                 "\n"
                 "Arguments:\n"
                 "  <system>                Package manager to check (optional)\n"
+                "  <dir-path>              Directory containing a reqpack.lua manifest\n"
                 "\n"
                 "Options:\n"
                 "  -h,--help               Displays this help\n"
@@ -1134,6 +1234,8 @@ void Cli::print_command_help(ActionType action) {
                 "  rqp outdated\n"
                 "  rqp outdated dnf\n"
                 "  rqp outdated maven\n"
+                "  rqp outdated .\n"
+                "  rqp outdated ./project\n"
                 "  rqp outdated dnf --arch noarch\n"
                 "  rqp outdated dnf --type doc\n";
             break;

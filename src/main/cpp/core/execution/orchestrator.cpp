@@ -4,6 +4,7 @@
 #include "core/download/downloader.h"
 #include "core/host/host_info.h"
 #include "core/packages/rq_package.h"
+#include "core/plugins/plugin_bundle.h"
 #include "core/planning/planner_core.h"
 #include "core/planning/request_resolution.h"
 #include "output/diagnostic.h"
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <utility>
 
@@ -287,8 +289,57 @@ bool request_targets_system_wide_package_update(const Request& request) {
 	       std::find(request.flags.begin(), request.flags.end(), "__reqpack-internal-plugin-refresh-all") == request.flags.end();
 }
 
+bool request_targets_plugin_install(const Request& request) {
+	return request.action == ActionType::INSTALL && !request.system.empty() && !request.usesLocalTarget && request.packages.empty();
+}
+
+bool request_targets_plugin_remove(const Request& request) {
+	return request.action == ActionType::REMOVE && !request.system.empty() && request.system != "sys" && request.system != "rqp" &&
+	       !request.usesLocalTarget && request.packages.empty();
+}
+
 bool request_has_flag(const Request& request, const std::string& flag) {
     return std::find(request.flags.begin(), request.flags.end(), flag) != request.flags.end();
+}
+
+bool plugin_bundle_exists(const ReqPackConfig& config, const std::string& system) {
+	const std::filesystem::path pluginPath = std::filesystem::path(config.registry.pluginDirectory) / system;
+	return plugin_bundle_read_directory(pluginPath).has_value();
+}
+
+std::vector<Package> plugin_bundle_remove_dependencies(const PluginBundleLayout& layout, Registry* registry) {
+	std::vector<Package> dependencies;
+	for (Package dependency : plugin_bundle_dependency_packages(layout)) {
+		dependency = planner_normalize_dependency(std::move(dependency), layout.metadata.name);
+		dependency.action = ActionType::REMOVE;
+		dependency.system = registry != nullptr ? registry->resolvePluginName(dependency.system) : dependency.system;
+		dependencies.push_back(std::move(dependency));
+	}
+	return dependencies;
+}
+
+PluginCallContext plugin_context_for_packages(
+	IPlugin* plugin,
+	const ReqPackConfig& config,
+	const std::vector<std::string>& flags,
+	const std::vector<Package>& packages
+) {
+	std::string itemId;
+	if (plugin != nullptr && packages.size() == 1 && !packages.front().system.empty() && !packages.front().name.empty()) {
+		itemId = packages.front().system + ":" + packages.front().name;
+	}
+
+	return PluginCallContext{
+		.pluginId = plugin != nullptr ? plugin->getPluginId() : std::string{},
+		.pluginDirectory = plugin != nullptr ? plugin->getPluginDirectory() : std::string{},
+		.scriptPath = plugin != nullptr ? plugin->getScriptPath() : std::string{},
+		.flags = flags,
+		.host = plugin != nullptr ? plugin->getRuntimeHost() : nullptr,
+		.proxy = plugin != nullptr ? proxy_config_for_system(config, plugin->getPluginId()) : std::nullopt,
+		.currentItemId = itemId,
+		.repositories = plugin != nullptr ? repositories_for_ecosystem(config, plugin->getPluginId()) : std::vector<RepositoryEntry>{},
+		.hostInfo = HostInfoService::currentSnapshot(),
+	};
 }
 
 CommandOutput builtin_pack_output(const RqPackageBuildResult& result) {
@@ -329,6 +380,40 @@ struct SbomResolutionResult {
     std::vector<std::string> missingPackages;
 };
 
+std::vector<Request> resolve_audit_requests(Executer* executor, const std::vector<Request>& requests) {
+    std::vector<Request> resolved = requests;
+    if (executor == nullptr) {
+        return resolved;
+    }
+
+    for (Request& request : resolved) {
+        if (request.action != ActionType::AUDIT || request.system.empty() || request.usesLocalTarget || request.packages.empty()) {
+            continue;
+        }
+
+        std::vector<std::string> resolvedPackages;
+        resolvedPackages.reserve(request.packages.size());
+        for (const std::string& packageSpecifier : request.packages) {
+            if (has_explicit_version(packageSpecifier)) {
+                resolvedPackages.push_back(packageSpecifier);
+                continue;
+            }
+
+            const Package requestedPackage = planner_make_requested_package(request, request.system, packageSpecifier);
+            const std::optional<Package> resolvedPackage = executor->resolvePackage(request, requestedPackage);
+            if (resolvedPackage.has_value()) {
+                resolvedPackages.push_back(planner_package_specifier_from_package(resolvedPackage.value()));
+                continue;
+            }
+
+            resolvedPackages.push_back(packageSpecifier);
+        }
+        request.packages = std::move(resolvedPackages);
+    }
+
+    return resolved;
+}
+
 std::vector<Request> expand_system_only_audit_requests(Executer* executor, const std::vector<Request>& requests) {
     std::vector<Request> expanded = requests;
     if (executor == nullptr) {
@@ -354,6 +439,31 @@ std::vector<Request> expand_system_only_audit_requests(Executer* executor, const
     return expanded;
 }
 
+std::vector<Request> expand_system_wide_update_requests(Executer* executor, const std::vector<Request>& requests) {
+	std::vector<Request> expanded = requests;
+	if (executor == nullptr) {
+		return expanded;
+	}
+
+	for (Request& request : expanded) {
+		if (!request_targets_system_wide_package_update(request)) {
+			continue;
+		}
+
+		const std::vector<PackageInfo> installedPackages = executor->list(request);
+		request.packages.clear();
+		request.packages.reserve(installedPackages.size());
+		for (const PackageInfo& item : installedPackages) {
+			if (item.name.empty()) {
+				continue;
+			}
+			request.packages.push_back(package_specifier_from_info(item));
+		}
+	}
+
+	return expanded;
+}
+
 SbomResolutionResult resolve_sbom_requests(Executer* executor, const ReqPackConfig& config, const std::vector<Request>& requests) {
     SbomResolutionResult result{.requests = requests};
     if (executor == nullptr) {
@@ -361,13 +471,34 @@ SbomResolutionResult resolve_sbom_requests(Executer* executor, const ReqPackConf
     }
 
     for (Request& request : result.requests) {
-        if (request.action != ActionType::SBOM || request.system.empty() || request.usesLocalTarget || request.packages.empty()) {
+        if (request.action != ActionType::SBOM || request.system.empty() || request.usesLocalTarget) {
+            continue;
+        }
+
+        if (request.packages.empty()) {
+            const std::vector<PackageInfo> installedPackages = executor->list(request);
+            request.packages.clear();
+            request.packages.reserve(installedPackages.size());
+            for (const PackageInfo& item : installedPackages) {
+                if (item.name.empty()) {
+                    continue;
+                }
+                request.packages.push_back(package_specifier_from_info(item));
+            }
+        }
+
+        if (request.packages.empty()) {
             continue;
         }
 
         std::vector<std::string> resolvedPackages;
         resolvedPackages.reserve(request.packages.size());
         for (const std::string& packageSpecifier : request.packages) {
+            if (has_explicit_version(packageSpecifier)) {
+                resolvedPackages.push_back(packageSpecifier);
+                continue;
+            }
+
             const Package requestedPackage = planner_make_requested_package(request, request.system, packageSpecifier);
             const std::optional<Package> resolvedPackage = executor->resolvePackage(request, requestedPackage);
             if (resolvedPackage.has_value()) {
@@ -500,6 +631,23 @@ int Orchestrator::runSystemWidePackageUpdates() {
 		itemIds.push_back(request.system);
 	}
 
+	const std::vector<Request> validationRequests = expand_system_wide_update_requests(this->executor, this->requests);
+	const bool hasValidationTargets = std::any_of(validationRequests.begin(), validationRequests.end(), [](const Request& request) {
+		return !request.packages.empty();
+	});
+	if (hasValidationTargets) {
+		Graph* graph = this->planner->plan(validationRequests);
+		Graph* validatedGraph = this->validator->validate(graph);
+		if (validatedGraph == nullptr) {
+			if (graph != nullptr) {
+				log_validation_blocked(this->validator->getLastFindings());
+			}
+			delete graph;
+			return 1;
+		}
+		delete validatedGraph;
+	}
+
 	logger.displaySessionBegin(DisplayMode::UPDATE, itemIds);
 	int succeeded = 0;
 	int failed = 0;
@@ -509,6 +657,184 @@ int Orchestrator::runSystemWidePackageUpdates() {
 		} else {
 			++failed;
 		}
+	}
+
+	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
+	return failed == 0 ? 0 : 1;
+}
+
+int Orchestrator::runPluginInstallRequests() {
+	Logger& logger = Logger::instance();
+	std::vector<std::string> itemIds;
+	itemIds.reserve(this->requests.size());
+	for (const Request& request : this->requests) {
+		itemIds.push_back(request.system);
+	}
+
+	logger.displaySessionBegin(DisplayMode::INSTALL, itemIds);
+	int succeeded = 0;
+	int failed = 0;
+	Downloader downloader(this->registry->getDatabase(), this->config);
+	for (const Request& request : this->requests) {
+		logger.displayItemBegin(request.system, request.system);
+		logger.displayItemStep(request.system, "install plugin wrapper");
+		const std::string resolvedSystem = this->registry->resolvePluginName(request.system);
+		if (resolvedSystem.empty()) {
+			logger.displayItemFailure(request.system, make_error_diagnostic(
+				"install",
+				"Plugin install failed",
+				"ReqPack could not resolve requested system to a plugin wrapper.",
+				"Check plugin name and registry sources, then retry.",
+				{},
+				request.system,
+				"plugin-install"
+			));
+			++failed;
+			continue;
+		}
+
+		bool installed = plugin_bundle_exists(this->config, resolvedSystem);
+		if (!installed && downloader.downloadPlugin(resolvedSystem)) {
+			this->registry->scanDirectory(this->config.registry.pluginDirectory);
+			installed = plugin_bundle_exists(this->config, resolvedSystem);
+		}
+		if (installed) {
+			logger.displayItemSuccess(request.system);
+			++succeeded;
+			continue;
+		}
+
+		logger.displayItemFailure(request.system, make_error_diagnostic(
+			"install",
+			"Plugin install failed",
+			"ReqPack could not install requested plugin wrapper from configured local registry sources.",
+			"Check registry source path, plugin bundle contents, and auto-download settings, then retry.",
+			{},
+			request.system,
+			"plugin-install"
+		));
+		++failed;
+	}
+
+	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
+	return failed == 0 ? 0 : 1;
+}
+
+int Orchestrator::runPluginRemoveRequests() {
+	Logger& logger = Logger::instance();
+	std::vector<std::string> itemIds;
+	itemIds.reserve(this->requests.size());
+	for (const Request& request : this->requests) {
+		itemIds.push_back(request.system);
+	}
+
+	logger.displaySessionBegin(DisplayMode::REMOVE, itemIds);
+	int succeeded = 0;
+	int failed = 0;
+	for (const Request& request : this->requests) {
+		logger.displayItemBegin(request.system, request.system);
+		logger.displayItemStep(request.system, "remove plugin wrapper");
+
+		const std::string resolvedSystem = this->registry->resolvePluginName(request.system);
+		if (resolvedSystem.empty()) {
+			logger.displayItemFailure(request.system, make_error_diagnostic(
+				"remove",
+				"Plugin remove failed",
+				"ReqPack could not resolve requested system to an installed plugin wrapper.",
+				"Check plugin name and local plugin state, then retry.",
+				{},
+				request.system,
+				"plugin-remove"
+			));
+			++failed;
+			continue;
+		}
+
+		const std::optional<PluginBundleLayout> layout = plugin_bundle_find_installed(this->config, resolvedSystem);
+		if (!layout.has_value()) {
+			logger.displayItemFailure(request.system, make_error_diagnostic(
+				"remove",
+				"Plugin remove failed",
+				"Requested plugin wrapper is not installed in current plugin directory.",
+				"Install plugin first or verify configured plugin directory before retrying remove.",
+				{},
+				request.system,
+				"plugin-remove"
+			));
+			++failed;
+			continue;
+		}
+
+		if (!this->config.execution.dryRun) {
+			std::map<std::string, std::vector<Package>> dependencyPackages;
+			for (Package dependency : plugin_bundle_remove_dependencies(layout.value(), this->registry)) {
+				if (dependency.system.empty() || dependency.name.empty()) {
+					continue;
+				}
+				dependencyPackages[dependency.system].push_back(std::move(dependency));
+			}
+
+			bool dependencyRemovalOk = true;
+			std::vector<std::string> dependencyFlags = request.flags;
+			dependencyFlags.push_back("__reqpack-internal-silent-runtime");
+			for (const auto& [system, packages] : dependencyPackages) {
+				if (packages.empty()) {
+					continue;
+				}
+
+				if (this->registry->getPlugin(system) == nullptr || !this->registry->loadPlugin(system)) {
+					dependencyRemovalOk = false;
+					break;
+				}
+				IPlugin* plugin = this->registry->getPlugin(system);
+				if (plugin == nullptr) {
+					dependencyRemovalOk = false;
+					break;
+				}
+
+				const PluginCallContext dependencyContext = plugin_context_for_packages(plugin, this->config, dependencyFlags, packages);
+				if (!plugin->remove(dependencyContext, packages)) {
+					dependencyRemovalOk = false;
+					break;
+				}
+			}
+
+			if (!dependencyRemovalOk) {
+				logger.displayItemFailure(request.system, make_error_diagnostic(
+					"remove",
+					"Plugin remove failed",
+					"ReqPack could not remove one or more plugin dependency packages before deleting wrapper files.",
+					"Inspect dependency plugin output and retry once dependent packages can be removed cleanly.",
+					{},
+					request.system,
+					"plugin-remove"
+				));
+				++failed;
+				continue;
+			}
+
+			this->registry->unloadPlugin(resolvedSystem);
+			std::error_code error;
+			std::filesystem::remove_all(layout->rootDir, error);
+			if (error) {
+				logger.displayItemFailure(request.system, make_error_diagnostic(
+					"remove",
+					"Plugin remove failed",
+					"ReqPack could not delete installed plugin wrapper files from disk.",
+					"Check filesystem permissions and retry remove after closing any process using that plugin directory.",
+					error.message(),
+					request.system,
+					"plugin-remove"
+				));
+				++failed;
+				continue;
+			}
+
+			this->registry->scanDirectory(this->config.registry.pluginDirectory);
+		}
+
+		logger.displayItemSuccess(request.system);
+		++succeeded;
 	}
 
 	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
@@ -549,6 +875,16 @@ int Orchestrator::run() {
 	}
 	if (this->shouldRefreshPluginWrappers()) {
 		return this->runPluginWrapperRefresh();
+	}
+	if (std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
+		return request_targets_plugin_install(request);
+	})) {
+		return this->runPluginInstallRequests();
+	}
+	if (std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
+		return request_targets_plugin_remove(request);
+	})) {
+		return this->runPluginRemoveRequests();
 	}
 
 	// ── URL pre-processing ────────────────────────────────────────────────────
@@ -819,6 +1155,7 @@ int Orchestrator::run() {
 	std::vector<std::string> missingSbomPackages;
 	if (this->requests.front().action == ActionType::AUDIT) {
 		plannedRequests = expand_system_only_audit_requests(this->executor, this->requests);
+		plannedRequests = resolve_audit_requests(this->executor, plannedRequests);
 	} else if (this->requests.front().action == ActionType::SBOM) {
 		SbomResolutionResult resolvedSbom = resolve_sbom_requests(this->executor, this->config, this->requests);
 		plannedRequests = std::move(resolvedSbom.requests);
@@ -842,12 +1179,10 @@ int Orchestrator::run() {
 	}
 	Graph* graph = this->planner->plan(plannedRequests);
 	if (this->requests.front().action == ActionType::SBOM) {
-		if (graph != nullptr && boost::num_vertices(*graph) > 0) {
-			(void)this->sbomExporter->exportGraph(*graph, this->requests.front());
-		}
+		const bool exported = graph != nullptr && this->sbomExporter->exportGraph(*graph, this->requests.front());
 		cleanupTempFiles(tempFiles);
 		delete graph;
-		return 0;
+		return exported ? 0 : 1;
 	}
 	if (this->requests.front().action == ActionType::AUDIT) {
 		const std::vector<ValidationFinding> findings = this->validator->audit(graph);
@@ -873,9 +1208,9 @@ int Orchestrator::run() {
 	}
 	graph = validatedGraph;
 	this->executor->setRequestedItemCount(this->countRequestedItems(), false);
-	this->executor->execute(graph);
+	const bool executeOk = this->executor->execute(graph);
 	delete graph;
 
 	cleanupTempFiles(tempFiles);
-	return 0;
+	return executeOk ? 0 : 1;
 }
