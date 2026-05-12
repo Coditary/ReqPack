@@ -637,10 +637,6 @@ function plugin.shutdown() return true end
 const char* PARALLEL_MARKER_PLUGIN = R"(
 plugin = {}
 
-local function shell_quote(value)
-  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
-end
-
 local function copy_packages(packages)
   local missing = {}
   for _, package in ipairs(packages) do
@@ -650,7 +646,12 @@ local function copy_packages(packages)
 end
 
 local function append_line(path, line)
-  reqpack.exec.run("printf '%s\\n' " .. shell_quote(line) .. " >> " .. shell_quote(path))
+  local handle, err = io.open(path, "a")
+  if handle == nil then
+    error("failed to append parallel marker log: " .. tostring(err))
+  end
+  handle:write(line, "\n")
+  handle:close()
 end
 
 function plugin.getName() return REQPACK_PLUGIN_ID end
@@ -661,13 +662,12 @@ function plugin.getMissingPackages(packages) return copy_packages(packages) end
 function plugin.install(context, packages)
   local log_path = context.plugin.dir .. "/parallel.log"
   local shared_log_path = context.plugin.dir .. "/../parallel.shared.log"
-  local sleep_value = "0.4"
-  if packages[1] ~= nil and packages[1].version ~= nil and packages[1].version ~= "" then
-    sleep_value = packages[1].version
-  end
   append_line(log_path, "start\t" .. REQPACK_PLUGIN_ID)
   append_line(shared_log_path, "start\t" .. REQPACK_PLUGIN_ID)
-  reqpack.exec.run("sleep " .. sleep_value)
+  local sleep_result = reqpack.exec.run("sleep 1")
+  if not sleep_result.success then
+    return false
+  end
   append_line(log_path, "end\t" .. REQPACK_PLUGIN_ID)
   append_line(shared_log_path, "end\t" .. REQPACK_PLUGIN_ID)
   return true
@@ -1310,11 +1310,14 @@ TEST_CASE("executor runs independent task groups in parallel when jobs exceed on
     boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "alpha", .name = "one", .version = "0.4"}, graph);
     boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "beta", .name = "two", .version = "0.4"}, graph);
 
-    executer.execute(&graph);
+    REQUIRE(executer.execute(&graph));
 
     const std::string alphaLog = read_file(tempDir.path() / "plugins" / "alpha" / "parallel.log");
     const std::string betaLog = read_file(tempDir.path() / "plugins" / "beta" / "parallel.log");
     const std::string sharedLog = read_file(tempDir.path() / "plugins" / "parallel.shared.log");
+    CAPTURE(alphaLog);
+    CAPTURE(betaLog);
+    CAPTURE(sharedLog);
     CHECK(alphaLog.find("start\talpha") != std::string::npos);
     CHECK(alphaLog.find("end\talpha") != std::string::npos);
     CHECK(betaLog.find("start\tbeta") != std::string::npos);
@@ -1351,9 +1354,10 @@ TEST_CASE("executor keeps same-system task groups serialized even when jobs exce
     const Graph::vertex_descriptor second = boost::add_vertex(Package{.action = ActionType::INSTALL, .system = "alpha", .name = "two", .version = "0.25"}, graph);
     boost::add_edge(first, second, graph);
 
-    executer.execute(&graph);
+    REQUIRE(executer.execute(&graph));
 
     const std::string alphaLog = read_file(tempDir.path() / "plugins" / "alpha" / "parallel.log");
+    CAPTURE(alphaLog);
     std::size_t startCount = 0;
     std::size_t pos = 0;
     while ((pos = alphaLog.find("start\talpha", pos)) != std::string::npos) {
