@@ -5102,7 +5102,7 @@ TEST_CASE("orchestrator install maven fails when configured repositories do not 
         status
     );
 
-    CHECK(status == 0);
+    CHECK(status != 0);
     CHECK(output.find("no configured maven repository matched org.junit:junit") != std::string::npos);
     CHECK(output.find("INSTALL done:  0 ok,  0 skipped,  1 failed") != std::string::npos);
     CHECK_FALSE(std::filesystem::exists(mvnLog));
