@@ -5,7 +5,9 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
 #include <optional>
+#include <spawn.h>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -19,6 +21,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "core/common/network_environment.h"
 #include "plugins/exec_rules_core.h"
 
 namespace {
@@ -363,21 +366,51 @@ ExecResult run_shell_command(Logger& logger, const std::string& pluginScope, con
         return result;
     }
 
-    const pid_t child = fork();
-    if (child < 0) {
+    posix_spawn_file_actions_t fileActions;
+    if (posix_spawn_file_actions_init(&fileActions) != 0) {
         ::close(pipeFds[0]);
         ::close(pipeFds[1]);
-        result.stderrText = std::string("failed to fork: ") + std::strerror(errno);
+        result.stderrText = "posix_spawn_file_actions_init failed";
         return result;
     }
 
-    if (child == 0) {
+    const bool actionsReady =
+        posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0 &&
+        posix_spawn_file_actions_adddup2(&fileActions, pipeFds[1], STDOUT_FILENO) == 0 &&
+        posix_spawn_file_actions_adddup2(&fileActions, pipeFds[1], STDERR_FILENO) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, pipeFds[0]) == 0 &&
+        posix_spawn_file_actions_addclose(&fileActions, pipeFds[1]) == 0;
+    if (!actionsReady) {
+        posix_spawn_file_actions_destroy(&fileActions);
         ::close(pipeFds[0]);
-        ::dup2(pipeFds[1], STDOUT_FILENO);
-        ::dup2(pipeFds[1], STDERR_FILENO);
         ::close(pipeFds[1]);
-        execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
-        _exit(127);
+        result.stderrText = "failed to configure process pipes";
+        return result;
+    }
+
+    std::array<char*, 4> argv{
+        const_cast<char*>("sh"),
+        const_cast<char*>("-c"),
+        const_cast<char*>(command.c_str()),
+        nullptr,
+    };
+
+    std::vector<std::string> environmentStorage = reqpack_sanitized_process_environment();
+    std::vector<char*> environmentPointers;
+    environmentPointers.reserve(environmentStorage.size() + 1);
+    for (std::string& entry : environmentStorage) {
+        environmentPointers.push_back(entry.data());
+    }
+    environmentPointers.push_back(nullptr);
+
+    pid_t child = 0;
+    const int spawnResult = posix_spawn(&child, "/bin/sh", &fileActions, nullptr, argv.data(), environmentPointers.data());
+    posix_spawn_file_actions_destroy(&fileActions);
+    if (spawnResult != 0) {
+        ::close(pipeFds[0]);
+        ::close(pipeFds[1]);
+        result.stderrText = std::string("spawn failed: ") + std::strerror(spawnResult);
+        return result;
     }
 
     ::close(pipeFds[1]);
