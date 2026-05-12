@@ -251,11 +251,7 @@ std::string to_lower(std::string value) {
 }
 
 bool is_known_action_token(const std::string& value) {
-    const std::string normalized = to_lower(value);
-    return normalized == "install" || normalized == "remove" || normalized == "update" || normalized == "search" ||
-           normalized == "list" || normalized == "info" || normalized == "ensure" || normalized == "sbom" ||
-           normalized == "audit" || normalized == "outdated" || normalized == "host" || normalized == "snapshot" ||
-           normalized == "pack" || normalized == "serve" || normalized == "remote";
+    return Cli::parse_action(value) != ActionType::UNKNOWN;
 }
 
 bool is_existing_path(const std::string& value) {
@@ -284,7 +280,7 @@ std::vector<std::string> strip_config_arguments(const std::vector<std::string>& 
 
 bool is_action_stdin_command(const std::vector<std::string>& arguments, const std::string& action) {
     const std::vector<std::string> filtered = strip_config_arguments(arguments);
-    return filtered.size() >= 2 && to_lower(filtered.front()) == action && contains_flag(filtered, "--stdin");
+    return filtered.size() >= 2 && Cli::parse_action(filtered.front()) == Cli::parse_action(action) && contains_flag(filtered, "--stdin");
 }
 
 std::vector<std::string> inherited_stream_arguments(const std::vector<std::string>& arguments) {
@@ -295,7 +291,8 @@ std::vector<std::string> inherited_stream_arguments(const std::vector<std::strin
 
     for (const std::string& argument : filtered) {
         if (!actionSeen) {
-            if (argument == "install" || argument == "remove" || argument == "update" || argument == "serve") {
+            const ActionType action = Cli::parse_action(argument);
+            if (action == ActionType::INSTALL || action == ActionType::REMOVE || action == ActionType::UPDATE || action == ActionType::SERVE) {
                 actionSeen = true;
             }
             continue;
@@ -1321,7 +1318,7 @@ std::optional<std::filesystem::path> current_link_target_path(const std::filesys
 
 bool is_self_update_command(const std::vector<std::string>& arguments) {
     const std::vector<std::string> filtered = strip_config_arguments(arguments);
-    if (filtered.empty() || filtered.front() != "update") {
+    if (filtered.empty() || Cli::parse_action(filtered.front()) != ActionType::UPDATE) {
         return false;
     }
 

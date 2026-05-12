@@ -91,6 +91,18 @@ std::string to_lower(std::string value) {
     return value;
 }
 
+bool is_install_command_token(const std::string& normalizedCommand) {
+    return normalizedCommand == "install" || normalizedCommand == "i";
+}
+
+bool is_remove_command_token(const std::string& normalizedCommand) {
+    return normalizedCommand == "remove" || normalizedCommand == "rm";
+}
+
+bool is_update_command_token(const std::string& normalizedCommand) {
+    return normalizedCommand == "update" || normalizedCommand == "up";
+}
+
 bool is_existing_path(const std::string& value) {
 	std::error_code error;
 	return std::filesystem::exists(std::filesystem::path(value), error) && !error;
@@ -190,7 +202,7 @@ bool update_command_has_package_mode_flag(const std::vector<std::string>& argume
 	bool updateSeen = false;
 	for (const std::string& argument : arguments) {
 		if (!updateSeen) {
-			if (to_lower(argument) == "update") {
+			if (is_update_command_token(to_lower(argument))) {
 				updateSeen = true;
 			}
 			continue;
@@ -869,9 +881,9 @@ void Cli::print_help() {
         "  -h,--help               " + HELP_DESCRIPTION + "\n"
         "  -v,--verbose            " + VERBOSE_DESCRIPTION + "\n"
         "\nCommands:\n"
-        "  install                 Installs requested packages\n"
-        "  remove                  Removes requested packages\n"
-        "  update                  Updates requested packages\n"
+        "  install (i)             Installs requested packages\n"
+        "  remove (rm)             Removes requested packages\n"
+        "  update (up)             Updates requested packages\n"
         "  search                  Searches for packages\n"
         "  list                    Lists packages for a system\n"
         "  outdated                Shows outdated packages for a system\n"
@@ -926,6 +938,7 @@ void Cli::print_command_help(ActionType action) {
                 "       rqp install --stdin [options]\n"
                 "\n"
                 "Install packages for one or more package managers.\n"
+                "Alias: rqp i\n"
                 "When a directory path is given (e.g. '.', './myproject', '/abs/path'),\n"
                 "rqp reads a reqpack.lua manifest from that directory and installs\n"
                 "all packages declared in it.\n"
@@ -965,6 +978,7 @@ void Cli::print_command_help(ActionType action) {
                 "\n"
                 "Examples:\n"
                 "  rqp install apt curl git\n"
+                "  rqp i apt curl git\n"
                 "  rqp install npm express lodash brew jq\n"
                 "  rqp install apt:curl npm:express\n"
                 "  rqp install brew ./my-formula.rb\n"
@@ -981,6 +995,7 @@ void Cli::print_command_help(ActionType action) {
                 "       rqp remove --stdin [options]\n"
                 "\n"
                 "Remove packages from one or more package managers.\n"
+                "Alias: rqp rm\n"
                 "When a directory path is given (e.g. '.', './myproject', '/abs/path'),\n"
                 "rqp reads a reqpack.lua manifest from that directory and removes\n"
                 "all packages declared in it.\n"
@@ -1004,6 +1019,7 @@ void Cli::print_command_help(ActionType action) {
                 "\n"
                 "Examples:\n"
                 "  rqp remove apt curl\n"
+                "  rqp rm apt curl\n"
                 "  rqp remove npm express brew jq\n"
                 "  rqp remove apt:curl npm:lodash\n"
                 "  rqp remove .\n"
@@ -1019,6 +1035,7 @@ void Cli::print_command_help(ActionType action) {
                 "       rqp update --stdin [options]\n"
                 "\n"
                 "Update ReqPack itself, plugin wrappers, or packages for one or more package managers.\n"
+                "Alias: rqp up\n"
                 "Without a system argument, ReqPack downloads matching release binary from its configured release source.\n"
                 "With a system argument and no package list, ReqPack refreshes that plugin wrapper to its newest tagged version when the source is Git-backed.\n"
                 "Use '--all' with a system to update all packages for that system instead.\n"
@@ -1051,7 +1068,9 @@ void Cli::print_command_help(ActionType action) {
                 "\n"
                 "Examples:\n"
                 "  rqp update\n"
+                "  rqp up\n"
                 "  rqp update --all\n"
+                "  rqp up --all\n"
                 "  rqp update pip\n"
                 "  rqp update pip --all\n"
                 "  rqp update apt --dry-run\n"
@@ -1365,13 +1384,13 @@ void Cli::print_command_help(ActionType action) {
 ActionType Cli::parse_action(const std::string& command) {
     const std::string normalized_command = to_lower(command);
 
-    if (normalized_command == "install") {
+    if (is_install_command_token(normalized_command)) {
         return ActionType::INSTALL;
     }
-    if (normalized_command == "remove") {
+    if (is_remove_command_token(normalized_command)) {
         return ActionType::REMOVE;
     }
-    if (normalized_command == "update") {
+    if (is_update_command_token(normalized_command)) {
         return ActionType::UPDATE;
     }
     if (normalized_command == "search") {

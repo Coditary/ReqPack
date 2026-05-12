@@ -2712,7 +2712,7 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
         "  },\n"
         "}\n");
 
-    const std::string firstOutput = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
+    const std::string firstOutput = run_reqpack_with_home(workspace, configPath, homePath, {"up"});
     INFO(firstOutput);
     CHECK(firstOutput.find("UPDATE: rqp") != std::string::npos);
     CHECK(firstOutput.find("fetch release metadata") != std::string::npos);
@@ -2732,7 +2732,7 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
 
     const std::filesystem::path secondArchive = create_self_update_release_archive(releaseAssetRoot, "v2", secondTag, target);
     write_self_update_release_api_response(releaseApiRoot, owner, repo, secondTag, target, secondArchive);
-    const std::string secondOutput = run_reqpack_with_home(workspace, configPath, homePath, {"update"});
+    const std::string secondOutput = run_reqpack_with_home(workspace, configPath, homePath, {"up"});
     INFO(secondOutput);
     CHECK(secondOutput.find("UPDATE: rqp") != std::string::npos);
     CHECK(secondOutput.find("fetch release metadata") != std::string::npos);
@@ -2758,7 +2758,7 @@ TEST_CASE("wrapper self-update downloads latest release binary and swaps local s
             {"REQPACK_SYS_NO_SUDO", "1"},
             {"REQPACK_TEST_SYS_LOG", sysLogPath.string()},
         },
-        {"update", "sys", "pip"}
+        {"up", "sys", "pip"}
     );
     INFO(wrapperUpdateOutput);
     CHECK(wrapperUpdateOutput.find("self-update:") == std::string::npos);
@@ -3942,8 +3942,8 @@ function plugin.shutdown() return true end
     const std::string output = run_reqpack_with_stdin(
         tempDir.path(),
         configPath,
-        {"install", "--stdin"},
-        "install apply alpha\ninstall apply beta\n"
+        {"i", "--stdin"},
+        "i apply alpha\ninstall apply beta\n"
     );
     (void)output;
 
@@ -4602,7 +4602,7 @@ TEST_CASE("reqpack remote uploads local install file over text protocol", "[inte
 
     int status = 0;
     const std::string output = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
-        "remote", "dev", "install", "apply", uploadPath.string()
+        "remote", "dev", "i", "apply", uploadPath.string()
     }, status);
     CHECK(status == 0);
     CHECK(read_file(pluginDirectory / "apply" / "state" / "local.txt").find("sample.pkg") != std::string::npos);

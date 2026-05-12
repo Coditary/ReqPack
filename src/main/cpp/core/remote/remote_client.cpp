@@ -1,5 +1,7 @@
 #include "core/remote/remote_client.h"
 
+#include "cli/cli.h"
+
 #include "output/command_output.h"
 #include "output/logger.h"
 
@@ -123,7 +125,7 @@ std::optional<UploadInstallRequest> detect_upload_install_request(
     std::string& error
 ) {
     error.clear();
-    if (arguments.empty() || arguments.front() != "install") {
+    if (arguments.empty() || Cli::parse_action(arguments.front()) != ActionType::INSTALL) {
         return std::nullopt;
     }
 

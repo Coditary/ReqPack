@@ -501,6 +501,22 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().packages == std::vector<std::string>{"curl", "git"});
     }
 
+    SECTION("install alias parses like install") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"i", "dnf", "curl", "git"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::INSTALL);
+        CHECK(requests.front().system == "dnf");
+        CHECK(requests.front().packages == std::vector<std::string>{"curl", "git"});
+    }
+
+    SECTION("remove alias parses like remove") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"rm", "dnf", "curl", "git"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::REMOVE);
+        CHECK(requests.front().system == "dnf");
+        CHECK(requests.front().packages == std::vector<std::string>{"curl", "git"});
+    }
+
     SECTION("sys install keeps logical package names that match known systems") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"install", "sys", "java", "maven"}, config);
         REQUIRE(requests.size() == 1);
@@ -673,6 +689,12 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK_FALSE(cli.parseFailed());
     }
 
+    SECTION("update alias without system returns no orchestrator requests for wrapper self-update") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"up"}, config);
+        CHECK(requests.empty());
+        CHECK_FALSE(cli.parseFailed());
+    }
+
     SECTION("host refresh is handled outside orchestrator request parsing") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"host", "refresh"}, config);
         CHECK(requests.empty());
@@ -725,6 +747,14 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().packages.empty());
     }
 
+    SECTION("update alias with explicit system remains normal orchestrator request") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"up", "pip"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::UPDATE);
+        CHECK(requests.front().system == "pip");
+        CHECK(requests.front().packages.empty());
+    }
+
     SECTION("update system all keeps explicit system-wide package update request") {
         const std::vector<Request> requests = cli.parse(std::vector<std::string>{"update", "pip", "--all"}, config);
         REQUIRE(requests.size() == 1);
@@ -732,6 +762,16 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().system == "pip");
         CHECK(requests.front().packages.empty());
         CHECK(requests.front().flags == std::vector<std::string>{"all"});
+    }
+
+    SECTION("update alias with package mode flag expands to system-wide package update request") {
+        const std::vector<Request> requests = cli.parse(std::vector<std::string>{"up", "pip", "--dry-run"}, config);
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::UPDATE);
+        CHECK(requests.front().system == "pip");
+        CHECK(requests.front().packages.empty());
+        CHECK(std::find(requests.front().flags.begin(), requests.front().flags.end(), "dry-run") == requests.front().flags.end());
+        CHECK(std::find(requests.front().flags.begin(), requests.front().flags.end(), "all") != requests.front().flags.end());
     }
 
     SECTION("update sys pip stays explicit wrapper request") {
@@ -955,4 +995,26 @@ TEST_CASE("cli general help documents logging flags", "[unit][cli][help]") {
     CHECK(capture.str().find("--log-capture-display") != std::string::npos);
     CHECK(capture.str().find("--log-category <name>") != std::string::npos);
     CHECK(capture.str().find("-v,--verbose") != std::string::npos);
+    CHECK(capture.str().find("install (i)") != std::string::npos);
+    CHECK(capture.str().find("remove (rm)") != std::string::npos);
+    CHECK(capture.str().find("update (up)") != std::string::npos);
+}
+
+TEST_CASE("cli short update alias prints update help", "[unit][cli][help]") {
+    Cli cli;
+    std::ostringstream capture;
+    std::streambuf* previous = std::cout.rdbuf(capture.rdbuf());
+
+    char arg0[] = "rqp";
+    char arg1[] = "up";
+    char arg2[] = "--help";
+    char* argv[] = {arg0, arg1, arg2};
+
+    const bool handled = cli.handleHelp(3, argv);
+
+    std::cout.rdbuf(previous);
+
+    REQUIRE(handled);
+    CHECK(capture.str().find("Usage: rqp update") != std::string::npos);
+    CHECK(capture.str().find("Alias: rqp up") != std::string::npos);
 }

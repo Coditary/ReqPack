@@ -19,6 +19,8 @@ class Cli {
 public:
     Cli();
 
+    static ActionType parse_action(const std::string& command);
+
     /// Check for -h/--help (optionally preceded or followed by a command).
     /// Prints the appropriate help text to stdout and returns true if help
     /// was requested, so the caller can exit early before any heavy init.
@@ -40,7 +42,6 @@ private:
     bool lastParseFailed_ = false;
     std::string lastParseError_;
 
-    static ActionType parse_action(const std::string& command);
     static bool is_flag(const std::string& argument);
     static bool is_help_flag(const std::string& argument);
     static std::optional<std::pair<std::string, std::string>> split_scoped_package(
