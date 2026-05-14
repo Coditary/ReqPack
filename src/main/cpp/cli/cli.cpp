@@ -8,11 +8,14 @@
 #include <vector>
 
 Cli::Cli() : app(std::make_unique<CLI::App>(std::string(cli_internal::program_name()) + " - Unified Package Manager Interface")) {
+    const std::string helpDescription(cli_internal::help_description());
+    const std::string verboseDescription(cli_internal::verbose_description());
+
     app->name(std::string(cli_internal::program_name()));
     app->allow_extras(true);
     app->prefix_command(true);
-    app->set_help_flag("-h,--help", std::string(cli_internal::help_description()));
-    app->add_flag("-v,--verbose", std::string(cli_internal::verbose_description()));
+    app->set_help_flag("-h,--help", helpDescription);
+    app->add_flag("-v,--verbose", verboseDescription);
     app->usage(std::string(cli_internal::usage_text()));
 }
 
