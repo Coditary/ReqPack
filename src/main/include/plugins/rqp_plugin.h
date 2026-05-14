@@ -13,9 +13,9 @@
 #include <string>
 #include <vector>
 
-class RqPlugin final : public IPlugin {
+class RqpPlugin final : public IPlugin {
 public:
-    explicit RqPlugin(const ReqPackConfig& config = default_reqpack_config());
+    explicit RqpPlugin(const ReqPackConfig& config = default_reqpack_config());
 
     bool init() override;
     bool shutdown() override;

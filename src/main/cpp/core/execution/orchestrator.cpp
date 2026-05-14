@@ -1,535 +1,23 @@
 #include "core/execution/orchestrator.h"
 
-#include "core/archive/archive_resolver.h"
-#include "core/download/downloader.h"
-#include "core/host/host_info.h"
-#include "core/packages/rq_package.h"
-#include "core/plugins/plugin_bundle.h"
-#include "core/planning/planner_core.h"
-#include "core/planning/request_resolution.h"
+#include "orchestrator_internal.h"
+
 #include "output/diagnostic.h"
-#include "output/command_output.h"
 #include "output/logger.h"
 
-#include <algorithm>
 #include <filesystem>
-#include <map>
-#include <optional>
 #include <utility>
-
-namespace {
-
-bool is_url(const std::string& value) {
-    return value.rfind("http://", 0) == 0 || value.rfind("https://", 0) == 0 || value.rfind("file://", 0) == 0;
-}
-
-std::string package_specifier_from_info(const PackageInfo& item) {
-    if (item.version.empty()) {
-        return item.name;
-    }
-    return item.name + '@' + item.version;
-}
-
-bool package_info_has_details(const PackageInfo& item) {
-	return !item.packageId.empty() || !item.version.empty() || !item.latestVersion.empty() ||
-		!item.status.empty() || !item.installed.empty() || !item.summary.empty() || !item.description.empty() ||
-		!item.homepage.empty() || !item.documentation.empty() || !item.sourceUrl.empty() || !item.repository.empty() ||
-		!item.channel.empty() || !item.section.empty() || !item.packageType.empty() || !item.architecture.empty() || !item.targetSystems.empty() || !item.license.empty() ||
-		!item.author.empty() || !item.maintainer.empty() || !item.email.empty() || !item.publishedAt.empty() ||
-		!item.updatedAt.empty() || !item.size.empty() || !item.installedSize.empty() ||
-		!item.dependencies.empty() || !item.optionalDependencies.empty() || !item.provides.empty() ||
-		!item.conflicts.empty() || !item.replaces.empty() || !item.binaries.empty() || !item.tags.empty() ||
-		!item.extraFields.empty();
-}
-
-CommandOutput package_table_output(ActionType action,
-	                               const std::vector<Request>& requests,
-	                               const std::vector<PackageInfo>& items) {
-	CommandOutput output;
-	output.mode = action == ActionType::LIST ? DisplayMode::LIST
-	              : action == ActionType::SEARCH ? DisplayMode::SEARCH
-	              : action == ActionType::OUTDATED ? DisplayMode::OUTDATED
-	              : DisplayMode::LIST;
-	for (const auto& request : requests) {
-		output.sessionItems.push_back(request.system.empty() ? "all" : request.system);
-	}
-	const bool includeSystem = requests.size() > 1;
-	std::vector<std::string> headers;
-	if (includeSystem) {
-		headers.push_back("System");
-	}
-	headers.push_back("Name");
-	if (action == ActionType::OUTDATED) {
-		headers.push_back("Installed");
-		headers.push_back("Latest");
-		headers.push_back("Type");
-		headers.push_back("Architecture");
-		headers.push_back("Target Systems");
-		headers.push_back("Description");
-		output.blocks.push_back(make_command_table_block(headers, package_outdated_infos_to_rows(items, includeSystem)));
-	} else if (action == ActionType::SEARCH || action == ActionType::LIST) {
-		headers.push_back("Version");
-		headers.push_back("Type");
-		headers.push_back("Architecture");
-		headers.push_back("Target Systems");
-		headers.push_back("Description");
-		if (action == ActionType::SEARCH) {
-			output.blocks.push_back(make_command_table_block(headers, package_search_infos_to_rows(items, includeSystem)));
-		} else {
-			output.blocks.push_back(make_command_table_block(headers, package_list_infos_to_rows(items, includeSystem)));
-		}
-	} else {
-		headers.push_back("Version");
-		headers.push_back("Summary");
-		output.blocks.push_back(make_command_table_block(headers, package_list_infos_to_rows(items, includeSystem)));
-	}
-	if (items.empty()) {
-		output.blocks.push_back(make_command_message_block("No results"));
-	}
-	output.success = true;
-	output.succeeded = static_cast<int>(items.size());
-	return output;
-}
-
-CommandOutput package_info_output(const Request& request, PackageInfo item) {
-	CommandOutput output;
-	output.mode = DisplayMode::INFO;
-	output.sessionItems = {request.system.empty() ? "info" : request.system};
-	if (!package_info_has_details(item)) {
-		output.success = false;
-		output.failed = 1;
-		output.blocks.push_back(make_command_message_block("No package info found"));
-		return output;
-	}
-	if (item.system.empty()) {
-		item.system = request.system;
-	}
-	if (item.name.empty() && !request.packages.empty()) {
-		item.name = request.packages.front();
-	}
-	const auto fields = package_info_to_fields(item);
-	output.blocks.push_back(make_command_field_value_block(fields));
-	output.success = true;
-	output.succeeded = 1;
-	return output;
-}
-
-// Extract the filename from a URL path (everything after the last '/').
-std::string url_filename(const std::string& url) {
-    const std::size_t pos = url.rfind('/');
-    if (pos == std::string::npos || pos + 1 >= url.size()) {
-        return "download";
-    }
-    // Strip any query string.
-    const std::string raw = url.substr(pos + 1);
-    const std::size_t q = raw.find('?');
-    return q == std::string::npos ? raw : raw.substr(0, q);
-}
-
-// Extract the lowercase file extension from a filename/URL.
-std::string file_extension(const std::string& path) {
-    const std::string filename = url_filename(path);
-    const std::string archiveSuffix = generic_archive_suffix(filename);
-    if (!archiveSuffix.empty()) {
-        return archiveSuffix;
-    }
-    const std::size_t dot = filename.rfind('.');
-    if (dot == std::string::npos || dot == 0) {
-        return {};
-    }
-    std::string ext = filename.substr(dot);
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    return ext;
-}
-
-DiagnosticMessage validation_blocked_finding_diagnostic(const ValidationFinding& finding) {
-	std::string summary = finding.message.empty() ? (finding.id.empty() ? finding.kind : finding.id) : finding.message;
-	if (!finding.package.system.empty() && !finding.package.name.empty()) {
-		summary += " [" + finding.package.system + ":" + finding.package.name + "]";
-	}
-
-	if (finding.kind == "sync_error") {
-		return make_error_diagnostic(
-			"security",
-			summary,
-			"ReqPack could not refresh vulnerability data required by current security policy.",
-			"Check OSV feed access, local vulnerability database permissions, and retry.",
-			{},
-			finding.source,
-			"sync"
-		);
-	}
-
-	if (finding.kind == "unsupported_ecosystem") {
-		return make_error_diagnostic(
-			"security",
-			summary,
-			"ReqPack has no vulnerability ecosystem mapping for requested package system.",
-			"Configure `security.ecosystemMap` or plugin `osvEcosystem`, or relax strict ecosystem mapping if risk is acceptable.",
-			{},
-			finding.source,
-			"mapping"
-		);
-	}
-
-	if (finding.kind == "unresolved_version") {
-		return make_error_diagnostic(
-			"security",
-			summary,
-			"ReqPack could not determine exact package version for vulnerability matching.",
-			"Request an explicit version, improve plugin version resolution, or relax unresolved-version policy.",
-			{},
-			finding.source,
-			"version"
-		);
-	}
-
-	return make_error_diagnostic(
-		"security",
-		summary,
-		"Matched vulnerability data blocks execution under current security policy.",
-		"Review advisory details, choose a safe version, or relax security policy only if that risk is acceptable.",
-		{},
-		finding.source,
-		"policy"
-	);
-}
-
-void append_cleanup_paths(std::vector<std::filesystem::path>& tempFiles, const std::vector<std::filesystem::path>& cleanupPaths) {
-    tempFiles.insert(tempFiles.end(), cleanupPaths.begin(), cleanupPaths.end());
-}
-
-ArchiveExtractionOptions archive_options_from_config(const ReqPackConfig& config) {
-    return ArchiveExtractionOptions{
-        .password = resolve_archive_password(config),
-        .interactive = config.interaction.interactive,
-    };
-}
-
-bool resolve_local_target(
-    Request& request,
-    Registry* registry,
-    const ReqPackConfig& config,
-    std::vector<std::filesystem::path>& tempFiles,
-    std::string* errorMessage
-) {
-    try {
-        const ArchiveResolution resolution = extract_archive_to_temp_directory(request.localPath, archive_options_from_config(config));
-        if (resolution.changed) {
-            append_cleanup_paths(tempFiles, resolution.cleanupPaths);
-            request.localPath = resolution.installPath.string();
-        }
-    } catch (const std::exception& error) {
-        if (errorMessage != nullptr) {
-            *errorMessage = error.what();
-        }
-        return false;
-    }
-
-    if (!request.system.empty()) {
-        return true;
-    }
-
-    request.system = registry->resolveSystemForLocalTarget(request.localPath);
-    if (!request.system.empty()) {
-        return true;
-    }
-
-    const std::string ext = file_extension(request.localPath);
-    if (errorMessage != nullptr) {
-        if (ext.empty()) {
-            *errorMessage = "cannot determine system for local target: " + request.localPath + "\nUse: rqp install <system> <path>";
-        } else {
-            *errorMessage = "no plugin found for file extension '" + ext + "': " + request.localPath + "\nUse: rqp install <system> <path>";
-        }
-    }
-    return false;
-}
-
-void log_validation_blocked(const std::vector<ValidationFinding>& findings) {
-	Logger::instance().diagnostic(make_error_diagnostic(
-		"security",
-		"execution blocked by security policy",
-		"One or more requested packages violated current vulnerability or ecosystem safety policy.",
-		"Review reported findings, adjust requested versions, or relax security policy only if that risk is acceptable.",
-		{},
-		"validator",
-		"policy"
-	));
-	std::size_t shown = 0;
-	for (const ValidationFinding& finding : findings) {
-        if (finding.kind != "vulnerability" && finding.kind != "sync_error" && finding.kind != "unsupported_ecosystem" &&
-            finding.kind != "unresolved_version") {
-            continue;
-        }
-		Logger::instance().diagnostic(validation_blocked_finding_diagnostic(finding));
-		++shown;
-        if (shown >= 5) {
-            break;
-        }
-    }
-}
-
-bool has_explicit_version(const std::string& packageSpecifier) {
-    const std::size_t versionSeparator = packageSpecifier.rfind('@');
-    return versionSeparator != std::string::npos && versionSeparator != 0 && versionSeparator + 1 < packageSpecifier.size();
-}
-
-bool request_targets_plugin_wrapper_refresh(const Request& request) {
-    return request.action == ActionType::UPDATE && !request.system.empty() && request.system != "sys" && request.system != "rqp" &&
-           !request.usesLocalTarget && request.packages.empty() &&
-           (std::find(request.flags.begin(), request.flags.end(), "all") == request.flags.end() ||
-            std::find(request.flags.begin(), request.flags.end(), "__reqpack-internal-plugin-refresh-all") != request.flags.end());
-}
-
-bool request_targets_system_wide_package_update(const Request& request) {
-	return request.action == ActionType::UPDATE && !request.system.empty() && request.system != "sys" &&
-	       !request.usesLocalTarget && request.packages.empty() &&
-	       std::find(request.flags.begin(), request.flags.end(), "all") != request.flags.end() &&
-	       std::find(request.flags.begin(), request.flags.end(), "__reqpack-internal-plugin-refresh-all") == request.flags.end();
-}
-
-bool request_targets_plugin_install(const Request& request) {
-	return request.action == ActionType::INSTALL && !request.system.empty() && !request.usesLocalTarget && request.packages.empty();
-}
-
-bool request_targets_plugin_remove(const Request& request) {
-	return request.action == ActionType::REMOVE && !request.system.empty() && request.system != "sys" && request.system != "rqp" &&
-	       !request.usesLocalTarget && request.packages.empty();
-}
-
-bool request_has_flag(const Request& request, const std::string& flag) {
-    return std::find(request.flags.begin(), request.flags.end(), flag) != request.flags.end();
-}
-
-bool plugin_bundle_exists(const ReqPackConfig& config, const std::string& system) {
-	const std::filesystem::path pluginPath = std::filesystem::path(config.registry.pluginDirectory) / system;
-	return plugin_bundle_read_directory(pluginPath).has_value();
-}
-
-std::vector<Package> plugin_bundle_remove_dependencies(const PluginBundleLayout& layout, Registry* registry) {
-	std::vector<Package> dependencies;
-	for (Package dependency : plugin_bundle_dependency_packages(layout)) {
-		dependency = planner_normalize_dependency(std::move(dependency), layout.metadata.name);
-		dependency.action = ActionType::REMOVE;
-		dependency.system = registry != nullptr ? registry->resolvePluginName(dependency.system) : dependency.system;
-		dependencies.push_back(std::move(dependency));
-	}
-	return dependencies;
-}
-
-PluginCallContext plugin_context_for_packages(
-	IPlugin* plugin,
-	const ReqPackConfig& config,
-	const std::vector<std::string>& flags,
-	const std::vector<Package>& packages
-) {
-	std::string itemId;
-	if (plugin != nullptr && packages.size() == 1 && !packages.front().system.empty() && !packages.front().name.empty()) {
-		itemId = packages.front().system + ":" + packages.front().name;
-	}
-
-	return PluginCallContext{
-		.pluginId = plugin != nullptr ? plugin->getPluginId() : std::string{},
-		.pluginDirectory = plugin != nullptr ? plugin->getPluginDirectory() : std::string{},
-		.scriptPath = plugin != nullptr ? plugin->getScriptPath() : std::string{},
-		.flags = flags,
-		.host = plugin != nullptr ? plugin->getRuntimeHost() : nullptr,
-		.proxy = plugin != nullptr ? proxy_config_for_system(config, plugin->getPluginId()) : std::nullopt,
-		.currentItemId = itemId,
-		.repositories = plugin != nullptr ? repositories_for_ecosystem(config, plugin->getPluginId()) : std::vector<RepositoryEntry>{},
-		.hostInfo = HostInfoService::currentSnapshot(),
-	};
-}
-
-CommandOutput builtin_pack_output(const RqPackageBuildResult& result) {
-    CommandOutput output;
-    output.mode = DisplayMode::PACK;
-    output.sessionItems = {result.metadata.name};
-    output.success = true;
-    output.succeeded = 1;
-    output.blocks.push_back(make_command_field_value_block({
-        {.key = "System", .value = "rqp"},
-        {.key = "Format", .value = "rqp"},
-        {.key = "Package", .value = result.metadata.name},
-        {.key = "Version", .value = result.metadata.version + "-" + std::to_string(result.metadata.release) + "+r" + std::to_string(result.metadata.revision)},
-        {.key = "Output Path", .value = result.outputPath.string()},
-    }));
-    output.blocks.push_back(make_command_artifact_block("artifact", result.outputPath.string()));
-    return output;
-}
-
-CommandOutput plugin_pack_output(const std::string& system, const std::vector<std::string>& artifacts) {
-    CommandOutput output;
-    output.mode = DisplayMode::PACK;
-    output.sessionItems = {system};
-    output.success = true;
-    output.succeeded = 1;
-    output.blocks.push_back(make_command_field_value_block({
-        {.key = "System", .value = system},
-        {.key = "Artifacts", .value = std::to_string(artifacts.size())},
-    }));
-    for (const std::string& artifact : artifacts) {
-        output.blocks.push_back(make_command_artifact_block("artifact", artifact));
-    }
-    return output;
-}
-
-struct SbomResolutionResult {
-    std::vector<Request> requests;
-    std::vector<std::string> missingPackages;
-};
-
-std::vector<Request> resolve_audit_requests(Executer* executor, const std::vector<Request>& requests) {
-    std::vector<Request> resolved = requests;
-    if (executor == nullptr) {
-        return resolved;
-    }
-
-    for (Request& request : resolved) {
-        if (request.action != ActionType::AUDIT || request.system.empty() || request.usesLocalTarget || request.packages.empty()) {
-            continue;
-        }
-
-        std::vector<std::string> resolvedPackages;
-        resolvedPackages.reserve(request.packages.size());
-        for (const std::string& packageSpecifier : request.packages) {
-            if (has_explicit_version(packageSpecifier)) {
-                resolvedPackages.push_back(packageSpecifier);
-                continue;
-            }
-
-            const Package requestedPackage = planner_make_requested_package(request, request.system, packageSpecifier);
-            const std::optional<Package> resolvedPackage = executor->resolvePackage(request, requestedPackage);
-            if (resolvedPackage.has_value()) {
-                resolvedPackages.push_back(planner_package_specifier_from_package(resolvedPackage.value()));
-                continue;
-            }
-
-            resolvedPackages.push_back(packageSpecifier);
-        }
-        request.packages = std::move(resolvedPackages);
-    }
-
-    return resolved;
-}
-
-std::vector<Request> expand_system_only_audit_requests(Executer* executor, const std::vector<Request>& requests) {
-    std::vector<Request> expanded = requests;
-    if (executor == nullptr) {
-        return expanded;
-    }
-
-    for (Request& request : expanded) {
-        if (request.action != ActionType::AUDIT || request.system.empty() || request.usesLocalTarget || !request.packages.empty()) {
-            continue;
-        }
-
-        const std::vector<PackageInfo> installedPackages = executor->list(request);
-        request.packages.clear();
-        request.packages.reserve(installedPackages.size());
-        for (const PackageInfo& item : installedPackages) {
-            if (item.name.empty()) {
-                continue;
-            }
-            request.packages.push_back(package_specifier_from_info(item));
-        }
-    }
-
-    return expanded;
-}
-
-std::vector<Request> expand_system_wide_update_requests(Executer* executor, const std::vector<Request>& requests) {
-	std::vector<Request> expanded = requests;
-	if (executor == nullptr) {
-		return expanded;
-	}
-
-	for (Request& request : expanded) {
-		if (!request_targets_system_wide_package_update(request)) {
-			continue;
-		}
-
-		const std::vector<PackageInfo> installedPackages = executor->list(request);
-		request.packages.clear();
-		request.packages.reserve(installedPackages.size());
-		for (const PackageInfo& item : installedPackages) {
-			if (item.name.empty()) {
-				continue;
-			}
-			request.packages.push_back(package_specifier_from_info(item));
-		}
-	}
-
-	return expanded;
-}
-
-SbomResolutionResult resolve_sbom_requests(Executer* executor, const ReqPackConfig& config, const std::vector<Request>& requests) {
-    SbomResolutionResult result{.requests = requests};
-    if (executor == nullptr) {
-        return result;
-    }
-
-    for (Request& request : result.requests) {
-        if (request.action != ActionType::SBOM || request.system.empty() || request.usesLocalTarget) {
-            continue;
-        }
-
-        if (request.packages.empty()) {
-            const std::vector<PackageInfo> installedPackages = executor->list(request);
-            request.packages.clear();
-            request.packages.reserve(installedPackages.size());
-            for (const PackageInfo& item : installedPackages) {
-                if (item.name.empty()) {
-                    continue;
-                }
-                request.packages.push_back(package_specifier_from_info(item));
-            }
-        }
-
-        if (request.packages.empty()) {
-            continue;
-        }
-
-        std::vector<std::string> resolvedPackages;
-        resolvedPackages.reserve(request.packages.size());
-        for (const std::string& packageSpecifier : request.packages) {
-            if (has_explicit_version(packageSpecifier)) {
-                resolvedPackages.push_back(packageSpecifier);
-                continue;
-            }
-
-            const Package requestedPackage = planner_make_requested_package(request, request.system, packageSpecifier);
-            const std::optional<Package> resolvedPackage = executor->resolvePackage(request, requestedPackage);
-            if (resolvedPackage.has_value()) {
-                resolvedPackages.push_back(planner_package_specifier_from_package(resolvedPackage.value()));
-                continue;
-            }
-
-            if (has_explicit_version(packageSpecifier) || !config.sbom.skipMissingPackages) {
-                result.missingPackages.push_back(request.system + ":" + packageSpecifier);
-                continue;
-            }
-
-            Logger::instance().warn("sbom skipping missing package: " + request.system + ":" + packageSpecifier);
-        }
-        request.packages = std::move(resolvedPackages);
-    }
-
-    return result;
-}
-
-} // namespace
+#include <vector>
 
 Orchestrator::Orchestrator(std::vector<Request> requests, const ReqPackConfig& config)
 	: config(config), requests(std::move(requests)) {
-	this->registry  = new Registry(this->config);
-	this->planner   = new Planner(this->registry, this->registry->getDatabase(), this->config);
+	this->registry = new Registry(this->config);
+	this->planner = new Planner(this->registry, this->registry->getDatabase(), this->config);
 	this->auditExporter = new AuditExporter(this->registry, this->config);
 	this->sbomExporter = new SbomExporter(this->registry, this->config);
 	this->snapshotExporter = new SnapshotExporter(this->config);
 	this->validator = new Validator(this->registry, this->config);
-	this->executor  = new Executer(this->registry, this->config);
+	this->executor = new Executer(this->registry, this->config);
 }
 
 Orchestrator::~Orchestrator() {
@@ -559,288 +47,6 @@ int Orchestrator::countRequestedItems() const {
 	return count;
 }
 
-bool Orchestrator::shouldRefreshPluginWrappers() const {
-	if (this->requests.empty()) {
-		return false;
-	}
-	return std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
-		return request_targets_plugin_wrapper_refresh(request);
-	});
-}
-
-bool Orchestrator::shouldRefreshMainRegistry() const {
-	if (this->requests.empty()) {
-		return false;
-	}
-	return std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
-		return request.action == ActionType::UPDATE;
-	});
-}
-
-bool Orchestrator::shouldRunSystemWidePackageUpdates() const {
-	if (this->requests.empty()) {
-		return false;
-	}
-	return std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
-		return request_targets_system_wide_package_update(request);
-	});
-}
-
-int Orchestrator::runPluginWrapperRefresh() {
-	Logger& logger = Logger::instance();
-	std::vector<std::string> itemIds;
-	itemIds.reserve(this->requests.size());
-	for (const Request& request : this->requests) {
-		itemIds.push_back(request.system);
-	}
-
-	logger.displaySessionBegin(DisplayMode::UPDATE, itemIds);
-	int succeeded = 0;
-	int failed = 0;
-	for (const Request& request : this->requests) {
-		logger.displayItemBegin(request.system, request.system);
-		logger.displayItemStep(request.system, "refresh plugin wrapper");
-		if (this->registry->refreshPlugin(request.system, true) && this->registry->loadPlugin(request.system)) {
-			logger.displayItemSuccess(request.system);
-			++succeeded;
-			continue;
-		}
-
-		logger.displayItemFailure(request.system, make_error_diagnostic(
-			"orchestrator",
-			"Plugin wrapper refresh failed",
-			"ReqPack could not refresh or reload plugin wrapper for requested system.",
-			"Check plugin source, registry state, and local plugin cache, then retry update.",
-			{},
-			request.system,
-			"plugin-refresh",
-			{{"system", request.system}}
-		));
-		++failed;
-	}
-
-	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
-	return failed == 0 ? 0 : 1;
-}
-
-int Orchestrator::runSystemWidePackageUpdates() {
-	Logger& logger = Logger::instance();
-	std::vector<std::string> itemIds;
-	itemIds.reserve(this->requests.size());
-	for (const Request& request : this->requests) {
-		itemIds.push_back(request.system);
-	}
-
-	const std::vector<Request> validationRequests = expand_system_wide_update_requests(this->executor, this->requests);
-	const bool hasValidationTargets = std::any_of(validationRequests.begin(), validationRequests.end(), [](const Request& request) {
-		return !request.packages.empty();
-	});
-	if (hasValidationTargets) {
-		Graph* graph = this->planner->plan(validationRequests);
-		Graph* validatedGraph = this->validator->validate(graph);
-		if (validatedGraph == nullptr) {
-			if (graph != nullptr) {
-				log_validation_blocked(this->validator->getLastFindings());
-			}
-			delete graph;
-			return 1;
-		}
-		delete validatedGraph;
-	}
-
-	logger.displaySessionBegin(DisplayMode::UPDATE, itemIds);
-	int succeeded = 0;
-	int failed = 0;
-	for (const bool ok : this->executor->updateSystems(this->requests)) {
-		if (ok) {
-			++succeeded;
-		} else {
-			++failed;
-		}
-	}
-
-	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
-	return failed == 0 ? 0 : 1;
-}
-
-int Orchestrator::runPluginInstallRequests() {
-	Logger& logger = Logger::instance();
-	std::vector<std::string> itemIds;
-	itemIds.reserve(this->requests.size());
-	for (const Request& request : this->requests) {
-		itemIds.push_back(request.system);
-	}
-
-	logger.displaySessionBegin(DisplayMode::INSTALL, itemIds);
-	int succeeded = 0;
-	int failed = 0;
-	Downloader downloader(this->registry->getDatabase(), this->config);
-	for (const Request& request : this->requests) {
-		logger.displayItemBegin(request.system, request.system);
-		logger.displayItemStep(request.system, "install plugin wrapper");
-		const std::string resolvedSystem = this->registry->resolvePluginName(request.system);
-		if (resolvedSystem.empty()) {
-			logger.displayItemFailure(request.system, make_error_diagnostic(
-				"install",
-				"Plugin install failed",
-				"ReqPack could not resolve requested system to a plugin wrapper.",
-				"Check plugin name and registry sources, then retry.",
-				{},
-				request.system,
-				"plugin-install"
-			));
-			++failed;
-			continue;
-		}
-
-		bool installed = plugin_bundle_exists(this->config, resolvedSystem);
-		if (!installed && downloader.downloadPlugin(resolvedSystem)) {
-			this->registry->scanDirectory(this->config.registry.pluginDirectory);
-			installed = plugin_bundle_exists(this->config, resolvedSystem);
-		}
-		if (installed) {
-			logger.displayItemSuccess(request.system);
-			++succeeded;
-			continue;
-		}
-
-		logger.displayItemFailure(request.system, make_error_diagnostic(
-			"install",
-			"Plugin install failed",
-			"ReqPack could not install requested plugin wrapper from configured local registry sources.",
-			"Check registry source path, plugin bundle contents, and auto-download settings, then retry.",
-			{},
-			request.system,
-			"plugin-install"
-		));
-		++failed;
-	}
-
-	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
-	return failed == 0 ? 0 : 1;
-}
-
-int Orchestrator::runPluginRemoveRequests() {
-	Logger& logger = Logger::instance();
-	std::vector<std::string> itemIds;
-	itemIds.reserve(this->requests.size());
-	for (const Request& request : this->requests) {
-		itemIds.push_back(request.system);
-	}
-
-	logger.displaySessionBegin(DisplayMode::REMOVE, itemIds);
-	int succeeded = 0;
-	int failed = 0;
-	for (const Request& request : this->requests) {
-		logger.displayItemBegin(request.system, request.system);
-		logger.displayItemStep(request.system, "remove plugin wrapper");
-
-		const std::string resolvedSystem = this->registry->resolvePluginName(request.system);
-		if (resolvedSystem.empty()) {
-			logger.displayItemFailure(request.system, make_error_diagnostic(
-				"remove",
-				"Plugin remove failed",
-				"ReqPack could not resolve requested system to an installed plugin wrapper.",
-				"Check plugin name and local plugin state, then retry.",
-				{},
-				request.system,
-				"plugin-remove"
-			));
-			++failed;
-			continue;
-		}
-
-		const std::optional<PluginBundleLayout> layout = plugin_bundle_find_installed(this->config, resolvedSystem);
-		if (!layout.has_value()) {
-			logger.displayItemFailure(request.system, make_error_diagnostic(
-				"remove",
-				"Plugin remove failed",
-				"Requested plugin wrapper is not installed in current plugin directory.",
-				"Install plugin first or verify configured plugin directory before retrying remove.",
-				{},
-				request.system,
-				"plugin-remove"
-			));
-			++failed;
-			continue;
-		}
-
-		if (!this->config.execution.dryRun) {
-			std::map<std::string, std::vector<Package>> dependencyPackages;
-			for (Package dependency : plugin_bundle_remove_dependencies(layout.value(), this->registry)) {
-				if (dependency.system.empty() || dependency.name.empty()) {
-					continue;
-				}
-				dependencyPackages[dependency.system].push_back(std::move(dependency));
-			}
-
-			bool dependencyRemovalOk = true;
-			std::vector<std::string> dependencyFlags = request.flags;
-			dependencyFlags.push_back("__reqpack-internal-silent-runtime");
-			for (const auto& [system, packages] : dependencyPackages) {
-				if (packages.empty()) {
-					continue;
-				}
-
-				if (this->registry->getPlugin(system) == nullptr || !this->registry->loadPlugin(system)) {
-					dependencyRemovalOk = false;
-					break;
-				}
-				IPlugin* plugin = this->registry->getPlugin(system);
-				if (plugin == nullptr) {
-					dependencyRemovalOk = false;
-					break;
-				}
-
-				const PluginCallContext dependencyContext = plugin_context_for_packages(plugin, this->config, dependencyFlags, packages);
-				if (!plugin->remove(dependencyContext, packages)) {
-					dependencyRemovalOk = false;
-					break;
-				}
-			}
-
-			if (!dependencyRemovalOk) {
-				logger.displayItemFailure(request.system, make_error_diagnostic(
-					"remove",
-					"Plugin remove failed",
-					"ReqPack could not remove one or more plugin dependency packages before deleting wrapper files.",
-					"Inspect dependency plugin output and retry once dependent packages can be removed cleanly.",
-					{},
-					request.system,
-					"plugin-remove"
-				));
-				++failed;
-				continue;
-			}
-
-			this->registry->unloadPlugin(resolvedSystem);
-			std::error_code error;
-			std::filesystem::remove_all(layout->rootDir, error);
-			if (error) {
-				logger.displayItemFailure(request.system, make_error_diagnostic(
-					"remove",
-					"Plugin remove failed",
-					"ReqPack could not delete installed plugin wrapper files from disk.",
-					"Check filesystem permissions and retry remove after closing any process using that plugin directory.",
-					error.message(),
-					request.system,
-					"plugin-remove"
-				));
-				++failed;
-				continue;
-			}
-
-			this->registry->scanDirectory(this->config.registry.pluginDirectory);
-		}
-
-		logger.displayItemSuccess(request.system);
-		++succeeded;
-	}
-
-	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
-	return failed == 0 ? 0 : 1;
-}
-
 int Orchestrator::run() {
 	if (this->shouldRefreshMainRegistry() && !this->registry->getDatabase()->refreshMainRegistry()) {
 		Logger::instance().diagnostic(make_warning_diagnostic(
@@ -861,12 +67,7 @@ int Orchestrator::run() {
 	if (std::filesystem::exists(workspacePluginDirectory) && workspacePluginDirectory != configuredPluginDirectory) {
 		this->registry->scanDirectory(workspacePluginDirectory.string());
 	}
-	auto cleanupTempFiles = [](const std::vector<std::filesystem::path>& tempFiles) {
-		for (const std::filesystem::path& tempFile : tempFiles) {
-			std::error_code ec;
-			std::filesystem::remove_all(tempFile, ec);
-		}
-	};
+
 	if (this->requests.empty()) {
 		return 0;
 	}
@@ -876,319 +77,66 @@ int Orchestrator::run() {
 	if (this->shouldRefreshPluginWrappers()) {
 		return this->runPluginWrapperRefresh();
 	}
-	if (std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
-		return request_targets_plugin_install(request);
-	})) {
+	if (orchestrator_internal::requests_target_plugin_install(this->requests)) {
 		return this->runPluginInstallRequests();
 	}
-	if (std::all_of(this->requests.begin(), this->requests.end(), [](const Request& request) {
-		return request_targets_plugin_remove(request);
-	})) {
+	if (orchestrator_internal::requests_target_plugin_remove(this->requests)) {
 		return this->runPluginRemoveRequests();
 	}
 
-	// ── URL pre-processing ────────────────────────────────────────────────────
-	// For any INSTALL request whose localPath is a URL:
-	//   1. If system is empty, resolve it from the file extension via plugin declarations.
-	//   2. Download the URL to a temp file and replace localPath with the local path.
-	// Temp files are tracked and deleted after execution.
 	std::vector<std::filesystem::path> tempFiles;
-	for (Request& request : this->requests) {
-		if (request.action != ActionType::INSTALL || !request.usesLocalTarget) {
-			continue;
-		}
-
-		if (!is_url(request.localPath)) {
-			std::string errorMessage;
-			if (!resolve_local_target(request, this->registry, this->config, tempFiles, &errorMessage)) {
-				Logger::instance().diagnostic(make_error_diagnostic(
-					"orchestrator",
-					"Local target could not be resolved",
-					"ReqPack could not infer plugin or install target details from provided local path.",
-					"Specify system explicitly, for example `rqp install <system> <path>`.",
-					errorMessage,
-					request.system.empty() ? "install" : request.system,
-					"local-target",
-					{{"path", request.localPath}}
-				));
-				cleanupTempFiles(tempFiles);
-				return 1;
-			}
-			continue;
-		}
-
-		const std::string filename = url_filename(request.localPath);
-		const std::filesystem::path tempDir = std::filesystem::temp_directory_path() / "reqpack";
-		std::error_code ec;
-		std::filesystem::create_directories(tempDir, ec);
-		const std::filesystem::path tempFile = tempDir / filename;
-
-		Logger::instance().stdout("downloading " + request.localPath, request.system, "install");
-
-		Downloader downloader(this->registry->getDatabase(), this->config);
-		if (!downloader.download(request.localPath, tempFile.string())) {
-			Logger::instance().diagnostic(make_error_diagnostic(
-				"network",
-				"Download failed for " + request.localPath,
-				"Remote host could not be reached or returned data ReqPack could not download successfully.",
-				"Check network access, verify URL, and confirm proxy or firewall settings.",
-				{},
-				request.system.empty() ? "download" : request.system,
-				"install",
-				{{"url", request.localPath}, {"target", tempFile.string()}}
-			));
-			cleanupTempFiles(tempFiles);
-			return 1;
-		}
-
-		tempFiles.push_back(tempFile);
-		request.localPath = tempFile.string();
-		std::string errorMessage;
-		if (!resolve_local_target(request, this->registry, this->config, tempFiles, &errorMessage)) {
-			Logger::instance().diagnostic(make_error_diagnostic(
-				"orchestrator",
-				"Downloaded target could not be resolved",
-				"ReqPack downloaded file successfully, but could not map it to a plugin or install target.",
-				"Specify system explicitly when installing remote files.",
-				errorMessage,
-				request.system.empty() ? "install" : request.system,
-				"local-target",
-				{{"path", request.localPath}}
-			));
-			cleanupTempFiles(tempFiles);
-			return 1;
-		}
-	}
-	RequestResolutionService requestResolver(this->registry, this->config);
-	std::string resolutionError;
-	const std::optional<std::vector<Request>> resolvedRequests = requestResolver.resolveRequests(this->requests, &resolutionError);
-	if (!resolvedRequests.has_value()) {
-		if (!resolutionError.empty()) {
-			Logger::instance().diagnostic(make_error_diagnostic(
-				"orchestrator",
-				"Request resolution failed",
-				"ReqPack could not normalize one or more user requests into executable operations.",
-				"Check package specifiers, system names, and command flags, then retry.",
-				resolutionError,
-				"resolver",
-				"request"
-			));
-		}
-		cleanupTempFiles(tempFiles);
+	if (!orchestrator_internal::prepare_requests_for_run(this->requests, this->registry, this->config, tempFiles)) {
+		orchestrator_internal::cleanup_temp_files(tempFiles);
 		return 1;
 	}
-	this->requests = resolvedRequests.value();
-	// ─────────────────────────────────────────────────────────────────────────
 
-	if (this->requests.front().action == ActionType::LIST) {
-		std::vector<PackageInfo> items;
-		for (const Request& request : this->requests) {
-			auto listed = this->executor->list(request);
-			for (auto& item : listed) {
-				if (item.system.empty()) {
-					item.system = request.system;
-				}
-				items.push_back(std::move(item));
-			}
-		}
-		render_command_output(package_table_output(ActionType::LIST, this->requests, items));
-		return 0;
+	const ActionType action = this->requests.front().action;
+	if (action == ActionType::LIST || action == ActionType::OUTDATED || action == ActionType::SEARCH || action == ActionType::INFO) {
+		const int exitCode = orchestrator_internal::run_query_action(action, this->requests, this->executor);
+		orchestrator_internal::cleanup_temp_files(tempFiles);
+		return exitCode;
 	}
 
-	if (this->requests.front().action == ActionType::OUTDATED) {
-		std::vector<PackageInfo> items;
-		for (const Request& request : this->requests) {
-			auto outdated = this->executor->outdated(request);
-			for (auto& item : outdated) {
-				if (item.system.empty()) {
-					item.system = request.system;
-				}
-				items.push_back(std::move(item));
-			}
-		}
-		render_command_output(package_table_output(ActionType::OUTDATED, this->requests, items));
-		return 0;
-	}
-
-	if (this->requests.front().action == ActionType::SNAPSHOT) {
+	if (action == ActionType::SNAPSHOT) {
 		const bool ok = this->snapshotExporter->exportSnapshot(this->requests.front());
+		orchestrator_internal::cleanup_temp_files(tempFiles);
 		return ok ? 0 : 1;
 	}
 
-	if (this->requests.front().action == ActionType::PACK) {
-		const Request& request = this->requests.front();
-		try {
-			if (request.system.empty()) {
-				RqPackageBuildRequest buildRequest;
-				buildRequest.projectRoot = request.localPath;
-				buildRequest.outputPath = request.outputPath;
-				buildRequest.force = request_has_flag(request, "force");
-				buildRequest.interactive = this->config.interaction.interactive;
-				if (!request.payloadPath.empty()) {
-					buildRequest.payloadRoot = std::filesystem::path(request.payloadPath);
-				}
-
-				const RqPackageBuildResult result = rq_build_package(buildRequest, this->config);
-				render_command_output(builtin_pack_output(result));
-				return 0;
-			}
-
-			if (this->registry->getPlugin(request.system) == nullptr || !this->registry->loadPlugin(request.system)) {
-				Logger::instance().diagnostic(make_error_diagnostic(
-					"pack",
-					"Plugin load failed for system '" + request.system + "'",
-					"ReqPack could not load requested plugin before running pack operation.",
-					"Check plugin installation and registry state, then retry.",
-					{},
-					request.system,
-					"pack"
-				));
-				return 1;
-			}
-
-			IPlugin* plugin = this->registry->getPlugin(request.system);
-			if (plugin == nullptr || !plugin->supportsPack()) {
-				Logger::instance().diagnostic(make_error_diagnostic(
-					"pack",
-					"system '" + request.system + "' does not support pack",
-					"Selected plugin does not expose optional pack capability.",
-					"Use builtin `rqp pack <project-dir>` or choose plugin that implements pack.",
-					{},
-					request.system,
-					"pack"
-				));
-				return 1;
-			}
-
-			PluginCallContext context{
-				.pluginId = plugin->getPluginId(),
-				.pluginDirectory = plugin->getPluginDirectory(),
-				.scriptPath = plugin->getScriptPath(),
-				.flags = request.flags,
-				.host = plugin->getRuntimeHost(),
-				.proxy = proxy_config_for_system(this->config, plugin->getPluginId()),
-				.currentItemId = request.system,
-				.repositories = repositories_for_ecosystem(this->config, plugin->getPluginId()),
-				.hostInfo = HostInfoService::currentSnapshot(),
-			};
-
-			std::vector<std::string> packFlags = request.flags;
-			if (!request.payloadPath.empty()) {
-				packFlags.push_back("payload-dir=" + request.payloadPath);
-			}
-			const bool ok = plugin->pack(context, request.localPath, request.outputPath, packFlags);
-			std::vector<std::string> artifacts = plugin->takeRecentArtifacts();
-			if (ok && artifacts.empty() && !request.outputPath.empty()) {
-				const std::filesystem::path explicitOutput = std::filesystem::path(request.outputPath).is_relative()
-					? (std::filesystem::current_path() / request.outputPath)
-					: std::filesystem::path(request.outputPath);
-				if (std::filesystem::exists(explicitOutput)) {
-					artifacts.push_back(explicitOutput.string());
-				}
-			}
-			if (ok && request.outputPath.empty() && artifacts.empty()) {
-				Logger::instance().diagnostic(make_error_diagnostic(
-					"pack",
-					"plugin pack succeeded but did not register any output artifact",
-					"Plugin reported success, but ReqPack received no artifact path to report back.",
-					"Update plugin.pack to register produced artifact with context.artifacts.register(...).",
-					{},
-					request.system,
-					"pack"
-				));
-				return 1;
-			}
-			if (ok && !request.outputPath.empty() && artifacts.empty()) {
-				Logger::instance().diagnostic(make_error_diagnostic(
-					"pack",
-					"plugin pack succeeded but output artifact is missing: " + request.outputPath,
-					"Plugin reported success for explicit output path, but resulting artifact file was not found.",
-					"Check plugin pack implementation and output path handling, then retry.",
-					{},
-					request.system,
-					"pack"
-				));
-				return 1;
-			}
-			if (!ok) {
-				return 1;
-			}
-			render_command_output(plugin_pack_output(request.system, artifacts));
-			return 0;
-		} catch (const std::exception& error) {
-			Logger::instance().diagnostic(make_error_diagnostic(
-				"pack",
-				error.what(),
-				"Pack command failed before producing valid artifact.",
-				"Check package layout, plugin support, and output path, then retry.",
-				{},
-				request.system.empty() ? "rqp" : request.system,
-				"pack"
-			));
-			return 1;
-		}
-	}
-
-	if (this->requests.front().action == ActionType::SEARCH) {
-		std::vector<PackageInfo> items;
-		for (const Request& request : this->requests) {
-			auto searched = this->executor->search(request);
-			for (auto& item : searched) {
-				if (item.system.empty()) {
-					item.system = request.system;
-				}
-				items.push_back(std::move(item));
-			}
-		}
-		render_command_output(package_table_output(ActionType::SEARCH, this->requests, items));
-		return 0;
-	}
-
-	if (this->requests.front().action == ActionType::INFO) {
-		const PackageInfo item = this->executor->info(this->requests.front());
-		const CommandOutput output = package_info_output(this->requests.front(), item);
-		render_command_output(output);
-		return output.success ? 0 : 1;
+	if (action == ActionType::PACK) {
+		const int exitCode = orchestrator_internal::run_pack_request(this->requests.front(), this->registry, this->config);
+		orchestrator_internal::cleanup_temp_files(tempFiles);
+		return exitCode;
 	}
 
 	std::vector<Request> plannedRequests = this->requests;
 	std::vector<std::string> missingSbomPackages;
-	if (this->requests.front().action == ActionType::AUDIT) {
-		plannedRequests = expand_system_only_audit_requests(this->executor, this->requests);
-		plannedRequests = resolve_audit_requests(this->executor, plannedRequests);
-	} else if (this->requests.front().action == ActionType::SBOM) {
-		SbomResolutionResult resolvedSbom = resolve_sbom_requests(this->executor, this->config, this->requests);
+	if (action == ActionType::AUDIT) {
+		plannedRequests = orchestrator_internal::expand_system_only_audit_requests(this->executor, this->requests);
+		plannedRequests = orchestrator_internal::resolve_audit_requests(this->executor, plannedRequests);
+	} else if (action == ActionType::SBOM) {
+		orchestrator_internal::SbomResolutionResult resolvedSbom = orchestrator_internal::resolve_sbom_requests(this->executor, this->config, this->requests);
 		plannedRequests = std::move(resolvedSbom.requests);
 		missingSbomPackages = std::move(resolvedSbom.missingPackages);
 	}
-	if (this->requests.front().action == ActionType::SBOM && !missingSbomPackages.empty()) {
-		for (const std::string& packageSpecifier : missingSbomPackages) {
-			Logger::instance().diagnostic(make_error_diagnostic(
-				"sbom",
-				"sbom missing package: " + packageSpecifier,
-				"Requested package is missing, unresolved, or not installed in target system.",
-				"Verify package name and version, or rerun with `--sbom-skip-missing-packages` if omission is acceptable.",
-				{},
-				"sbom",
-				"export",
-				{{"package", packageSpecifier}}
-			));
-		}
-		cleanupTempFiles(tempFiles);
+	if (action == ActionType::SBOM && !missingSbomPackages.empty()) {
+		orchestrator_internal::log_missing_sbom_packages(missingSbomPackages);
+		orchestrator_internal::cleanup_temp_files(tempFiles);
 		return 1;
 	}
+
 	Graph* graph = this->planner->plan(plannedRequests);
-	if (this->requests.front().action == ActionType::SBOM) {
+	if (action == ActionType::SBOM) {
 		const bool exported = graph != nullptr && this->sbomExporter->exportGraph(*graph, this->requests.front());
-		cleanupTempFiles(tempFiles);
+		orchestrator_internal::cleanup_temp_files(tempFiles);
 		delete graph;
 		return exported ? 0 : 1;
 	}
-	if (this->requests.front().action == ActionType::AUDIT) {
+	if (action == ActionType::AUDIT) {
 		const std::vector<ValidationFinding> findings = this->validator->audit(graph);
 		const bool exported = graph != nullptr && this->auditExporter->exportGraph(*graph, findings, this->requests.front());
 		delete graph;
-		cleanupTempFiles(tempFiles);
+		orchestrator_internal::cleanup_temp_files(tempFiles);
 		if (!exported) {
 			return 1;
 		}
@@ -1197,13 +145,14 @@ int Orchestrator::run() {
 		}
 		return findings.empty() ? 0 : 1;
 	}
+
 	Graph* validatedGraph = this->validator->validate(graph);
 	if (validatedGraph == nullptr) {
 		if (graph != nullptr) {
-			log_validation_blocked(this->validator->getLastFindings());
+			orchestrator_internal::log_validation_blocked(this->validator->getLastFindings());
 		}
 		delete graph;
-		cleanupTempFiles(tempFiles);
+		orchestrator_internal::cleanup_temp_files(tempFiles);
 		return 1;
 	}
 	graph = validatedGraph;
@@ -1211,6 +160,6 @@ int Orchestrator::run() {
 	const bool executeOk = this->executor->execute(graph);
 	delete graph;
 
-	cleanupTempFiles(tempFiles);
+	orchestrator_internal::cleanup_temp_files(tempFiles);
 	return executeOk ? 0 : 1;
 }

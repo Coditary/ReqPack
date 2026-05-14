@@ -133,55 +133,160 @@ include_directories(src/main/include)
 
 set(SOURCES
     src/main/cpp/main.cpp
+    src/main/cpp/main_arg_parsing.cpp
+    src/main/cpp/main_diagnostics.cpp
+    src/main/cpp/main_dispatch.cpp
+    src/main/cpp/main_self_update.cpp
+    src/main/cpp/main_self_update_support.cpp
+    src/main/cpp/main_self_update_release.cpp
+    src/main/cpp/main_stdin.cpp
     src/main/cpp/cli/cli.cpp
+    src/main/cpp/cli/cli_help_text.cpp
+    src/main/cpp/cli/cli_parse_core.cpp
+    src/main/cpp/cli/cli_parse_shared.cpp
+    src/main/cpp/cli/cli_system_discovery.cpp
     src/main/cpp/output/logger.cpp
+    src/main/cpp/output/logger_processing.cpp
+    src/main/cpp/output/logger_settings.cpp
+    src/main/cpp/output/logger_emit.cpp
     src/main/cpp/output/logger_core.cpp
     src/main/cpp/output/command_output.cpp
+    src/main/cpp/output/command_output_projection.cpp
+    src/main/cpp/output/command_output_render.cpp
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/plain_display.cpp
+    src/main/cpp/output/plain_display_session.cpp
+    src/main/cpp/output/plain_display_table.cpp
     src/main/cpp/output/color_display.cpp
     src/main/cpp/output/display_factory.cpp
     src/main/cpp/plugins/exec_rules.cpp
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
-    src/main/cpp/plugins/rq_plugin.cpp
+    src/main/cpp/plugins/lua_bridge_bindings.cpp
+    src/main/cpp/plugins/lua_bridge_execution_policy.cpp
+    src/main/cpp/plugins/lua_bridge_host_runtime.cpp
+    src/main/cpp/plugins/lua_bridge_host_runtime_execution.cpp
+    src/main/cpp/plugins/lua_bridge_host_runtime_events.cpp
+    src/main/cpp/plugins/lua_bridge_plugin_api.cpp
+    src/main/cpp/plugins/lua_bridge_runtime.cpp
+    src/main/cpp/plugins/lua_bridge_value_mapper.cpp
+    src/main/cpp/plugins/rqp_plugin.cpp
+    src/main/cpp/plugins/rqp_plugin_query.cpp
+    src/main/cpp/plugins/rqp_plugin_install.cpp
+    src/main/cpp/plugins/rqp_plugin_repository.cpp
+    src/main/cpp/plugins/rqp_plugin_hooks.cpp
+    src/main/cpp/plugins/rqp_plugin_state.cpp
+    src/main/cpp/plugins/rqp_plugin_pack.cpp
     src/main/cpp/core/archive/archive_resolver.cpp
+    src/main/cpp/core/archive/archive_resolver_process.cpp
+    src/main/cpp/core/archive/archive_resolver_extract.cpp
     src/main/cpp/core/common/network_environment.cpp
     src/main/cpp/core/common/version_compare.cpp
     src/main/cpp/core/config/configuration.cpp
+    src/main/cpp/core/config/configuration_cli_overrides.cpp
+    src/main/cpp/core/config/configuration_loader.cpp
+    src/main/cpp/core/config/configuration_lua_values.cpp
+    src/main/cpp/core/config/configuration_paths.cpp
+    src/main/cpp/core/config/configuration_registry_sources.cpp
     src/main/cpp/core/download/downloader.cpp
+    src/main/cpp/core/download/downloader_plugin.cpp
+    src/main/cpp/core/download/downloader_plugin_materialize.cpp
+    src/main/cpp/core/download/downloader_transfer.cpp
+    src/main/cpp/core/download/downloader_transfer_progress.cpp
     src/main/cpp/core/download/downloader_core.cpp
     src/main/cpp/core/execution/executor.cpp
+    src/main/cpp/core/execution/executor_dispatch.cpp
+    src/main/cpp/core/execution/executor_history_sync.cpp
+    src/main/cpp/core/execution/executor_parallel.cpp
+    src/main/cpp/core/execution/executor_query_ops.cpp
+    src/main/cpp/core/execution/executor_run.cpp
+    src/main/cpp/core/execution/executor_task_scheduler.cpp
+    src/main/cpp/core/execution/executor_task_graph.cpp
+    src/main/cpp/core/execution/executor_transaction_state.cpp
+    src/main/cpp/core/execution/executor_transactional_dispatch.cpp
+    src/main/cpp/core/execution/executor_transaction_recovery.cpp
+    src/main/cpp/core/execution/executor_update.cpp
     src/main/cpp/core/execution/orchestrator.cpp
+    src/main/cpp/core/execution/orchestrator_analysis.cpp
+    src/main/cpp/core/execution/orchestrator_pack.cpp
+    src/main/cpp/core/execution/orchestrator_plugin_flows.cpp
+    src/main/cpp/core/execution/orchestrator_query.cpp
+    src/main/cpp/core/execution/orchestrator_request_prep.cpp
     src/main/cpp/core/export/audit_exporter.cpp
+    src/main/cpp/core/export/audit_exporter_table.cpp
+    src/main/cpp/core/export/audit_exporter_structured.cpp
+    src/main/cpp/core/export/audit_exporter_write.cpp
     src/main/cpp/core/export/sbom_exporter.cpp
+    src/main/cpp/core/export/sbom_exporter_table.cpp
+    src/main/cpp/core/export/sbom_exporter_structured.cpp
+    src/main/cpp/core/export/sbom_exporter_write.cpp
     src/main/cpp/core/export/snapshot_exporter.cpp
+    src/main/cpp/core/export/snapshot_exporter_render.cpp
+    src/main/cpp/core/export/snapshot_exporter_write.cpp
     src/main/cpp/core/history/history_manager.cpp
+    src/main/cpp/core/history/history_manager_entry_codec.cpp
+    src/main/cpp/core/history/history_manager_log.cpp
+    src/main/cpp/core/history/history_manager_store.cpp
     src/main/cpp/core/host/host_info.cpp
+    src/main/cpp/core/host/host_info_codec.cpp
+    src/main/cpp/core/host/host_info_probe.cpp
     src/main/cpp/core/manifest/manifest_loader.cpp
     src/main/cpp/core/packages/rq_package.cpp
+    src/main/cpp/core/packages/rq_package_metadata.cpp
+    src/main/cpp/core/packages/rq_package_payload.cpp
+    src/main/cpp/core/packages/rq_package_reader.cpp
+    src/main/cpp/core/packages/rq_package_build.cpp
     src/main/cpp/core/packages/rq_repository.cpp
+    src/main/cpp/core/packages/rq_repository_parse.cpp
+    src/main/cpp/core/packages/rq_repository_resolve.cpp
     src/main/cpp/core/planning/planner.cpp
+    src/main/cpp/core/planning/planner_request_setup.cpp
+    src/main/cpp/core/planning/planner_dependency_policy.cpp
+    src/main/cpp/core/planning/planner_graph.cpp
     src/main/cpp/core/planning/planner_core.cpp
     src/main/cpp/core/plugins/plugin_bundle.cpp
     src/main/cpp/core/planning/request_resolution.cpp
     src/main/cpp/core/plugins/plugin_test_runner.cpp
+    src/main/cpp/core/plugins/plugin_test_runner_cli.cpp
+    src/main/cpp/core/plugins/plugin_test_runner_case.cpp
+    src/main/cpp/core/plugins/plugin_test_runner_report.cpp
     src/main/cpp/core/registry/registry.cpp
+    src/main/cpp/core/registry/registry_trust.cpp
+    src/main/cpp/core/registry/registry_materialize.cpp
+    src/main/cpp/core/registry/registry_runtime.cpp
+    src/main/cpp/core/registry/registry_query.cpp
     src/main/cpp/core/registry/registry_database.cpp
+    src/main/cpp/core/registry/registry_database_git.cpp
+    src/main/cpp/core/registry/registry_database_main_registry.cpp
+    src/main/cpp/core/registry/registry_database_payload.cpp
+    src/main/cpp/core/registry/registry_database_storage.cpp
+    src/main/cpp/core/registry/registry_database_sync.cpp
     src/main/cpp/core/registry/registry_database_core.cpp
     src/main/cpp/core/registry/registry_json_parser.cpp
     src/main/cpp/core/remote/remote_client.cpp
     src/main/cpp/core/remote/remote_profiles.cpp
     src/main/cpp/core/remote/serve_remote.cpp
+    src/main/cpp/core/remote/serve_remote_auth.cpp
+    src/main/cpp/core/remote/serve_remote_command.cpp
+    src/main/cpp/core/remote/serve_remote_protocol.cpp
+    src/main/cpp/core/remote/serve_remote_session.cpp
+    src/main/cpp/core/remote/serve_remote_socket.cpp
+    src/main/cpp/core/remote/serve_remote_upload.cpp
     src/main/cpp/core/security/osv_core.cpp
     src/main/cpp/core/security/security_gateway_service.cpp
     src/main/cpp/core/security/validator.cpp
+    src/main/cpp/core/security/validator_prepare.cpp
+    src/main/cpp/core/security/validator_prompt.cpp
     src/main/cpp/core/security/validator_core.cpp
     src/main/cpp/core/security/vulnerability_database.cpp
     src/main/cpp/core/security/vulnerability_matcher.cpp
     src/main/cpp/core/security/vulnerability_sync_service.cpp
     src/main/cpp/core/state/rqp_state_store.cpp
+    src/main/cpp/core/state/rqp_state_store_load.cpp
     src/main/cpp/core/state/transaction_database.cpp
+    src/main/cpp/core/state/transaction_database_storage.cpp
+    src/main/cpp/core/state/transaction_database_read.cpp
+    src/main/cpp/core/state/transaction_database_write.cpp
     src/main/cpp/core/state/transaction_database_core.cpp
 )
 
@@ -211,46 +316,151 @@ add_executable(core_integration_tests
     tests/integration/core/registry/registry_service_tests.cpp
     tests/integration/plugins/lua_bridge/service_tests.cpp
     src/main/cpp/core/execution/executor.cpp
+    src/main/cpp/core/execution/executor_dispatch.cpp
+    src/main/cpp/core/execution/executor_history_sync.cpp
+    src/main/cpp/core/execution/executor_parallel.cpp
+    src/main/cpp/core/execution/executor_query_ops.cpp
+    src/main/cpp/core/execution/executor_run.cpp
+    src/main/cpp/core/execution/executor_task_scheduler.cpp
+    src/main/cpp/core/execution/executor_task_graph.cpp
+    src/main/cpp/core/execution/executor_transaction_state.cpp
+    src/main/cpp/core/execution/executor_transactional_dispatch.cpp
+    src/main/cpp/core/execution/executor_transaction_recovery.cpp
+    src/main/cpp/core/execution/executor_update.cpp
     src/main/cpp/core/host/host_info.cpp
+    src/main/cpp/core/host/host_info_codec.cpp
+    src/main/cpp/core/host/host_info_probe.cpp
     src/main/cpp/core/security/osv_core.cpp
     src/main/cpp/core/planning/planner.cpp
+    src/main/cpp/core/planning/planner_request_setup.cpp
+    src/main/cpp/core/planning/planner_dependency_policy.cpp
+    src/main/cpp/core/planning/planner_graph.cpp
     src/main/cpp/core/planning/planner_core.cpp
     src/main/cpp/core/plugins/plugin_bundle.cpp
     src/main/cpp/core/planning/request_resolution.cpp
     src/main/cpp/core/security/security_gateway_service.cpp
     src/main/cpp/core/export/audit_exporter.cpp
+    src/main/cpp/core/export/audit_exporter_table.cpp
+    src/main/cpp/core/export/audit_exporter_structured.cpp
+    src/main/cpp/core/export/audit_exporter_write.cpp
     src/main/cpp/core/export/sbom_exporter.cpp
+    src/main/cpp/core/export/sbom_exporter_table.cpp
+    src/main/cpp/core/export/sbom_exporter_structured.cpp
+    src/main/cpp/core/export/sbom_exporter_write.cpp
     src/main/cpp/core/export/snapshot_exporter.cpp
+    src/main/cpp/core/export/snapshot_exporter_render.cpp
+    src/main/cpp/core/export/snapshot_exporter_write.cpp
     src/main/cpp/output/logger.cpp
+    src/main/cpp/output/logger_processing.cpp
+    src/main/cpp/output/logger_settings.cpp
+    src/main/cpp/output/logger_emit.cpp
     src/main/cpp/output/logger_core.cpp
     src/main/cpp/output/command_output.cpp
+    src/main/cpp/output/command_output_projection.cpp
+    src/main/cpp/output/command_output_render.cpp
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/plain_display.cpp
+    src/main/cpp/output/plain_display_session.cpp
+    src/main/cpp/output/plain_display_table.cpp
     src/main/cpp/output/color_display.cpp
     src/main/cpp/output/display_factory.cpp
     src/main/cpp/plugins/exec_rules.cpp
     src/main/cpp/plugins/exec_rules_core.cpp
     src/main/cpp/plugins/lua_bridge.cpp
-    src/main/cpp/plugins/rq_plugin.cpp
+    src/main/cpp/plugins/lua_bridge_bindings.cpp
+    src/main/cpp/plugins/lua_bridge_execution_policy.cpp
+    src/main/cpp/plugins/lua_bridge_host_runtime.cpp
+    src/main/cpp/plugins/lua_bridge_host_runtime_execution.cpp
+    src/main/cpp/plugins/lua_bridge_host_runtime_events.cpp
+    src/main/cpp/plugins/lua_bridge_plugin_api.cpp
+    src/main/cpp/plugins/lua_bridge_runtime.cpp
+    src/main/cpp/plugins/lua_bridge_value_mapper.cpp
+    src/main/cpp/plugins/rqp_plugin.cpp
+    src/main/cpp/plugins/rqp_plugin_query.cpp
+    src/main/cpp/plugins/rqp_plugin_install.cpp
+    src/main/cpp/plugins/rqp_plugin_repository.cpp
+    src/main/cpp/plugins/rqp_plugin_hooks.cpp
+    src/main/cpp/plugins/rqp_plugin_state.cpp
+    src/main/cpp/plugins/rqp_plugin_pack.cpp
     src/main/cpp/core/archive/archive_resolver.cpp
+    src/main/cpp/core/archive/archive_resolver_process.cpp
+    src/main/cpp/core/archive/archive_resolver_extract.cpp
     src/main/cpp/core/common/version_compare.cpp
     src/main/cpp/core/config/configuration.cpp
+    src/main/cpp/core/config/configuration_cli_overrides.cpp
+    src/main/cpp/core/config/configuration_loader.cpp
+    src/main/cpp/core/config/configuration_lua_values.cpp
+    src/main/cpp/core/config/configuration_paths.cpp
+    src/main/cpp/core/config/configuration_registry_sources.cpp
     src/main/cpp/core/download/downloader.cpp
+    src/main/cpp/core/download/downloader_plugin.cpp
+    src/main/cpp/core/download/downloader_plugin_materialize.cpp
+    src/main/cpp/core/download/downloader_transfer.cpp
+    src/main/cpp/core/download/downloader_transfer_progress.cpp
     src/main/cpp/core/download/downloader_core.cpp
     src/main/cpp/core/history/history_manager.cpp
+    src/main/cpp/core/history/history_manager_entry_codec.cpp
+    src/main/cpp/core/history/history_manager_log.cpp
+    src/main/cpp/core/history/history_manager_store.cpp
     src/main/cpp/core/common/network_environment.cpp
+    src/main/cpp/core/manifest/manifest_loader.cpp
     src/main/cpp/core/packages/rq_package.cpp
+    src/main/cpp/core/packages/rq_package_metadata.cpp
+    src/main/cpp/core/packages/rq_package_payload.cpp
+    src/main/cpp/core/packages/rq_package_reader.cpp
+    src/main/cpp/core/packages/rq_package_build.cpp
     src/main/cpp/core/packages/rq_repository.cpp
+    src/main/cpp/core/packages/rq_repository_parse.cpp
+    src/main/cpp/core/packages/rq_repository_resolve.cpp
     src/main/cpp/core/plugins/plugin_test_runner.cpp
+    src/main/cpp/core/plugins/plugin_test_runner_cli.cpp
+    src/main/cpp/core/plugins/plugin_test_runner_case.cpp
+    src/main/cpp/core/plugins/plugin_test_runner_report.cpp
     src/main/cpp/core/registry/registry.cpp
+    src/main/cpp/core/registry/registry_trust.cpp
+    src/main/cpp/core/registry/registry_materialize.cpp
+    src/main/cpp/core/registry/registry_runtime.cpp
+    src/main/cpp/core/registry/registry_query.cpp
     src/main/cpp/core/registry/registry_database.cpp
+    src/main/cpp/core/registry/registry_database_git.cpp
+    src/main/cpp/core/registry/registry_database_main_registry.cpp
+    src/main/cpp/core/registry/registry_database_payload.cpp
+    src/main/cpp/core/registry/registry_database_storage.cpp
+    src/main/cpp/core/registry/registry_database_sync.cpp
     src/main/cpp/core/registry/registry_database_core.cpp
     src/main/cpp/core/registry/registry_json_parser.cpp
+    src/main/cpp/cli/cli.cpp
+    src/main/cpp/cli/cli_help_text.cpp
+    src/main/cpp/cli/cli_parse_core.cpp
+    src/main/cpp/cli/cli_parse_shared.cpp
+    src/main/cpp/cli/cli_system_discovery.cpp
+    src/main/cpp/core/execution/orchestrator.cpp
+    src/main/cpp/core/execution/orchestrator_analysis.cpp
+    src/main/cpp/core/execution/orchestrator_pack.cpp
+    src/main/cpp/core/execution/orchestrator_plugin_flows.cpp
+    src/main/cpp/core/execution/orchestrator_query.cpp
+    src/main/cpp/core/execution/orchestrator_request_prep.cpp
+    src/main/cpp/core/remote/remote_profiles.cpp
+    src/main/cpp/core/remote/serve_remote.cpp
+    src/main/cpp/core/remote/serve_remote_auth.cpp
+    src/main/cpp/core/remote/serve_remote_command.cpp
+    src/main/cpp/core/remote/serve_remote_upload.cpp
+    src/main/cpp/core/remote/serve_remote_protocol.cpp
+    src/main/cpp/core/remote/serve_remote_session.cpp
+    src/main/cpp/core/remote/serve_remote_socket.cpp
     src/main/cpp/core/security/vulnerability_database.cpp
     src/main/cpp/core/security/vulnerability_matcher.cpp
     src/main/cpp/core/security/vulnerability_sync_service.cpp
+    src/main/cpp/core/security/validator.cpp
+    src/main/cpp/core/security/validator_prepare.cpp
+    src/main/cpp/core/security/validator_prompt.cpp
+    src/main/cpp/core/security/validator_core.cpp
     src/main/cpp/core/state/rqp_state_store.cpp
+    src/main/cpp/core/state/rqp_state_store_load.cpp
     src/main/cpp/core/state/transaction_database.cpp
+    src/main/cpp/core/state/transaction_database_storage.cpp
+    src/main/cpp/core/state/transaction_database_read.cpp
+    src/main/cpp/core/state/transaction_database_write.cpp
     src/main/cpp/core/state/transaction_database_core.cpp
 )
 
@@ -283,38 +493,92 @@ add_executable(core_unit_tests
     tests/unit/output/logger/format_tests.cpp
     src/main/cpp/core/common/version_compare.cpp
     src/main/cpp/core/config/configuration.cpp
+    src/main/cpp/core/config/configuration_cli_overrides.cpp
+    src/main/cpp/core/config/configuration_loader.cpp
+    src/main/cpp/core/config/configuration_lua_values.cpp
+    src/main/cpp/core/config/configuration_paths.cpp
+    src/main/cpp/core/config/configuration_registry_sources.cpp
     src/main/cpp/core/host/host_info.cpp
+    src/main/cpp/core/host/host_info_codec.cpp
+    src/main/cpp/core/host/host_info_probe.cpp
     src/main/cpp/cli/cli.cpp
+    src/main/cpp/cli/cli_help_text.cpp
+    src/main/cpp/cli/cli_parse_core.cpp
+    src/main/cpp/cli/cli_parse_shared.cpp
+    src/main/cpp/cli/cli_system_discovery.cpp
     src/main/cpp/core/archive/archive_resolver.cpp
+    src/main/cpp/core/archive/archive_resolver_process.cpp
+    src/main/cpp/core/archive/archive_resolver_extract.cpp
     src/main/cpp/core/manifest/manifest_loader.cpp
     src/main/cpp/core/download/downloader.cpp
+    src/main/cpp/core/download/downloader_plugin.cpp
+    src/main/cpp/core/download/downloader_plugin_materialize.cpp
+    src/main/cpp/core/download/downloader_transfer.cpp
+    src/main/cpp/core/download/downloader_transfer_progress.cpp
     src/main/cpp/core/download/downloader_core.cpp
     src/main/cpp/core/export/audit_exporter.cpp
+    src/main/cpp/core/export/audit_exporter_table.cpp
+    src/main/cpp/core/export/audit_exporter_structured.cpp
+    src/main/cpp/core/export/audit_exporter_write.cpp
     src/main/cpp/core/export/sbom_exporter.cpp
+    src/main/cpp/core/export/sbom_exporter_table.cpp
+    src/main/cpp/core/export/sbom_exporter_structured.cpp
+    src/main/cpp/core/export/sbom_exporter_write.cpp
     src/main/cpp/core/export/snapshot_exporter.cpp
+    src/main/cpp/core/export/snapshot_exporter_render.cpp
+    src/main/cpp/core/export/snapshot_exporter_write.cpp
     src/main/cpp/core/history/history_manager.cpp
+    src/main/cpp/core/history/history_manager_entry_codec.cpp
+    src/main/cpp/core/history/history_manager_log.cpp
+    src/main/cpp/core/history/history_manager_store.cpp
     src/main/cpp/core/common/network_environment.cpp
     src/main/cpp/core/packages/rq_package.cpp
+    src/main/cpp/core/packages/rq_package_metadata.cpp
+    src/main/cpp/core/packages/rq_package_payload.cpp
+    src/main/cpp/core/packages/rq_package_reader.cpp
+    src/main/cpp/core/packages/rq_package_build.cpp
     src/main/cpp/core/packages/rq_repository.cpp
+    src/main/cpp/core/packages/rq_repository_parse.cpp
+    src/main/cpp/core/packages/rq_repository_resolve.cpp
     src/main/cpp/core/planning/planner_core.cpp
     src/main/cpp/core/plugins/plugin_bundle.cpp
     src/main/cpp/core/registry/registry_database.cpp
+    src/main/cpp/core/registry/registry_database_git.cpp
+    src/main/cpp/core/registry/registry_database_main_registry.cpp
+    src/main/cpp/core/registry/registry_database_payload.cpp
+    src/main/cpp/core/registry/registry_database_storage.cpp
+    src/main/cpp/core/registry/registry_database_sync.cpp
     src/main/cpp/core/registry/registry_database_core.cpp
     src/main/cpp/core/registry/registry_json_parser.cpp
     src/main/cpp/core/remote/remote_profiles.cpp
     src/main/cpp/core/security/osv_core.cpp
     src/main/cpp/core/security/security_gateway_service.cpp
     src/main/cpp/core/security/validator.cpp
+    src/main/cpp/core/security/validator_prepare.cpp
+    src/main/cpp/core/security/validator_prompt.cpp
     src/main/cpp/core/security/validator_core.cpp
     src/main/cpp/core/security/vulnerability_database.cpp
     src/main/cpp/core/security/vulnerability_matcher.cpp
     src/main/cpp/core/security/vulnerability_sync_service.cpp
     src/main/cpp/core/state/rqp_state_store.cpp
+    src/main/cpp/core/state/rqp_state_store_load.cpp
+    src/main/cpp/core/state/transaction_database.cpp
+    src/main/cpp/core/state/transaction_database_storage.cpp
+    src/main/cpp/core/state/transaction_database_read.cpp
+    src/main/cpp/core/state/transaction_database_write.cpp
     src/main/cpp/core/state/transaction_database_core.cpp
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/logger.cpp
+    src/main/cpp/output/logger_processing.cpp
+    src/main/cpp/output/logger_settings.cpp
+    src/main/cpp/output/logger_emit.cpp
     src/main/cpp/output/logger_core.cpp
+    src/main/cpp/output/command_output.cpp
+    src/main/cpp/output/command_output_projection.cpp
+    src/main/cpp/output/command_output_render.cpp
     src/main/cpp/output/plain_display.cpp
+    src/main/cpp/output/plain_display_session.cpp
+    src/main/cpp/output/plain_display_table.cpp
     src/main/cpp/output/color_display.cpp
     src/main/cpp/output/command_output.cpp
 )

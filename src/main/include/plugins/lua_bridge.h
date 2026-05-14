@@ -1,18 +1,14 @@
 #pragma once
 
-#include <filesystem>
-#include <sol/sol.hpp>
-#include <string>
-#include <unordered_map>
-#include <vector>
 #include <memory>
-#include <atomic>
 #include <functional>
-#include <cstdint>
+#include <string>
+#include <vector>
 
 #include "core/config/configuration.h"
-#include "core/common/types.h"
-#include "output/logger.h"
+#include "plugins/lua_bridge_bindings.h"
+#include "plugins/lua_bridge_host_runtime.h"
+#include "plugins/lua_bridge_runtime.h"
 #include "plugins/iplugin.h"
 
 class LuaBridge : public IPlugin, public IPluginRuntimeHost {
@@ -20,7 +16,6 @@ public:
     using ExecOverride = std::function<ExecResult(const std::string& sourceId, const std::string& command)>;
 
 private:
-    sol::state m_lua;
     std::string m_name;
     std::string m_version;
 	std::string m_pluginId;
@@ -28,42 +23,13 @@ private:
 	std::string m_scriptPath;
 	std::optional<PluginSecurityMetadata> m_securityMetadata;
 	std::vector<std::string> m_fileExtensions;
-	Logger& m_logger;
-    
-    sol::table m_pluginTable;
 	ReqPackConfig m_config;
-	std::vector<std::string> m_tempDirectories;
-	std::vector<PluginEventRecord> m_recentEvents;
-	std::vector<std::string> m_recentArtifacts;
-	std::vector<std::filesystem::path> m_runtimeWriteRoots;
-	struct RuntimeBindingContext {
-		IPluginRuntimeHost* host{nullptr};
-		std::string pluginId;
-		std::string sourceId;
-		std::vector<std::string> flags;
-	};
-	std::unordered_map<std::uint64_t, RuntimeBindingContext> m_runtimeBindingContexts;
-	std::uint64_t m_nextRuntimeBindingContextId{0};
-	mutable std::atomic<bool> m_silentRuntimeOutput{false};
-	ExecOverride m_execOverride;
+	Logger& m_logger;
+	LuaBridgeScriptRuntime m_runtime;
+	LuaBridgeHostRuntime m_hostRuntime;
+	LuaBridgeBindings m_bindings;
 
 	PluginCallContext makeContext(const std::vector<std::string>& flags) const;
-	std::uint64_t retainRuntimeBindingContext(const PluginCallContext& context);
-	const RuntimeBindingContext* runtimeBindingContext(std::uint64_t contextId) const;
-	void register_context_types();
-	void register_reqpack_namespace();
-	bool validatePluginContract() const;
-	std::vector<PackageInfo> packageInfoListFromObject(const sol::object& value) const;
-	PackageInfo packageInfoFromObject(const sol::object& value) const;
-	std::string serializeLuaPayload(const sol::object& value) const;
-	bool hasSilentRuntimeFlag(const std::vector<std::string>& flags) const;
-	bool shouldEnforceExecutionPolicy() const;
-	ExecResult denyExecution(const std::string& message) const;
-	ExecResult executeCommandWithPolicy(const std::string& sourceId, const std::string& command, bool silent) const;
-	ExecResult executeCommandWithPolicy(const std::string& sourceId, const std::string& command, const sol::object& rules, bool silent) const;
-	ExecResult runCommand(const std::string& command) const;
-	ExecResult runCommand(const std::string& command, bool silent) const;
-	DownloadResult downloadToPath(const std::string& url, const std::string& destinationPath);
 
 public:
     LuaBridge(const std::string& scriptPath, const ReqPackConfig& config = default_reqpack_config());

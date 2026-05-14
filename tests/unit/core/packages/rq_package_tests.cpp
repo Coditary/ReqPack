@@ -33,6 +33,21 @@ private:
     std::filesystem::path path_;
 };
 
+class ScopedCurrentPath {
+public:
+    explicit ScopedCurrentPath(const std::filesystem::path& target) : original_(std::filesystem::current_path()) {
+        std::filesystem::current_path(target);
+    }
+
+    ~ScopedCurrentPath() {
+        std::error_code error;
+        std::filesystem::current_path(original_, error);
+    }
+
+private:
+    std::filesystem::path original_;
+};
+
 void write_file(const std::filesystem::path& path, const std::string& content) {
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary);
@@ -300,6 +315,38 @@ TEST_CASE("rqp package builder builds control only package", "[unit][rq_package]
     const RqPackageLayout layout = RqPackageReader::load(result.outputPath, tempDir.path() / "work", tempDir.path() / "state", default_reqpack_config(), false);
     CHECK(layout.metadata.name == "control-only");
     CHECK_FALSE(layout.hasPayload);
+}
+
+TEST_CASE("rqp package builder defaults output into current project directory", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-pack-default-output"};
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    write_pack_project(projectRoot, "default-output");
+    const ScopedCurrentPath scopedCurrentPath{projectRoot};
+
+    const RqPackageBuildResult result = rq_build_package({
+        .projectRoot = ".",
+        .force = true,
+        .interactive = false,
+    });
+
+    CHECK(result.outputPath.lexically_normal() == (projectRoot / "default-output.rqp").lexically_normal());
+    CHECK(std::filesystem::exists(result.outputPath));
+}
+
+TEST_CASE("rqp package builder keeps default output next to explicit project path caller", "[unit][rq_package][core]") {
+    TempDir tempDir{"reqpack-rqp-pack-default-output-explicit"};
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+    write_pack_project(projectRoot, "explicit-output");
+    const ScopedCurrentPath scopedCurrentPath{tempDir.path()};
+
+    const RqPackageBuildResult result = rq_build_package({
+        .projectRoot = "./project",
+        .force = true,
+        .interactive = false,
+    });
+
+    CHECK(result.outputPath.lexically_normal() == (tempDir.path() / "explicit-output.rqp").lexically_normal());
+    CHECK(std::filesystem::exists(result.outputPath));
 }
 
 TEST_CASE("rqp package builder builds payload from payload tree", "[unit][rq_package][core]") {

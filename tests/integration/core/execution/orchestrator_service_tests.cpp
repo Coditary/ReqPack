@@ -5443,6 +5443,43 @@ return {
     CHECK(std::filesystem::exists(installLog));
 }
 
+TEST_CASE("orchestrator pack defaults to current directory when project path omitted", "[integration][orchestrator][service][pack]") {
+    TempDir tempDir{"reqpack-orchestrator-pack-default-project"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path configPath = write_config(tempDir.path(), pluginDirectory);
+    const std::filesystem::path projectRoot = tempDir.path() / "project";
+
+    write_file(projectRoot / "metadata.json",
+        "{\n"
+        "  \"formatVersion\": 1,\n"
+        "  \"name\": \"demo\",\n"
+        "  \"version\": \"1.2.3\",\n"
+        "  \"release\": 2,\n"
+        "  \"revision\": 1,\n"
+        "  \"summary\": \"demo\",\n"
+        "  \"description\": \"demo package\",\n"
+        "  \"license\": \"MIT\",\n"
+        "  \"vendor\": \"ReqPack Tests\",\n"
+        "  \"maintainerEmail\": \"tests@example.org\",\n"
+        "  \"url\": \"https://example.test/demo.rqp\"\n"
+        "}\n");
+    write_file(projectRoot / "reqpack.lua", R"(
+return {
+  apiVersion = 1,
+  hooks = {
+    install = "scripts/install.lua"
+  }
+}
+)");
+    write_file(projectRoot / "scripts" / "install.lua", "return true\n");
+
+    const std::string output = run_reqpack(projectRoot, configPath, {"pack"});
+
+    CHECK(output.find("PACK") != std::string::npos);
+    CHECK(output.find("artifact:") != std::string::npos);
+    CHECK(std::filesystem::exists(projectRoot / "demo.rqp"));
+}
+
 TEST_CASE("orchestrator pack passes external payload dir to builtin builder", "[integration][orchestrator][service][pack]") {
     TempDir tempDir{"reqpack-orchestrator-pack-external-payload"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";

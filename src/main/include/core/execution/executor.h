@@ -8,7 +8,6 @@
 #include "core/common/types.h"
 
 #include <memory>
-#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -65,7 +64,6 @@ class Executer {
 	std::vector<TransactionRecord> executeTaskGroups(const std::vector<TaskGroup>& taskGroups, const Graph* graph = nullptr) const;
 	std::vector<TransactionRecord> executeRecordedTaskGroups(const std::vector<TaskGroup>& taskGroups, const std::string& runId, const Graph* graph = nullptr) const;
 	std::vector<TransactionRecord> executeTransactionalTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const;
-	std::vector<TransactionRecord> executeTaskGroup(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> executeTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const;
 	PluginCallContext buildPluginContext(IPlugin* plugin, const TaskGroup& taskGroup) const;
 	bool dispatchTaskGroupToSecurityGateway(const TaskGroup& taskGroup) const;
@@ -80,8 +78,6 @@ class Executer {
 	std::vector<TransactionRecord> removeOrphanedDependencies(const std::vector<InstalledEntry>& installedState, const std::vector<TransactionRecord>& records) const;
 	void subtractDependencyOwnership(const std::vector<TransactionRecord>& records) const;
 	void reconcileInstalledOwnership(const std::vector<TaskGroup>& allTaskGroups, const std::vector<TaskGroup>& plannedTaskGroups, const std::vector<TransactionRecord>& records) const;
-	std::vector<Package> orderedPackages(const Graph& graph) const;
-	std::vector<TaskGroup> systemWideTaskGroups() const;
 	bool dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> buildSuccessRecords(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> buildFailureRecords(const TaskGroup& taskGroup) const;

@@ -625,6 +625,21 @@ TEST_CASE("cli parses token vectors and defaults list and outdated to all system
         CHECK(requests.front().flags == std::vector<std::string>{"force"});
     }
 
+    SECTION("pack builtin defaults project path to current directory") {
+        const std::vector<Request> requests = cli.parse(
+            std::vector<std::string>{"pack", "--output", "./dist/demo.rqp", "--force"},
+            config
+        );
+        REQUIRE(requests.size() == 1);
+        CHECK(requests.front().action == ActionType::PACK);
+        CHECK(requests.front().system.empty());
+        CHECK(requests.front().usesLocalTarget);
+        CHECK(requests.front().localPath == ".");
+        CHECK(requests.front().outputPath == "./dist/demo.rqp");
+        CHECK(requests.front().payloadPath.empty());
+        CHECK(requests.front().flags == std::vector<std::string>{"force"});
+    }
+
     SECTION("pack plugin parses known system and project path") {
         const std::vector<Request> requests = cli.parse(
             std::vector<std::string>{"pack", "dnf", "./project", "--output", "./dist/demo.pkg", "--force"},
