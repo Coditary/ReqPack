@@ -135,6 +135,7 @@ RegistryRecord build_main_record(const ptree& tree, const std::filesystem::path&
     record.alias = false;
     record.description = trim_copy(tree.get<std::string>("description", {}));
     record.role = to_lower_copy(trim_copy(tree.get<std::string>("role", {})));
+    record.targetSystem = to_lower_copy(trim_copy(tree.get<std::string>("targetSystem", {})));
     record.capabilities = load_string_array(tree.get_child_optional("capabilities"), true);
     record.ecosystemScopes = load_string_array(tree.get_child_optional("ecosystemScopes"), true);
     record.writeScopes = load_write_scopes(tree.get_child_optional("writeScopes"));

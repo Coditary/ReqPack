@@ -153,6 +153,7 @@ PackageInfo RqpPlugin::packageInfoFromInstalled(const RqpInstalledPackage& insta
         .homepage = installed.metadata.url,
         .sourceUrl = installed.metadata.sourceUrl,
         .repository = installed.source.repository,
+        .packageType = "package",
         .architecture = installed.metadata.architecture,
         .targetSystems = rq_join_systems(installed.metadata.systems),
         .license = installed.metadata.license,

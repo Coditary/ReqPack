@@ -199,6 +199,7 @@ struct RegistrySourceEntry {
     bool alias{false};
     std::string description{};
     std::string role{};
+    std::string targetSystem{};
     std::vector<std::string> capabilities{};
     std::vector<std::string> ecosystemScopes{};
     std::vector<RegistryWriteScope> writeScopes{};

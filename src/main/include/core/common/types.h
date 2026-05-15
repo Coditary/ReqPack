@@ -25,6 +25,8 @@ enum class ActionType {
 	REMOTE
 };
 
+inline constexpr const char* INTERNAL_RQP_REPOSITORY_FLAG_PREFIX = "__reqpack-internal-rqp-repository=";
+
 struct Request {
 	ActionType action{ActionType::UNKNOWN};
 	std::string system;

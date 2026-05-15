@@ -24,6 +24,8 @@ bool prepare_requests_for_run(
 	std::vector<std::filesystem::path>& tempFiles
 );
 
+void rewrite_registry_package_requests(std::vector<Request>& requests, const RegistryDatabase* database);
+
 bool requests_target_plugin_install(const std::vector<Request>& requests);
 bool requests_target_plugin_remove(const std::vector<Request>& requests);
 

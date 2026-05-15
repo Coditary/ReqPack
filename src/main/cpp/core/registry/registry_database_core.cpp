@@ -124,6 +124,9 @@ std::vector<std::string> split_escaped_fields(const std::string& value) {
 }
 
 bool registry_record_requires_script_hash(const RegistryRecord& record) {
+    if (!registry_record_can_materialize_plugin(record)) {
+        return false;
+    }
     return registry_database_is_git_source(record.source) || record.source.find("://") != std::string::npos;
 }
 
@@ -144,6 +147,24 @@ std::pair<std::string, std::string> registry_record_payload_files(const Registry
 }
 
 }  // namespace
+
+bool registry_record_is_package_entry(const RegistryRecord& record) {
+    return registry_database_to_lower_copy(record.role) == "package";
+}
+
+std::string registry_record_target_system(const RegistryRecord& record) {
+    if (!record.targetSystem.empty()) {
+        return registry_database_to_lower_copy(record.targetSystem);
+    }
+    if (registry_record_is_package_entry(record)) {
+        return "rqp";
+    }
+    return {};
+}
+
+bool registry_record_can_materialize_plugin(const RegistryRecord& record) {
+    return !record.alias && !registry_record_is_package_entry(record);
+}
 
 std::string registry_database_to_lower_copy(const std::string& value) {
     std::string normalized = value;
@@ -425,7 +446,7 @@ bool registry_record_passes_thin_layer_trust(const ReqPackConfig& config, const 
 }
 
 bool registry_record_matches_expected_hashes(const RegistryRecord& record) {
-    if (record.alias) {
+    if (record.alias || !registry_record_can_materialize_plugin(record)) {
         return true;
     }
 
@@ -462,6 +483,7 @@ std::string registry_database_serialize_record(const RegistryRecord& record) {
     stream << "originPath=" << registry_database_escape_field(record.originPath) << '\n';
     stream << "description=" << registry_database_escape_field(record.description) << '\n';
     stream << "role=" << registry_database_escape_field(record.role) << '\n';
+    stream << "targetSystem=" << registry_database_escape_field(record.targetSystem) << '\n';
     stream << "capabilities=" << registry_database_escape_field(join_lines(record.capabilities)) << '\n';
     stream << "ecosystemScopes=" << registry_database_escape_field(join_lines(record.ecosystemScopes)) << '\n';
     stream << "writeScopes=" << registry_database_escape_field(registry_database_serialize_write_scopes(record.writeScopes)) << '\n';
@@ -513,6 +535,8 @@ std::optional<RegistryRecord> registry_database_deserialize_record(const std::st
             record.description = value;
         } else if (key == "role") {
             record.role = value;
+        } else if (key == "targetSystem") {
+            record.targetSystem = value;
         } else if (key == "capabilities") {
             record.capabilities = split_lines(value);
         } else if (key == "ecosystemScopes") {
@@ -545,7 +569,7 @@ std::optional<RegistryRecord> registry_database_deserialize_record(const std::st
     if (record.source.empty() && !record.alias) {
         return std::nullopt;
     }
-    if (!record.alias && !record.script.empty() && !registry_database_is_valid_plugin_script(record.script)) {
+    if (registry_record_can_materialize_plugin(record) && !record.script.empty() && !registry_database_is_valid_plugin_script(record.script)) {
         return std::nullopt;
     }
 

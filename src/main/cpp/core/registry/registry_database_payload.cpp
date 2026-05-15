@@ -193,6 +193,14 @@ std::optional<RegistryRecord> refreshed_record_payload(
         return record;
     }
 
+    if (!registry_record_can_materialize_plugin(record)) {
+        record.script.clear();
+        record.bootstrapScript.clear();
+        record.bundleSource = false;
+        record.bundlePath.clear();
+        return record;
+    }
+
     if (!registry_record_passes_thin_layer_trust(config, record)) {
         return std::nullopt;
     }

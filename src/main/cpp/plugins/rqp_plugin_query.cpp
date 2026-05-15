@@ -2,6 +2,7 @@
 
 #include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database.h"
+#include "core/registry/registry_database_core.h"
 
 #include <algorithm>
 #include <cctype>
@@ -214,7 +215,22 @@ bool is_installed_rqp_package_search_item(const PackageInfo& info) {
     return info.system == BUILTIN_RQP_PLUGIN_ID && info.installed == "true" && info.packageType.empty();
 }
 
+std::string joined_systems(const std::vector<std::string>& systems) {
+    return rq_join_systems(systems);
+}
+
+std::pair<std::string, std::string> split_package_name_version(std::string value) {
+    const std::size_t versionSeparator = value.rfind('@');
+    if (versionSeparator == std::string::npos || versionSeparator == 0 || versionSeparator + 1 >= value.size()) {
+        return {std::move(value), {}};
+    }
+    return {value.substr(0, versionSeparator), value.substr(versionSeparator + 1)};
+}
+
 std::string version_from_registry_record(const RegistryRecord& record) {
+    if (registry_record_is_package_entry(record)) {
+        return {};
+    }
     if (!record.bundlePath.empty()) {
         if (const std::optional<PluginBundleLayout> layout = plugin_bundle_find_root(record.bundlePath, record.name); layout.has_value()) {
             return layout->metadata.version;
@@ -232,6 +248,25 @@ std::string version_from_registry_record(const RegistryRecord& record) {
     return plugin_version_from_script_text(record.script);
 }
 
+PackageInfo rq_repository_info_item(const RqRepositoryPackage& package, bool installed) {
+    PackageInfo info;
+    info.system = BUILTIN_RQP_PLUGIN_ID;
+    info.name = package.name;
+    info.packageId = package.name;
+    info.version = package.version + "-" + std::to_string(package.release) + "+r" + std::to_string(package.revision);
+    info.status = installed ? "installed" : "available";
+    info.installed = installed ? "true" : "false";
+    info.summary = package.summary;
+    info.description = package.summary;
+    info.packageType = "package";
+    info.architecture = package.architecture;
+    info.targetSystems = joined_systems(package.systems);
+    info.sourceUrl = package.url;
+    info.repository = package.repository;
+    info.tags = package.tags;
+    return info;
+}
+
 PackageInfo registry_plugin_info(const RegistryRecord& record) {
     PackageInfo info;
     info.system = BUILTIN_RQP_PLUGIN_ID;
@@ -243,6 +278,8 @@ PackageInfo registry_plugin_info(const RegistryRecord& record) {
 
     if (record.alias && !record.source.empty()) {
         info.summary = record.description.empty() ? ("Alias for " + record.source) : record.description;
+    } else if (registry_record_is_package_entry(record)) {
+        info.summary = record.description.empty() ? "Registry package" : record.description;
     } else {
         info.summary = record.description.empty() ? "Registry plugin" : record.description;
     }
@@ -398,12 +435,40 @@ std::vector<PackageInfo> RqpPlugin::search(const PluginCallContext& context, con
     RegistryDatabase registryDatabase(config_);
     if (registryDatabase.ensureReady()) {
         for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
+            if (registry_record_is_package_entry(record)) {
+                continue;
+            }
             const std::string normalizedName = to_lower_copy(record.name);
             if (normalizedName.empty() || emittedNames.contains(normalizedName)) {
                 continue;
             }
 
             PackageInfo info = registry_plugin_info(record);
+            if (!package_matches_search_terms(info, terms)) {
+                continue;
+            }
+
+            emittedNames.insert(normalizedName);
+            results.push_back(std::move(info));
+        }
+    }
+
+    const std::vector<RqRepositoryIndex> indexes = loadRepositoryIndexes(context);
+    const std::set<std::string> hostSystems = rq_host_system_tokens(*HostInfoService::currentSnapshot());
+    for (const RqRepositoryIndex& index : indexes) {
+        for (const RqRepositoryPackage& package : index.packages) {
+            const std::string normalizedName = to_lower_copy(package.name);
+            if (normalizedName.empty() || emittedNames.contains(normalizedName)) {
+                continue;
+            }
+            if (!rq_architecture_matches(package.architecture, rq_host_architecture())) {
+                continue;
+            }
+            if (!rq_system_matches(package.systems, hostSystems, rq_merged_system_aliases(config_))) {
+                continue;
+            }
+
+            PackageInfo info = rq_repository_info_item(package, false);
             if (!package_matches_search_terms(info, terms)) {
                 continue;
             }
@@ -420,15 +485,35 @@ std::vector<PackageInfo> RqpPlugin::search(const PluginCallContext& context, con
 }
 
 PackageInfo RqpPlugin::info(const PluginCallContext& context, const std::string& packageName) {
-    (void)context;
-    std::vector<RqpInstalledPackage> matches = RqpStateStore(config_).findInstalled(packageName);
-    if (matches.empty()) {
-        return {};
+    const auto [resolvedName, requestedVersion] = split_package_name_version(packageName);
+    std::vector<RqpInstalledPackage> matches = RqpStateStore(config_).findInstalled(resolvedName, requestedVersion);
+    if (!matches.empty()) {
+        if (matches.size() > 1) {
+            return rq_info_item(resolvedName, {}, "multiple installed versions");
+        }
+        return packageInfoFromInstalled(matches.front());
     }
-    if (matches.size() > 1) {
-        return rq_info_item(packageName, {}, "multiple installed versions");
+
+    const std::vector<RqRepositoryIndex> indexes = loadRepositoryIndexes(context);
+    const std::optional<RqRepositoryPackage> candidate = rq_repository_resolve_package(
+        indexes,
+        resolvedName,
+        requestedVersion,
+        rq_host_architecture(),
+        rq_host_system_tokens(*HostInfoService::currentSnapshot()),
+        config_
+    );
+    if (candidate.has_value()) {
+        return rq_repository_info_item(candidate.value(), false);
     }
-    return packageInfoFromInstalled(matches.front());
+
+    RegistryDatabase registryDatabase(config_);
+    if (registryDatabase.ensureReady()) {
+        if (const std::optional<RegistryRecord> record = registryDatabase.getRecord(resolvedName); record.has_value()) {
+            return registry_plugin_info(record.value());
+        }
+    }
+    return {};
 }
 
 std::optional<Package> RqpPlugin::resolvePackage(const PluginCallContext& context, const Package& package) {

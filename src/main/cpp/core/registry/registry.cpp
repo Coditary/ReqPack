@@ -2,6 +2,8 @@
 
 #include "registry_internal.h"
 
+#include "core/registry/registry_database_core.h"
+
 #include "plugins/rqp_plugin.h"
 
 #include <algorithm>
@@ -39,6 +41,9 @@ std::string Registry::resolvePluginName(const std::string& name) const {
     }
 
     if (const std::optional<RegistryRecord> record = this->database.getRecord(normalized)) {
+        if (const std::string targetSystem = registry_record_target_system(record.value()); !targetSystem.empty()) {
+            return targetSystem;
+        }
         if (record->alias && !record->source.empty()) {
             return record->source;
         }

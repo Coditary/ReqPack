@@ -39,8 +39,20 @@ std::optional<std::filesystem::path> rqp_plugin_unique_nested_file_with_extensio
 
 std::vector<RqRepositoryIndex> RqpPlugin::loadRepositoryIndexes(const PluginCallContext& context) const {
     std::vector<RqRepositoryIndex> indexes;
-    indexes.reserve(config_.rqp.repositories.size());
-    for (const std::string& repository : config_.rqp.repositories) {
+    std::vector<std::string> repositories = config_.rqp.repositories;
+    for (const std::string& flag : context.flags) {
+        if (flag.rfind(INTERNAL_RQP_REPOSITORY_FLAG_PREFIX, 0) != 0 || flag.size() <= std::char_traits<char>::length(INTERNAL_RQP_REPOSITORY_FLAG_PREFIX)) {
+            continue;
+        }
+
+        const std::string repository = flag.substr(std::char_traits<char>::length(INTERNAL_RQP_REPOSITORY_FLAG_PREFIX));
+        if (!repository.empty() && std::find(repositories.begin(), repositories.end(), repository) == repositories.end()) {
+            repositories.push_back(repository);
+        }
+    }
+
+    indexes.reserve(repositories.size());
+    for (const std::string& repository : repositories) {
         const std::filesystem::path path = downloadPackageArtifact(context, repository);
         if (path.empty()) {
             throw std::runtime_error("failed to load rqp repository index: " + repository);

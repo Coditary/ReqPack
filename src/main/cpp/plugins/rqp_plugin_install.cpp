@@ -100,11 +100,10 @@ bool RqpPlugin::update(const PluginCallContext& context, const std::vector<Packa
         if (installed.source.source != "repository") {
             continue;
         }
-        if (config_.rqp.repositories.empty()) {
+        const std::vector<RqRepositoryIndex> indexes = loadRepositoryIndexes(context);
+        if (indexes.empty()) {
             continue;
         }
-
-        const std::vector<RqRepositoryIndex> indexes = loadRepositoryIndexes(context);
         const std::optional<RqRepositoryPackage> candidate = rq_repository_resolve_package(
             indexes,
             installed.metadata.name,

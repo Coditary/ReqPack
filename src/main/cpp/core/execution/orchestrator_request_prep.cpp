@@ -3,6 +3,7 @@
 #include "core/archive/archive_resolver.h"
 #include "core/download/downloader.h"
 #include "core/planning/request_resolution.h"
+#include "core/registry/registry_database_core.h"
 #include "output/diagnostic.h"
 #include "output/logger.h"
 
@@ -47,6 +48,34 @@ std::string file_extension(const std::string& path) {
 
 void append_cleanup_paths(std::vector<std::filesystem::path>& tempFiles, const std::vector<std::filesystem::path>& cleanupPaths) {
 	tempFiles.insert(tempFiles.end(), cleanupPaths.begin(), cleanupPaths.end());
+}
+
+std::string internal_rqp_repository_flag(const std::string& repositoryUrl) {
+	return std::string{INTERNAL_RQP_REPOSITORY_FLAG_PREFIX} + repositoryUrl;
+}
+
+bool request_has_internal_rqp_repository_flag(const Request& request, const std::string& repositoryUrl) {
+	const std::string expected = internal_rqp_repository_flag(repositoryUrl);
+	return std::find(request.flags.begin(), request.flags.end(), expected) != request.flags.end();
+}
+
+std::string package_specifier_from_request(const Request& request) {
+	if (request.system.empty()) {
+		return {};
+	}
+	if (!request.packages.empty()) {
+		return request.packages.front();
+	}
+	return request.system;
+}
+
+std::string registry_lookup_name_from_request(const Request& request) {
+	const std::string packageSpecifier = package_specifier_from_request(request);
+	const std::size_t versionSeparator = packageSpecifier.rfind('@');
+	if (versionSeparator == std::string::npos || versionSeparator == 0) {
+		return request.system;
+	}
+	return packageSpecifier.substr(0, versionSeparator);
 }
 
 ArchiveExtractionOptions archive_options_from_config(const ReqPackConfig& config) {
@@ -99,6 +128,35 @@ bool resolve_local_target(
 } // namespace
 
 namespace orchestrator_internal {
+
+void rewrite_registry_package_requests(std::vector<Request>& requests, const RegistryDatabase* database) {
+	if (database == nullptr) {
+		return;
+	}
+
+	for (Request& request : requests) {
+		if (request.system.empty() || request.usesLocalTarget) {
+			continue;
+		}
+
+		const std::string lookupName = registry_lookup_name_from_request(request);
+		const std::optional<RegistryRecord> record = database->getRecord(lookupName);
+		if (!record.has_value() || !registry_record_is_package_entry(record.value())) {
+			continue;
+		}
+
+		const std::string packageSpecifier = package_specifier_from_request(request);
+		if (packageSpecifier.empty()) {
+			continue;
+		}
+
+		request.system = registry_record_target_system(record.value());
+		request.packages = {packageSpecifier};
+		if (!record->source.empty() && !request_has_internal_rqp_repository_flag(request, record->source)) {
+			request.flags.push_back(internal_rqp_repository_flag(record->source));
+		}
+	}
+}
 
 void cleanup_temp_files(const std::vector<std::filesystem::path>& tempFiles) {
 	for (const std::filesystem::path& tempFile : tempFiles) {

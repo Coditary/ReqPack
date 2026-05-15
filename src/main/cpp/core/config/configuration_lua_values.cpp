@@ -349,6 +349,9 @@ RegistrySourceMap load_registry_sources_from_table(const sol::table& table) {
             if (const sol::optional<std::string> role = entryTable["role"]; role.has_value()) {
                 entry.role = to_lower_copy(role.value());
             }
+            if (const sol::optional<std::string> targetSystem = entryTable["targetSystem"]; targetSystem.has_value()) {
+                entry.targetSystem = to_lower_copy(targetSystem.value());
+            }
             const sol::object capabilitiesObject = entryTable["capabilities"];
             if (capabilitiesObject.valid() && capabilitiesObject.get_type() == sol::type::table) {
                 for (const auto& [_, capability] : capabilitiesObject.as<sol::table>()) {

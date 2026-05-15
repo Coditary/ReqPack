@@ -117,11 +117,13 @@ std::vector<Executer::TransactionRecord> Executer::executeTransactionalTaskGroup
 
 	std::vector<Package> succeededPackages;
 	std::vector<Package> failedPackages = executableTaskGroup.packages;
-	if (actionUsesDesiredStateFilter(taskGroup.action)) {
-		IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
-		if (plugin != nullptr) {
-			const std::vector<Package> remainingMissingPackages = plugin->getMissingPackages(executableTaskGroup.packages);
-			succeededPackages.clear();
+    // Only install/ensure can be reconciled via getMissingPackages(). Remove/update need
+    // explicit post-state APIs that plugins do not expose today, so keep failures conservative.
+    if (actionUsesMissingPackageFilter(taskGroup.action)) {
+        IPlugin* plugin = this->registry->getPlugin(taskGroup.system);
+        if (plugin != nullptr) {
+            const std::vector<Package> remainingMissingPackages = plugin->getMissingPackages(executableTaskGroup.packages);
+            succeededPackages.clear();
 			failedPackages.clear();
 			for (const Package& package : executableTaskGroup.packages) {
 				if (containsPackage(remainingMissingPackages, package)) {

@@ -34,6 +34,12 @@ bool Registry::loadPlugin(const std::string& name) {
         return false;
     }
 
+    if (const std::optional<RegistryRecord> record = this->database.resolveRecord(resolvedName)) {
+        if (!registry_record_can_materialize_plugin(record.value())) {
+            return false;
+        }
+    }
+
     if (m_pluginPaths.find(resolvedName) == m_pluginPaths.end()) {
         if (const std::optional<RegistryRecord> record = this->database.resolveRecord(resolvedName)) {
             if (!this->passesThinLayerTrust(record.value())) {

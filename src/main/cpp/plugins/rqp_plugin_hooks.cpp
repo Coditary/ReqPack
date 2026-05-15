@@ -417,6 +417,8 @@ bool RqpPlugin::runInstalledHook(const PluginCallContext& context, const RqpInst
         return false;
     }
 
+    rqp_plugin_clear_runtime_host_artifacts();
+
     sol::state lua;
     lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::table, sol::lib::string, sol::lib::math, sol::lib::os);
 
@@ -456,6 +458,32 @@ bool RqpPlugin::runInstalledHook(const PluginCallContext& context, const RqpInst
     log.set_function("warn", [context](const std::string& message) { context.logWarn(message); });
     log.set_function("error", [context](const std::string& message) { context.logError(message); });
     contextTable["log"] = log;
+
+    sol::table tx = lua.create_table();
+    tx.set_function("begin_step", [context](const std::string& label) { context.emitBeginStep(label); });
+    tx.set_function("success", [context]() { context.emitSuccess(); });
+    tx.set_function("failed", [context](const std::string& message) { context.emitFailure(message); });
+    contextTable["tx"] = tx;
+
+    sol::table exec = lua.create_table();
+    exec.set_function("run", [context](const std::string& command) {
+        return context.execute(command);
+    });
+    contextTable["exec"] = exec;
+    lua.new_usertype<ExecResult>(
+        "ExecResult",
+        sol::constructors<ExecResult()>(),
+        "success", &ExecResult::success,
+        "exitCode", &ExecResult::exitCode,
+        "stdout", &ExecResult::stdoutText,
+        "stderr", &ExecResult::stderrText
+    );
+
+    sol::table fs = lua.create_table();
+    fs.set_function("exists", [](const std::string& path) {
+        return std::filesystem::exists(path);
+    });
+    contextTable["fs"] = fs;
 
     lua["context"] = contextTable;
 

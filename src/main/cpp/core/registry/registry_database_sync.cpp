@@ -12,6 +12,7 @@ bool registry_records_equal(const RegistryRecord& left, const RegistryRecord& ri
            left.originPath == right.originPath &&
            left.description == right.description &&
            left.role == right.role &&
+           left.targetSystem == right.targetSystem &&
            left.capabilities == right.capabilities &&
            left.ecosystemScopes == right.ecosystemScopes &&
            left.writeScopes == right.writeScopes &&
@@ -52,6 +53,9 @@ bool RegistryDatabase::sync_records(
             if (record.role.empty()) {
                 record.role = existing->role;
             }
+            if (record.targetSystem.empty()) {
+                record.targetSystem = existing->targetSystem;
+            }
             if (record.capabilities.empty()) {
                 record.capabilities = existing->capabilities;
             }
@@ -83,21 +87,21 @@ bool RegistryDatabase::sync_records(
             }
         }
 
-        if (!record.alias && !record.bundleSource) {
+        if (registry_record_can_materialize_plugin(record) && !record.bundleSource) {
             if (const auto bundlePath = resolve_bundle_path(this->config, record.source, record.name)) {
                 record.bundleSource = true;
                 record.bundlePath = bundlePath->string();
             }
         }
 
-        if (!record.alias && !registry_record_passes_thin_layer_trust(this->config, record)) {
+        if (registry_record_can_materialize_plugin(record) && !registry_record_passes_thin_layer_trust(this->config, record)) {
             record.script.clear();
             record.bootstrapScript.clear();
             record.bundleSource = false;
             record.bundlePath.clear();
         }
 
-        const bool needsPayloadRefresh = fetchPayloads && !record.alias &&
+        const bool needsPayloadRefresh = fetchPayloads && registry_record_can_materialize_plugin(record) &&
             (record.script.empty() || !registry_record_matches_expected_hashes(record));
         if (needsPayloadRefresh) {
             if (const auto fetchedPayload = fetch_plugin_payload(this->config, record.source, record.name)) {
@@ -113,7 +117,7 @@ bool RegistryDatabase::sync_records(
             }
         }
 
-        if (!record.alias && !record.script.empty() && !registry_record_matches_expected_hashes(record)) {
+        if (registry_record_can_materialize_plugin(record) && !record.script.empty() && !registry_record_matches_expected_hashes(record)) {
             record.script.clear();
             record.bootstrapScript.clear();
             record.bundleSource = false;
@@ -197,6 +201,7 @@ bool RegistryDatabase::write_records(const RegistrySourceMap& sources) const {
         record.alias = entry.alias;
         record.description = entry.description;
         record.role = entry.role;
+        record.targetSystem = entry.targetSystem;
         record.capabilities = entry.capabilities;
         record.ecosystemScopes = entry.ecosystemScopes;
         record.writeScopes = entry.writeScopes;

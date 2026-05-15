@@ -3,7 +3,7 @@ project(ReqPack LANGUAGES CXX)
 enable_language(C)
 enable_testing()
 
-set(REQPACK_RELEASE_ID "v1.2.13" CACHE STRING "Build/release identity shown by rqp version output")
+set(REQPACK_RELEASE_ID "v1.2.14" CACHE STRING "Build/release identity shown by rqp version output")
 
 option(REQPACK_ENABLE_COVERAGE "Build ReqPack targets with coverage instrumentation" OFF)
 option(REQPACK_ENABLE_PROFILING "Build ReqPack targets with profiling instrumentation" OFF)

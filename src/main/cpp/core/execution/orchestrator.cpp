@@ -71,6 +71,7 @@ int Orchestrator::run() {
 	if (this->requests.empty()) {
 		return 0;
 	}
+	orchestrator_internal::rewrite_registry_package_requests(this->requests, this->registry->getDatabase());
 	if (this->shouldRunSystemWidePackageUpdates()) {
 		return this->runSystemWidePackageUpdates();
 	}

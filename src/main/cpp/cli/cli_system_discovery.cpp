@@ -3,6 +3,7 @@
 #include "cli/cli.h"
 #include "cli_parse_shared.h"
 #include "core/plugins/plugin_bundle.h"
+#include "core/registry/registry_database_core.h"
 
 #include <filesystem>
 
@@ -54,7 +55,7 @@ std::set<std::string> discover_primary_systems(const ReqPackConfig& config) {
     RegistryDatabase registryDatabase(config);
     if (registryDatabase.ensureReady()) {
         for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
-            if (!record.alias) {
+            if (!record.alias && !registry_record_is_package_entry(record)) {
                 systems.insert(to_lower_copy(record.name));
             }
         }
@@ -109,7 +110,7 @@ std::set<std::string> discover_non_builtin_plugins(const ReqPackConfig& config) 
     if (systems.empty() && mainRegistryReady) {
         for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
             const std::string name = to_lower_copy(record.name);
-            if (!record.alias && is_non_builtin_plugin_name(name)) {
+            if (!record.alias && !registry_record_is_package_entry(record) && is_non_builtin_plugin_name(name)) {
                 systems.insert(name);
             }
         }

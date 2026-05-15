@@ -17,6 +17,7 @@ struct RegistryRecord {
     std::string originPath;
     std::string description;
     std::string role;
+    std::string targetSystem;
     std::vector<std::string> capabilities;
     std::vector<std::string> ecosystemScopes;
     std::vector<RegistryWriteScope> writeScopes;
