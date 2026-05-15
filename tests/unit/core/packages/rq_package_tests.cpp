@@ -329,7 +329,7 @@ TEST_CASE("rqp package builder defaults output into current project directory", 
         .interactive = false,
     });
 
-    CHECK(result.outputPath.lexically_normal() == (projectRoot / "default-output.rqp").lexically_normal());
+    CHECK(std::filesystem::equivalent(result.outputPath, projectRoot / "default-output.rqp"));
     CHECK(std::filesystem::exists(result.outputPath));
 }
 
@@ -345,7 +345,7 @@ TEST_CASE("rqp package builder keeps default output next to explicit project pat
         .interactive = false,
     });
 
-    CHECK(result.outputPath.lexically_normal() == (tempDir.path() / "explicit-output.rqp").lexically_normal());
+    CHECK(std::filesystem::equivalent(result.outputPath, tempDir.path() / "explicit-output.rqp"));
     CHECK(std::filesystem::exists(result.outputPath));
 }
 
