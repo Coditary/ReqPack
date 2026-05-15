@@ -37,4 +37,6 @@ if [ "$target_family" = "macos" ]; then
 fi
 
 cmake -Wno-dev -S . -B "$build_dir" "${cmake_args[@]}"
-cmake --build "$build_dir" --parallel --target ReqPack reqpack_test_targets
+# Force single-job builds in CI. Bare --parallel with Unix Makefiles becomes
+# gmake -j (unbounded), which can OOM GitHub-hosted runners on this project.
+cmake --build "$build_dir" --parallel 1 --target ReqPack reqpack_test_targets
