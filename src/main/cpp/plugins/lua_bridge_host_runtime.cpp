@@ -6,6 +6,8 @@
 #include <system_error>
 #include <utility>
 
+#include <unistd.h>
+
 namespace {
 
 constexpr const char* SILENT_RUNTIME_FLAG = "__reqpack-internal-silent-runtime";

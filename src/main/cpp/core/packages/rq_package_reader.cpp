@@ -7,6 +7,8 @@
 #include <set>
 #include <stdexcept>
 
+#include <unistd.h>
+
 namespace {
 
 std::filesystem::path make_unique_directory(const std::filesystem::path& parent, const std::string& prefix) {

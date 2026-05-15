@@ -21,6 +21,8 @@
 #include <utility>
 #include <vector>
 
+#include <unistd.h>
+
 namespace {
 
 using boost::property_tree::ptree;
