@@ -44,11 +44,35 @@ fi
 
 if [ "$target_family" = "windows" ]; then
     : "${MSYSTEM_PREFIX:?MSYSTEM_PREFIX must be set for Windows builds}"
+    export PATH="${MSYSTEM_PREFIX}/bin:${PATH}"
+
+    case "${MSYSTEM:-}" in
+        UCRT64)
+            c_compiler=gcc
+            cxx_compiler=g++
+            ;;
+        CLANGARM64)
+            c_compiler=clang
+            cxx_compiler=clang++
+            ;;
+        *)
+            echo "Unsupported MSYSTEM for Windows builds: ${MSYSTEM:-}" >&2
+            exit 1
+            ;;
+    esac
+
+    for tool in "${c_compiler}" "${cxx_compiler}" ninja cmake; do
+        if ! command -v "${tool}" >/dev/null 2>&1; then
+            echo "Missing Windows build tool: ${tool}" >&2
+            exit 1
+        fi
+    done
+
     cmake_args+=(
         -G Ninja
-        -DCMAKE_MAKE_PROGRAM="${MSYSTEM_PREFIX}/bin/ninja"
-        -DCMAKE_C_COMPILER="${MSYSTEM_PREFIX}/bin/cc"
-        -DCMAKE_CXX_COMPILER="${MSYSTEM_PREFIX}/bin/c++"
+        -DCMAKE_MAKE_PROGRAM=ninja
+        -DCMAKE_C_COMPILER="${c_compiler}"
+        -DCMAKE_CXX_COMPILER="${cxx_compiler}"
         -DCMAKE_PREFIX_PATH="${MSYSTEM_PREFIX}"
     )
 fi

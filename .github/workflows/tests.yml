@@ -167,7 +167,11 @@ jobs:
         shell: msys2 {0}
         run: |
           export PATH="${MSYSTEM_PREFIX}/bin:${PATH}"
-          command -v cmake cc c++ ninja go
+          case "${MSYSTEM}" in
+            UCRT64) command -v cmake gcc g++ ninja go ;;
+            CLANGARM64) command -v cmake clang clang++ ninja go ;;
+            *) echo "Unsupported MSYSTEM: ${MSYSTEM}" >&2; exit 1 ;;
+          esac
           rm -rf build build-artifacts
           mkdir -p build-artifacts
           bash .github/scripts/configure-build.sh build windows \
