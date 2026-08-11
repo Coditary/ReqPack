@@ -339,6 +339,7 @@ struct DisplayColorScheme {
 struct DisplayConfig {
     DisplayRenderer renderer{DisplayRenderer::PLAIN};
     DisplayColorScheme colors{};
+    bool jsonOutput{false};
 };
 
 struct ReqPackConfig {
@@ -403,6 +404,7 @@ struct ReqPackConfigOverrides {
     std::optional<std::string> reportOutputPath;
 
     std::optional<bool> dryRun;
+    std::optional<bool> jsonOutput;
     std::optional<bool> stopOnFirstFailure;
     std::optional<bool> useTransactionDb;
     std::optional<unsigned int> jobs;

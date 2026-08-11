@@ -189,6 +189,7 @@ set(SOURCES
     src/main/cpp/output/command_output.cpp
     src/main/cpp/output/command_output_projection.cpp
     src/main/cpp/output/command_output_render.cpp
+    src/main/cpp/output/run_result_json.cpp
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/plain_display.cpp
     src/main/cpp/output/plain_display_session.cpp
@@ -401,6 +402,7 @@ add_executable(core_integration_tests
     src/main/cpp/output/command_output.cpp
     src/main/cpp/output/command_output_projection.cpp
     src/main/cpp/output/command_output_render.cpp
+    src/main/cpp/output/run_result_json.cpp
     src/main/cpp/output/ansi_color.cpp
     src/main/cpp/output/plain_display.cpp
     src/main/cpp/output/plain_display_session.cpp
@@ -540,6 +542,7 @@ add_executable(core_unit_tests
     tests/unit/core/state/rqp_state_store_tests.cpp
     tests/unit/core/state/transaction_database_serialization_tests.cpp
     tests/unit/output/logger/format_tests.cpp
+    tests/unit/output/run_result_json_tests.cpp
     src/main/cpp/core/common/version_compare.cpp
     src/main/cpp/core/common/pipe_helpers.cpp
     src/main/cpp/core/config/configuration.cpp
@@ -629,6 +632,7 @@ add_executable(core_unit_tests
     src/main/cpp/output/command_output.cpp
     src/main/cpp/output/command_output_projection.cpp
     src/main/cpp/output/command_output_render.cpp
+    src/main/cpp/output/run_result_json.cpp
     src/main/cpp/output/plain_display.cpp
     src/main/cpp/output/plain_display_session.cpp
     src/main/cpp/output/plain_display_table.cpp

@@ -202,6 +202,11 @@ bool parse_serve_runtime_options(const std::vector<std::string>& arguments,
         options.inheritedArguments.push_back(argument);
     }
 
+    // --json is also a global output flag and may be stripped before this loop.
+    if (options.remote && options.remoteProtocol == ServeRemoteProtocol::TEXT && contains_flag(arguments, "--json")) {
+        options.remoteProtocol = ServeRemoteProtocol::JSON;
+    }
+
     if (options.stdin == options.remote) {
         error = "serve requires exactly one of --stdin or --remote";
         return true;

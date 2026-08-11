@@ -91,8 +91,11 @@ int main(int argc, char* argv[]) {
     Logger& logger = Logger::instance();
     configure_logger_from_config(logger, config);
 
-    std::unique_ptr<IDisplay> display = create_display(config.display);
-    logger.setDisplay(display.get());
+    std::unique_ptr<IDisplay> display;
+    if (!config.display.jsonOutput) {
+        display = create_display(config.display);
+        logger.setDisplay(display.get());
+    }
 
     const int result = dispatch_main_command(
         cli,
