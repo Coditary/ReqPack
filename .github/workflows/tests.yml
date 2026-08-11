@@ -167,6 +167,7 @@ jobs:
         shell: msys2 {0}
         run: |
           export PATH="${MSYSTEM_PREFIX}/bin:${PATH}"
+          command -v cmake cc c++ ninja go
           rm -rf build build-artifacts
           mkdir -p build-artifacts
           bash .github/scripts/configure-build.sh build windows \

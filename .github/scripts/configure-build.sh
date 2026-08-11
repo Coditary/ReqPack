@@ -43,8 +43,12 @@ if [ "$target_family" = "macos" ]; then
 fi
 
 if [ "$target_family" = "windows" ]; then
+    : "${MSYSTEM_PREFIX:?MSYSTEM_PREFIX must be set for Windows builds}"
     cmake_args+=(
-        -G "Unix Makefiles"
+        -G Ninja
+        -DCMAKE_MAKE_PROGRAM="${MSYSTEM_PREFIX}/bin/ninja"
+        -DCMAKE_C_COMPILER="${MSYSTEM_PREFIX}/bin/cc"
+        -DCMAKE_CXX_COMPILER="${MSYSTEM_PREFIX}/bin/c++"
         -DCMAKE_PREFIX_PATH="${MSYSTEM_PREFIX}"
     )
 fi
