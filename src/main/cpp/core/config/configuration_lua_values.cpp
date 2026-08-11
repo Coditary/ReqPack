@@ -31,7 +31,7 @@ std::optional<RepositoryChecksumPolicy> repository_checksum_policy_from_string(c
         return RepositoryChecksumPolicy::WARN;
     }
     if (normalized == "ignore") {
-        return RepositoryChecksumPolicy::IGNORE;
+        return RepositoryChecksumPolicy::SKIP;
     }
 
     return std::nullopt;

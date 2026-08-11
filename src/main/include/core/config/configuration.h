@@ -9,6 +9,24 @@
 
 #include "core/common/build_info.h"
 
+#if defined(_WIN32)
+#ifdef IGNORE
+#undef IGNORE
+#endif
+#ifdef ERROR
+#undef ERROR
+#endif
+#ifdef stdin
+#undef stdin
+#endif
+#ifdef stdout
+#undef stdout
+#endif
+#ifdef stderr
+#undef stderr
+#endif
+#endif
+
 enum class SeverityLevel {
     UNASSIGNED,
     LOW,
@@ -77,7 +95,7 @@ enum class RepositoryAuthType {
 enum class RepositoryChecksumPolicy {
     FAIL,
     WARN,
-    IGNORE
+    SKIP
 };
 
 struct LoggingConfig {
@@ -619,7 +637,7 @@ inline std::string to_string(RepositoryChecksumPolicy policy) {
     switch (policy) {
         case RepositoryChecksumPolicy::FAIL:
             return "fail";
-        case RepositoryChecksumPolicy::IGNORE:
+        case RepositoryChecksumPolicy::SKIP:
             return "ignore";
         case RepositoryChecksumPolicy::WARN:
         default:

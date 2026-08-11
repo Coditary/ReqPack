@@ -85,7 +85,7 @@ int dispatch_main_command(Cli& cli,
         if (!serveOptions.maxConnectionsExplicit) {
             serveOptions.maxConnections = config.remote.maxConnections;
         }
-        if (serveOptions.stdin) {
+        if (serveOptions.useStdin) {
             return run_stdin_serve_loop(cli, config, serveOptions.inheritedArguments);
         }
         return run_remote_serve(cli, config, configPath, configOverrides, logger, display, serveOptions);
