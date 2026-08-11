@@ -16,6 +16,7 @@ defaults:
 
 env:
   RELEASE_ID: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.sha }}
+  GO_VERSION: "1.23"
 
 jobs:
   build-artifacts:
@@ -45,6 +46,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: tools/trivydb-exporter/go.sum
+
       - name: Compute cache scope
         id: cache-scope
         run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
@@ -69,12 +76,13 @@ jobs:
       - name: Install macOS dependencies
         if: matrix.family == 'macos'
         run: |
-          brew install ccache cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4
+          brew install ccache cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4 go
           {
             echo "BREW_PREFIX=$(brew --prefix)"
             echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)"
             echo "LUA_PREFIX=$(brew --prefix lua@5.4)"
             echo "ZSTD_PREFIX=$(brew --prefix zstd)"
+            echo "PATH=$(brew --prefix go)/bin:${PATH}"
           } >> "$GITHUB_ENV"
 
       - name: Install sol2 headers
@@ -104,6 +112,9 @@ jobs:
       - name: Build macOS targets
         if: matrix.family == 'macos'
         run: |
+          export PATH="$(brew --prefix go)/bin:${PATH}"
+          command -v go
+          go version
           export PKG_CONFIG_PATH="${OPENSSL_PREFIX}/lib/pkgconfig:${LUA_PREFIX}/lib/pkgconfig:${ZSTD_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
           rm -rf build release-artifacts build-artifacts
           bash .github/scripts/configure-build.sh build macos \
@@ -134,6 +145,7 @@ jobs:
   unit-integration-tests:
     name: ctest-${{ matrix.target }}
     needs: build-artifacts
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -149,6 +161,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: tools/trivydb-exporter/go.sum
+
       - name: Install Linux runtime dependencies
         if: matrix.target != 'aarch64-darwin'
         run: |
@@ -161,7 +179,7 @@ jobs:
       - name: Install macOS runtime dependencies
         if: matrix.target == 'aarch64-darwin'
         run: |
-          brew install cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4
+          brew install cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4 go
 
       - name: Download build tree artifact
         uses: actions/download-artifact@v4
@@ -183,6 +201,7 @@ jobs:
     needs:
       - build-artifacts
       - unit-integration-tests
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -215,11 +234,17 @@ jobs:
             "${{ matrix.target }}"
 
   system-tests-macos:
-    name: system-macos-aarch64-darwin
+    name: system-macos-${{ matrix.target }}
     needs:
       - build-artifacts
       - unit-integration-tests
+    if: ${{ !cancelled() }}
     runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-darwin
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -227,13 +252,13 @@ jobs:
       - name: Download release bundle
         uses: actions/download-artifact@v4
         with:
-          name: release-bundle-aarch64-darwin
+          name: release-bundle-${{ matrix.target }}
           path: release-artifacts
 
       - name: Run native system tests
         run: |
           bash .github/scripts/run-system-tests-macos.sh \
-            "release-artifacts/rqp-${{ env.RELEASE_ID }}-aarch64-darwin.tar.gz" \
+            "release-artifacts/rqp-${{ env.RELEASE_ID }}-${{ matrix.target }}.tar.gz" \
             "${{ github.workspace }}"
 
   publish-container-arch:

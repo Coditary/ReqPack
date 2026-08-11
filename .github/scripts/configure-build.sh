@@ -21,6 +21,12 @@ if [ -n "${RELEASE_ID:-}" ]; then
     )
 fi
 
+if command -v go >/dev/null 2>&1; then
+    cmake_args+=(
+        "-DREQPACK_GO_EXECUTABLE=$(command -v go)"
+    )
+fi
+
 if [ "$target_family" = "linux" ]; then
     cmake_args+=(
         -DBUILD_SHARED_LIBS=OFF
@@ -33,6 +39,13 @@ fi
 if [ "$target_family" = "macos" ]; then
     cmake_args+=(
         -DREQPACK_LINK_STATIC_LUA=ON
+    )
+fi
+
+if [ "$target_family" = "windows" ]; then
+    cmake_args+=(
+        -G "Unix Makefiles"
+        -DCMAKE_PREFIX_PATH="${MSYSTEM_PREFIX}"
     )
 fi
 

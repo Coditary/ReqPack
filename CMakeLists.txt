@@ -56,7 +56,20 @@ find_package(OpenSSL REQUIRED)
 find_library(REQPACK_ZSTD_LIBRARY NAMES zstd REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
-find_program(REQPACK_GO_EXECUTABLE go REQUIRED)
+
+set(REQPACK_GO_EXECUTABLE "" CACHE FILEPATH "Path to the Go compiler")
+if(NOT REQPACK_GO_EXECUTABLE)
+    find_program(REQPACK_GO_EXECUTABLE NAMES go go.exe
+        HINTS
+            "/opt/homebrew/bin"
+            "/usr/local/bin"
+            "$ENV{HOME}/go/bin"
+            "/usr/local/go/bin"
+    )
+endif()
+if(NOT REQPACK_GO_EXECUTABLE)
+    message(FATAL_ERROR "Go compiler not found. Install Go or pass -DREQPACK_GO_EXECUTABLE=/path/to/go")
+endif()
 
 set(REQPACK_TRIVY_HELPER_DIR "${CMAKE_BINARY_DIR}/tools/trivydb-exporter")
 set(REQPACK_TRIVY_HELPER_PATH "${REQPACK_TRIVY_HELPER_DIR}/trivydb-exporter")
