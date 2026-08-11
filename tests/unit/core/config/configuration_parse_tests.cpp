@@ -361,6 +361,27 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
                         refreshIntervalSeconds = 123,
                         overlayPath = "~/backend-overlay.json",
                     },
+                    snyk = {
+                        apiBaseUrl = "https://api.eu.snyk.io/rest",
+                        apiVersion = "2024-10-15",
+                        tokenEnv = "REQPACK_SNYK_TOKEN",
+                        orgId = "org-1",
+                        dataset = "issues",
+                    },
+                    trivy = {
+                        dbRepositories = {
+                            "mirror.gcr.io/aquasec/trivy-db:2",
+                            "ghcr.io/aquasecurity/trivy-db:2",
+                        },
+                        helperPath = "~/bin/trivydb-exporter",
+                        refreshMode = "periodic",
+                        refreshIntervalSeconds = 321,
+                    },
+                    ["gh-advisory"] = {
+                        feedUrl = "https://codeload.github.com/github/advisory-database/tar.gz/refs/heads/main",
+                        refreshMode = "always",
+                        refreshIntervalSeconds = 654,
+                    },
                 },
             },
             reports = {
@@ -467,6 +488,25 @@ TEST_CASE("configuration loads lua config, expands paths, and preserves fallback
     CHECK(config.security.backends.at("osv").refreshMode == OsvRefreshMode::ALWAYS);
     CHECK(config.security.backends.at("osv").refreshIntervalSeconds == 123);
     CHECK(std::filesystem::path(config.security.backends.at("osv").overlayPath) == home / "backend-overlay.json");
+    REQUIRE(config.security.backends.contains("snyk"));
+    CHECK(config.security.backends.at("snyk").apiBaseUrl == "https://api.eu.snyk.io/rest");
+    CHECK(config.security.backends.at("snyk").apiVersion == "2024-10-15");
+    CHECK(config.security.backends.at("snyk").tokenEnv == "REQPACK_SNYK_TOKEN");
+    CHECK(config.security.backends.at("snyk").orgId == "org-1");
+    CHECK(config.security.backends.at("snyk").groupId.empty());
+    CHECK(config.security.backends.at("snyk").dataset == "issues");
+    REQUIRE(config.security.backends.contains("trivy"));
+    CHECK(config.security.backends.at("trivy").dbRepositories == std::vector<std::string>{
+        "mirror.gcr.io/aquasec/trivy-db:2",
+        "ghcr.io/aquasecurity/trivy-db:2",
+    });
+    CHECK(std::filesystem::path(config.security.backends.at("trivy").helperPath) == home / "bin/trivydb-exporter");
+    CHECK(config.security.backends.at("trivy").refreshMode == OsvRefreshMode::PERIODIC);
+    CHECK(config.security.backends.at("trivy").refreshIntervalSeconds == 321);
+    REQUIRE(config.security.backends.contains("gh-advisory"));
+    CHECK(config.security.backends.at("gh-advisory").feedUrl == "https://codeload.github.com/github/advisory-database/tar.gz/refs/heads/main");
+    CHECK(config.security.backends.at("gh-advisory").refreshMode == OsvRefreshMode::ALWAYS);
+    CHECK(config.security.backends.at("gh-advisory").refreshIntervalSeconds == 654);
     CHECK(config.reports.enabled);
     CHECK(config.reports.format == ReportFormat::JSON);
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/reqpack.json");
@@ -555,6 +595,11 @@ TEST_CASE("configuration defaults build version and user agent from release id",
 
     CHECK(config.version == reqpack_build_release_id());
     CHECK(config.downloader.userAgent == reqpack_user_agent());
+    REQUIRE(config.security.backends.contains("trivy"));
+    CHECK(config.security.backends.at("trivy").dbRepositories == std::vector<std::string>{
+        "mirror.gcr.io/aquasec/trivy-db:2",
+        "ghcr.io/aquasecurity/trivy-db:2",
+    });
 }
 
 TEST_CASE("configuration resolves execution jobs from fixed and max modes", "[unit][configuration][execution]") {

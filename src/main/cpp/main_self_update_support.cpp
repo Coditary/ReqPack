@@ -224,15 +224,12 @@ std::optional<std::filesystem::path> create_self_update_temp_directory() {
         return std::nullopt;
     }
 
-    for (int attempt = 0; attempt < 100; ++attempt) {
-        const std::filesystem::path candidate = base / ("session-" + std::to_string(::getpid()) + "-" + std::to_string(std::rand()));
-        error.clear();
-        if (std::filesystem::create_directory(candidate, error)) {
-            return candidate;
-        }
-        if (error && error != std::errc::file_exists) {
-            return std::nullopt;
-        }
+    std::string tmpl = (base / "session-XXXXXX").string();
+    std::vector<char> tmplBuf(tmpl.begin(), tmpl.end());
+    tmplBuf.push_back('\0');
+    char* result = ::mkdtemp(tmplBuf.data());
+    if (result != nullptr) {
+        return std::filesystem::path(result);
     }
 
     return std::nullopt;

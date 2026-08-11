@@ -1,7 +1,10 @@
 #include "core/security/security_gateway_service.h"
 
 #include "core/registry/registry.h"
+#include "core/security/gh_advisory_vulnerability_sync_service.h"
 #include "core/security/vulnerability_database.h"
+#include "core/security/snyk_vulnerability_sync_service.h"
+#include "core/security/trivy_vulnerability_sync_service.h"
 #include "core/security/vulnerability_sync_service.h"
 #include "core/security/osv_core.h"
 
@@ -63,6 +66,8 @@ std::set<std::string> SecurityGatewayService::configuredGatewayNames() const {
     std::set<std::string> names;
     if (this->config.security.gateways.empty()) {
         names.insert(this->normalizeGatewayName(this->config.security.defaultGateway));
+        const std::set<std::string> discoveredProviders = this->discoverSecurityProviders();
+        names.insert(discoveredProviders.begin(), discoveredProviders.end());
         return names;
     }
     for (const auto& [name, gateway] : this->config.security.gateways) {
@@ -70,6 +75,8 @@ std::set<std::string> SecurityGatewayService::configuredGatewayNames() const {
             names.insert(name);
         }
     }
+    const std::set<std::string> discoveredProviders = this->discoverSecurityProviders();
+    names.insert(discoveredProviders.begin(), discoveredProviders.end());
     return names;
 }
 
@@ -80,6 +87,9 @@ bool SecurityGatewayService::isGatewaySystem(const std::string& system) const {
 std::set<std::string> SecurityGatewayService::resolveGatewayBackends(const std::string& gateway) const {
     const std::string normalizedGateway = this->normalizeGatewayName(gateway);
     std::set<std::string> discoveredProviders = this->discoverSecurityProviders();
+    if (discoveredProviders.contains(normalizedGateway)) {
+        return {normalizedGateway};
+    }
     if (this->config.security.gateways.empty()) {
 	    if (discoveredProviders.empty()) {
 	        return {"osv"};
@@ -178,29 +188,41 @@ std::vector<ValidationFinding> SecurityGatewayService::ensureEcosystemsReady(
     std::vector<ValidationFinding> findings;
     bool anySuccess = false;
     for (const std::string& backend : backends) {
-        if (backend != "osv") {
-            findings.push_back(ValidationFinding{
-                .kind = "sync_warning",
-                .source = backend,
-                .severity = "low",
-                .message = "security backend not implemented yet",
-            });
-            continue;
-        }
-
         ReqPackConfig backendConfig = this->config;
-        if (const auto backendIt = this->config.security.backends.find("osv"); backendIt != this->config.security.backends.end()) {
-            backendConfig.security.osvFeedUrl = backendIt->second.feedUrl.empty()
-                ? backendConfig.security.osvFeedUrl
-                : backendIt->second.feedUrl;
-            backendConfig.security.osvRefreshMode = backendIt->second.refreshMode;
-            backendConfig.security.osvRefreshIntervalSeconds = backendIt->second.refreshIntervalSeconds;
-            if (!backendIt->second.overlayPath.empty()) {
-                backendConfig.security.osvOverlayPath = backendIt->second.overlayPath;
+        if (const auto backendIt = this->config.security.backends.find(backend); backendIt != this->config.security.backends.end()) {
+            if (backend == "osv") {
+                backendConfig.security.osvFeedUrl = backendIt->second.feedUrl.empty()
+                    ? backendConfig.security.osvFeedUrl
+                    : backendIt->second.feedUrl;
+                backendConfig.security.osvRefreshMode = backendIt->second.refreshMode;
+                backendConfig.security.osvRefreshIntervalSeconds = backendIt->second.refreshIntervalSeconds;
+                if (!backendIt->second.overlayPath.empty()) {
+                    backendConfig.security.osvOverlayPath = backendIt->second.overlayPath;
+                }
+            } else if (backend == "gh-advisory") {
+                backendConfig.security.backends[backend].feedUrl = backendIt->second.feedUrl;
+                backendConfig.security.backends[backend].refreshMode = backendIt->second.refreshMode;
+                backendConfig.security.backends[backend].refreshIntervalSeconds = backendIt->second.refreshIntervalSeconds;
             }
         }
-        if (forceRefresh) {
+        if (forceRefresh && (backend == "osv" || backend == "gh-advisory")) {
             backendConfig.security.osvRefreshMode = OsvRefreshMode::ALWAYS;
+            if (backend == "gh-advisory") {
+                backendConfig.security.backends[backend].refreshMode = OsvRefreshMode::ALWAYS;
+            }
+        }
+
+        if (backend == "gh-advisory") {
+            GhAdvisoryVulnerabilitySyncService syncService(ecosystems, backendConfig);
+            std::vector<ValidationFinding> backendFindings = syncService.ensureReady(forceRefresh);
+            const bool failed = std::any_of(backendFindings.begin(), backendFindings.end(), [](const ValidationFinding& finding) {
+                return finding.kind == "sync_error";
+            });
+            if (!failed) {
+                anySuccess = true;
+            }
+            findings.insert(findings.end(), backendFindings.begin(), backendFindings.end());
+            continue;
         }
 
         std::vector<ValidationFinding> backendFindings;
@@ -208,8 +230,24 @@ std::vector<ValidationFinding> SecurityGatewayService::ensureEcosystemsReady(
             ReqPackConfig ecosystemConfig = backendConfig;
             ecosystemConfig.security.osvDatabasePath = package_index_path_for_ecosystem(backendConfig, ecosystem);
             VulnerabilityDatabase database(ecosystemConfig);
-            VulnerabilitySyncService syncService(&database, this->metadataProvider, ecosystemConfig, {ecosystem});
-            std::vector<ValidationFinding> syncFindings = syncService.ensureReady();
+            std::vector<ValidationFinding> syncFindings;
+            if (backend == "osv") {
+                VulnerabilitySyncService syncService(&database, this->metadataProvider, ecosystemConfig, {ecosystem});
+                syncFindings = syncService.ensureReady();
+            } else if (backend == "snyk") {
+                SnykVulnerabilitySyncService syncService(&database, {ecosystem}, ecosystemConfig);
+                syncFindings = syncService.ensureReady(forceRefresh);
+            } else if (backend == "trivy") {
+                TrivyVulnerabilitySyncService syncService(&database, {ecosystem}, ecosystemConfig);
+                syncFindings = syncService.ensureReady(forceRefresh);
+            } else {
+                syncFindings.push_back(ValidationFinding{
+                    .kind = "sync_warning",
+                    .source = backend,
+                    .severity = "low",
+                    .message = "security backend not implemented yet",
+                });
+            }
             const bool failed = std::any_of(syncFindings.begin(), syncFindings.end(), [](const ValidationFinding& finding) {
                 return finding.kind == "sync_error";
             });
@@ -247,10 +285,16 @@ std::vector<ValidationFinding> SecurityGatewayService::executeGatewayRequest(
         }};
     }
 
+    const std::string gatewayName = gateway.empty() ? this->config.security.defaultGateway : gateway;
+    const std::set<std::string> backends = this->resolveGatewayBackends(gatewayName);
+    const bool allowRawGatewayEcosystems = backends.size() == 1 && backends.contains("gh-advisory");
+
     std::set<std::string> ecosystems;
     for (const Package& package : packages) {
         if (const auto resolved = this->resolveCanonicalEcosystem(package.name); resolved.has_value()) {
             ecosystems.insert(resolved.value());
+        } else if (allowRawGatewayEcosystems && !package.name.empty()) {
+            ecosystems.insert(package.name);
         }
     }
     return this->ensureEcosystemsReady(ecosystems, gateway, action == ActionType::UPDATE);

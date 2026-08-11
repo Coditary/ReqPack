@@ -239,8 +239,14 @@ std::optional<PluginBundleLayout> plugin_bundle_read_directory(const std::filesy
 std::optional<PluginBundleLayout> plugin_bundle_find_root(const std::filesystem::path& basePath, const std::string& expectedPluginId) {
     std::vector<std::filesystem::path> candidates;
     if (!expectedPluginId.empty()) {
+        const std::string normalized = to_lower_copy(expectedPluginId);
+        const std::string group = normalized.substr(0, 1);
         candidates.push_back(basePath / "plugins" / expectedPluginId);
+        candidates.push_back(basePath / "plugins" / group / expectedPluginId);
         candidates.push_back(basePath / expectedPluginId);
+        candidates.push_back(basePath / group / expectedPluginId);
+        candidates.push_back(basePath / "rqp-plugins" / expectedPluginId);
+        candidates.push_back(basePath / "rqp-plugins" / group / expectedPluginId);
     }
     candidates.push_back(basePath);
 

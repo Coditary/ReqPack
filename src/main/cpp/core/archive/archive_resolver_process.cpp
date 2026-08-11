@@ -1,5 +1,7 @@
 #include "archive_resolver_internal.h"
 
+#include "core/common/pipe_helpers.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -196,7 +198,7 @@ std::string run_command_capture(const std::string& command) {
 
 CommandResult run_command_capture_status(const std::string& command) {
     int outputPipe[2];
-    if (::pipe(outputPipe) != 0) {
+    if (!create_pipe_cloexec(outputPipe)) {
         throw std::runtime_error("failed to run archive command");
     }
 

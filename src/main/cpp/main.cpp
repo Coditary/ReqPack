@@ -41,13 +41,13 @@ void configure_logger_from_config(Logger& logger, const ReqPackConfig& config) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    std::vector<std::string> earlyArguments;
-    earlyArguments.reserve(static_cast<std::size_t>(argc > 1 ? argc - 1 : 0));
+    std::vector<std::string> rawArguments;
+    rawArguments.reserve(static_cast<std::size_t>(argc > 1 ? argc - 1 : 0));
     for (int i = 1; i < argc; ++i) {
-        earlyArguments.emplace_back(argv[i]);
+        rawArguments.emplace_back(argv[i]);
     }
 
-    const PluginTestCliParseResult earlyPluginTest = parse_plugin_test_invocation(earlyArguments);
+    const PluginTestCliParseResult earlyPluginTest = parse_plugin_test_invocation(rawArguments);
     if (earlyPluginTest.matched && earlyPluginTest.helpRequested) {
         print_plugin_test_help(std::cout);
         return 0;
@@ -93,12 +93,6 @@ int main(int argc, char* argv[]) {
 
     std::unique_ptr<IDisplay> display = create_display(config.display);
     logger.setDisplay(display.get());
-
-    std::vector<std::string> rawArguments;
-    rawArguments.reserve(static_cast<std::size_t>(argc > 1 ? argc - 1 : 0));
-    for (int i = 1; i < argc; ++i) {
-        rawArguments.emplace_back(argv[i]);
-    }
 
     const int result = dispatch_main_command(
         cli,

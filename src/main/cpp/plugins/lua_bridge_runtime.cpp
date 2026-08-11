@@ -29,7 +29,7 @@ void log_lua_error(Logger& logger, const std::string& scope, const std::string& 
 }
 
 LuaBridgeScriptRuntime::LuaBridgeScriptRuntime() {
-    m_lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math, sol::lib::io);
+    m_lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math, sol::lib::io, sol::lib::os);
 }
 
 sol::state& LuaBridgeScriptRuntime::state() {

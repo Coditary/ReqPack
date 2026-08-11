@@ -115,6 +115,54 @@ void load_security_section(const sol::table& root, ReqPackConfig& config) {
             osvBackend.overlayPath = config.security.osvOverlayPath;
         }
     }
+    if (!config.security.backends.contains("snyk")) {
+        SecurityBackendConfig snykBackend;
+        snykBackend.apiBaseUrl = "https://api.snyk.io/rest";
+        snykBackend.apiVersion = "2024-10-15";
+        snykBackend.tokenEnv = "SNYK_TOKEN";
+        snykBackend.dataset = "issues";
+        config.security.backends["snyk"] = std::move(snykBackend);
+    } else {
+        SecurityBackendConfig& snykBackend = config.security.backends["snyk"];
+        if (snykBackend.apiBaseUrl.empty()) {
+            snykBackend.apiBaseUrl = "https://api.snyk.io/rest";
+        }
+        if (snykBackend.apiVersion.empty()) {
+            snykBackend.apiVersion = "2024-10-15";
+        }
+        if (snykBackend.tokenEnv.empty()) {
+            snykBackend.tokenEnv = "SNYK_TOKEN";
+        }
+        if (snykBackend.dataset.empty()) {
+            snykBackend.dataset = "issues";
+        }
+    }
+    if (!config.security.backends.contains("trivy")) {
+        SecurityBackendConfig trivyBackend;
+        trivyBackend.dbRepositories = {
+            "mirror.gcr.io/aquasec/trivy-db:2",
+            "ghcr.io/aquasecurity/trivy-db:2",
+        };
+        config.security.backends["trivy"] = std::move(trivyBackend);
+    } else {
+        SecurityBackendConfig& trivyBackend = config.security.backends["trivy"];
+        if (trivyBackend.dbRepositories.empty()) {
+            trivyBackend.dbRepositories = {
+                "mirror.gcr.io/aquasec/trivy-db:2",
+                "ghcr.io/aquasecurity/trivy-db:2",
+            };
+        }
+    }
+    if (!config.security.backends.contains("gh-advisory")) {
+        SecurityBackendConfig ghAdvisoryBackend;
+        ghAdvisoryBackend.feedUrl = "https://codeload.github.com/github/advisory-database/tar.gz/refs/heads/main";
+        config.security.backends["gh-advisory"] = std::move(ghAdvisoryBackend);
+    } else {
+        SecurityBackendConfig& ghAdvisoryBackend = config.security.backends["gh-advisory"];
+        if (ghAdvisoryBackend.feedUrl.empty()) {
+            ghAdvisoryBackend.feedUrl = "https://codeload.github.com/github/advisory-database/tar.gz/refs/heads/main";
+        }
+    }
 }
 
 void load_reports_section(const sol::table& root, ReqPackConfig& config) {

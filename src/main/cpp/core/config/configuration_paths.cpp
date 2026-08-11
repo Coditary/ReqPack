@@ -151,6 +151,36 @@ ReqPackConfig::ReqPackConfig()
        }) {
     version = reqpack_build_release_id();
     downloader.userAgent = reqpack_user_agent();
+
+    if (!security.backends.contains("osv")) {
+        SecurityBackendConfig osvBackend;
+        osvBackend.feedUrl = security.osvFeedUrl;
+        osvBackend.refreshMode = security.osvRefreshMode;
+        osvBackend.refreshIntervalSeconds = security.osvRefreshIntervalSeconds;
+        osvBackend.overlayPath = security.osvOverlayPath;
+        security.backends["osv"] = std::move(osvBackend);
+    }
+    if (!security.backends.contains("snyk")) {
+        SecurityBackendConfig snykBackend;
+        snykBackend.apiBaseUrl = "https://api.snyk.io/rest";
+        snykBackend.apiVersion = "2024-10-15";
+        snykBackend.tokenEnv = "SNYK_TOKEN";
+        snykBackend.dataset = "issues";
+        security.backends["snyk"] = std::move(snykBackend);
+    }
+    if (!security.backends.contains("trivy")) {
+        SecurityBackendConfig trivyBackend;
+        trivyBackend.dbRepositories = {
+            "mirror.gcr.io/aquasec/trivy-db:2",
+            "ghcr.io/aquasecurity/trivy-db:2",
+        };
+        security.backends["trivy"] = std::move(trivyBackend);
+    }
+    if (!security.backends.contains("gh-advisory")) {
+        SecurityBackendConfig ghAdvisoryBackend;
+        ghAdvisoryBackend.feedUrl = "https://codeload.github.com/github/advisory-database/tar.gz/refs/heads/main";
+        security.backends["gh-advisory"] = std::move(ghAdvisoryBackend);
+    }
 }
 
 ReqPackConfig default_reqpack_config() {

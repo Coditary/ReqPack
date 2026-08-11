@@ -1368,6 +1368,72 @@ end
 function plugin.shutdown() return true end
 )";
 
+const char* SECURITY_PROVIDER_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    role = "security-provider",
+    ecosystemScopes = { "Maven" },
+    networkScopes = { "api.snyk.io" },
+    privilegeLevel = "none",
+  }
+end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "security-provider" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.outdated(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package) return { name = package, version = "1.0.0", description = "security provider" } end
+function plugin.shutdown() return true end
+)";
+
+const char* MAVEN_AUDIT_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    osvEcosystem = "Maven",
+    purlType = "maven",
+    versionComparatorProfile = "maven-comparable",
+  }
+end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.outdated(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package)
+  return {
+    name = package,
+    version = "unknown",
+    description = "Maven artifact",
+  }
+end
+function plugin.resolvePackage(context, package)
+  if package.name == "org.apache.logging.log4j:log4j-core" then
+    package.version = "2.14.1"
+    return package
+  end
+  return nil
+end
+function plugin.shutdown() return true end
+)";
+
 const char* PACK_PLUGIN = R"(
 plugin = {}
 
@@ -4134,6 +4200,326 @@ TEST_CASE("orchestrator audit resolves explicit package versions before matching
     CHECK(output.find("version unavailable") == std::string::npos);
 }
 
+TEST_CASE("orchestrator install snyk maven imports tenant findings into scoped security index", "[integration][orchestrator][security]") {
+    TempDir tempDir{"reqpack-orchestrator-install-snyk-maven"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path apiRoot = tempDir.path() / "snyk-api" / "orgs" / "org-1";
+    const std::filesystem::path exportFile = tempDir.path() / "snyk-export.csv";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    const std::filesystem::path auditOutputPath = tempDir.path() / "audit.json";
+
+    write_file(apiRoot / "export.json", R"({"export_id":"exp-1"})");
+    write_file(apiRoot / "jobs" / "export" / "exp-1.json", R"({"status":"FINISHED"})");
+    write_file(apiRoot / "export" / "exp-1.json", std::string{"{"} + "\"download_url\":\"file://" + exportFile.string() + "\"}");
+    write_file(exportFile,
+        "PROBLEM_ID,PROBLEM_TITLE,CVE,PACKAGE_NAME_AND_VERSION,SEMVER_VULNERABLE_RANGE,ISSUE_SEVERITY,NVD_SCORE,SNYK_CVSS_SCORE,UPDATED_AT,FIXED_IN_VERSION,PRODUCT_NAME\n"
+        "SNYK-JAVA-LOG4J-1,Remote code execution,CVE-2026-1,pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1,\"[,2.15.0)\",critical,9.8,9.8,2026-01-01T00:00:00Z,2.15.0,Snyk Open Source\n"
+    );
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    autoFetch = true,\n"
+        "    indexPath = '" + (tempDir.path() / "security-index").string() + "',\n"
+        "    cachePath = '" + (tempDir.path() / "security-cache").string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'manual',\n"
+        "    backends = {\n"
+        "      snyk = {\n"
+        "        apiBaseUrl = 'file://" + (tempDir.path() / "snyk-api").string() + "',\n"
+        "        apiVersion = '2024-10-15',\n"
+        "        tokenEnv = 'REQPACK_TEST_SNYK_TOKEN',\n"
+        "        orgId = 'org-1',\n"
+        "        dataset = 'issues',\n"
+        "        refreshMode = 'always',\n"
+        "      },\n"
+        "    },\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (tempDir.path() / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    add_plugin_script(pluginDirectory, "snyk", SECURITY_PROVIDER_PLUGIN);
+    add_plugin_script(pluginDirectory, "maven", MAVEN_AUDIT_PLUGIN);
+
+    int installStatus = 0;
+    const std::string installOutput = run_reqpack_with_home_env_and_status(tempDir.path(), configPath, tempDir.path(), {
+        {"REQPACK_TEST_SNYK_TOKEN", "token-1"},
+    }, {
+        "install",
+        "snyk",
+        "maven",
+    }, installStatus);
+
+    CHECK(installStatus == 0);
+    CHECK(installOutput.find("security gateway action failed") == std::string::npos);
+    CHECK(std::filesystem::exists(tempDir.path() / "security-index" / "Maven"));
+
+    int auditStatus = 0;
+    const std::string auditOutput = run_reqpack_with_home_env_and_status(tempDir.path(), configPath, tempDir.path(), {
+        {"REQPACK_TEST_SNYK_TOKEN", "token-1"},
+    }, {
+        "audit",
+        "maven",
+        "org.apache.logging.log4j:log4j-core",
+        "--format",
+        "json",
+        "--output",
+        auditOutputPath.string(),
+    }, auditStatus);
+
+    CHECK(auditStatus == 0);
+    CHECK(auditOutput.find(auditOutputPath.string()) != std::string::npos);
+    REQUIRE(std::filesystem::exists(auditOutputPath));
+
+    const std::string report = read_file(auditOutputPath);
+    CHECK(report.find("\"findingCount\": 1") != std::string::npos);
+    CHECK(report.find("\"id\": \"SNYK-JAVA-LOG4J-1\"") != std::string::npos);
+    CHECK(report.find("\"name\": \"org.apache.logging.log4j:log4j-core\"") != std::string::npos);
+    CHECK(report.find("\"version\": \"2.14.1\"") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install trivy maven imports shared advisories into scoped security index", "[integration][orchestrator][security]") {
+    TempDir tempDir{"reqpack-orchestrator-install-trivy-maven"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path trivyRoot = tempDir.path() / "trivy-db";
+    const std::filesystem::path helperPath = tempDir.path() / "trivy-helper.sh";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    const std::filesystem::path auditOutputPath = tempDir.path() / "audit.json";
+
+    write_file(trivyRoot / "metadata.json", R"({"Version":2})");
+    write_file(trivyRoot / "trivy.db", "fixture");
+    write_file(helperPath,
+        "#!/bin/sh\n"
+        "printf '%s\\n' '{\"ecosystem\":\"Maven\",\"packageName\":\"org.apache.logging.log4j:log4j-core\",\"advisoryId\":\"CVE-2021-44228\",\"aliases\":[\"GHSA-jfh8-c2jp-5v3q\"],\"summary\":\"Remote code execution\",\"description\":\"desc\",\"severity\":\"CRITICAL\",\"score\":10.0,\"references\":[\"https://example.test/CVE-2021-44228\"],\"modified\":\"2021-12-10T00:00:00Z\",\"published\":\"2021-12-10T00:00:00Z\",\"ranges\":[{\"introduced\":\"2.0-beta9\",\"fixed\":\"2.15.0\"}]}'\n"
+    );
+    REQUIRE(std::system((std::string{"chmod +x "} + escape_shell_arg(helperPath.string())).c_str()) == 0);
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    autoFetch = true,\n"
+        "    indexPath = '" + (tempDir.path() / "security-index").string() + "',\n"
+        "    cachePath = '" + (tempDir.path() / "security-cache").string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'manual',\n"
+        "    backends = {\n"
+        "      trivy = {\n"
+        "        dbRepositories = { 'file://" + trivyRoot.string() + "' },\n"
+        "        helperPath = '" + helperPath.string() + "',\n"
+        "        refreshMode = 'always',\n"
+        "      },\n"
+        "    },\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (tempDir.path() / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    copy_repo_plugin(pluginDirectory, "trivy");
+    add_plugin_script(pluginDirectory, "maven", MAVEN_AUDIT_PLUGIN);
+
+    int installStatus = 0;
+    const std::string installOutput = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "install",
+        "trivy",
+        "maven",
+    }, installStatus);
+
+    CHECK(installStatus == 0);
+    CHECK(installOutput.find("security gateway action failed") == std::string::npos);
+    CHECK(std::filesystem::exists(tempDir.path() / "security-index" / "Maven"));
+
+    int auditStatus = 0;
+    const std::string auditOutput = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "audit",
+        "maven",
+        "org.apache.logging.log4j:log4j-core",
+        "--format",
+        "json",
+        "--output",
+        auditOutputPath.string(),
+    }, auditStatus);
+
+    CHECK(auditStatus == 0);
+    CHECK(auditOutput.find(auditOutputPath.string()) != std::string::npos);
+    REQUIRE(std::filesystem::exists(auditOutputPath));
+
+    const std::string report = read_file(auditOutputPath);
+    CHECK(report.find("\"findingCount\": 1") != std::string::npos);
+    CHECK(report.find("\"id\": \"CVE-2021-44228\"") != std::string::npos);
+    CHECK(report.find("\"name\": \"org.apache.logging.log4j:log4j-core\"") != std::string::npos);
+    CHECK(report.find("\"version\": \"2.14.1\"") != std::string::npos);
+}
+
+TEST_CASE("orchestrator install gh-advisory pip imports shared advisories into scoped security index", "[integration][orchestrator][security]") {
+    TempDir tempDir{"reqpack-orchestrator-install-gh-advisory-pip"};
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
+    const std::filesystem::path advisoryRoot = tempDir.path() / "gh-advisory-db" / "advisories" / "github-reviewed" / "2026" / "01";
+    const std::filesystem::path configPath = tempDir.path() / "config.lua";
+    const std::filesystem::path auditOutputPath = tempDir.path() / "audit.json";
+
+    write_file(advisoryRoot / "GHSA-demo.json", R"({
+        "id": "GHSA-pip-demo",
+        "modified": "2026-01-01T00:00:00Z",
+        "summary": "urllib3 issue",
+        "affected": [{
+            "package": {"ecosystem": "pip", "name": "urllib3"},
+            "versions": ["1.26.18"]
+        }]
+    })");
+
+    write_file(configPath,
+        "return {\n"
+        "  execution = {\n"
+        "    useTransactionDb = false,\n"
+        "    deleteCommittedTransactions = false,\n"
+        "    checkVirtualFileSystemWrite = false,\n"
+        "    transactionDatabasePath = '" + (tempDir.path() / "transactions").string() + "',\n"
+        "  },\n"
+        "  planner = {\n"
+        "    autoDownloadMissingPlugins = false,\n"
+        "    autoDownloadMissingDependencies = false,\n"
+        "  },\n"
+        "  registry = {\n"
+        "    pluginDirectory = '" + pluginDirectory.string() + "',\n"
+        "    databasePath = '" + (tempDir.path() / "registry-db").string() + "',\n"
+        "    autoLoadPlugins = true,\n"
+        "    shutDownPluginsOnExit = true,\n"
+        "  },\n"
+        "  interaction = {\n"
+        "    interactive = false,\n"
+        "  },\n"
+        "  security = {\n"
+        "    autoFetch = true,\n"
+        "    indexPath = '" + (tempDir.path() / "security-index").string() + "',\n"
+        "    cachePath = '" + (tempDir.path() / "security-cache").string() + "',\n"
+        "    osvDatabasePath = '" + (tempDir.path() / "osv-db").string() + "',\n"
+        "    osvRefreshMode = 'manual',\n"
+        "    backends = {\n"
+        "      [\"gh-advisory\"] = {\n"
+        "        feedUrl = 'file://" + (tempDir.path() / "gh-advisory-db").string() + "',\n"
+        "        refreshMode = 'always',\n"
+        "      },\n"
+        "    },\n"
+        "  },\n"
+        "  rqp = {\n"
+        "    statePath = '" + (tempDir.path() / "rqp-state").string() + "',\n"
+        "  },\n"
+        "}\n");
+
+    copy_repo_plugin(pluginDirectory, "gh-advisory");
+    add_plugin_script(pluginDirectory, "pip", R"(
+plugin = {}
+
+function plugin.getName() return REQPACK_PLUGIN_ID end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getSecurityMetadata()
+  return {
+    osvEcosystem = "pip",
+    purlType = "pypi",
+    versionComparatorProfile = "pep440",
+  }
+end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "pkg", "orch" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.outdated(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.info(context, package)
+  return {
+    name = package,
+    version = "unknown",
+    description = "pip package",
+  }
+end
+function plugin.resolvePackage(context, package)
+  if package.name == "urllib3" then
+    package.version = "1.26.18"
+    return package
+  end
+  return nil
+end
+function plugin.shutdown() return true end
+)");
+
+    int installStatus = 0;
+    const std::string installOutput = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "install",
+        "gh-advisory",
+        "pip",
+    }, installStatus);
+
+    CHECK(installStatus == 0);
+    CHECK(installOutput.find("security gateway action failed") == std::string::npos);
+    CHECK(std::filesystem::exists(tempDir.path() / "security-index" / "pip"));
+
+    int auditStatus = 0;
+    const std::string auditOutput = run_reqpack_with_home_and_status(tempDir.path(), configPath, tempDir.path(), {
+        "audit",
+        "pip",
+        "urllib3",
+        "--format",
+        "json",
+        "--output",
+        auditOutputPath.string(),
+    }, auditStatus);
+
+    CHECK(auditStatus == 0);
+    CHECK(auditOutput.find(auditOutputPath.string()) != std::string::npos);
+    REQUIRE(std::filesystem::exists(auditOutputPath));
+
+    const std::string report = read_file(auditOutputPath);
+    CHECK(report.find("\"findingCount\": 1") != std::string::npos);
+    CHECK(report.find("\"id\": \"GHSA-pip-demo\"") != std::string::npos);
+    CHECK(report.find("\"name\": \"urllib3\"") != std::string::npos);
+    CHECK(report.find("\"version\": \"1.26.18\"") != std::string::npos);
+}
+
 TEST_CASE("reqpack install stdin batches install commands until eof", "[integration][orchestrator][stdin]") {
     TempDir tempDir{"reqpack-orchestrator-install-stdin"};
     const std::filesystem::path pluginDirectory = tempDir.path() / "plugins";
@@ -5334,10 +5720,10 @@ TEST_CASE("orchestrator install maven fails when configured repositories do not 
         {"install", "maven", "org.junit:junit:4.13"},
         status
     );
-
+    
     CHECK(status != 0);
     CHECK(output.find("no configured maven repository matched org.junit:junit") != std::string::npos);
-    CHECK(output.find("INSTALL done:  0 ok,  0 skipped,  1 failed") != std::string::npos);
+    CHECK(output.find("INSTALL done:  1 ok,  0 skipped,  1 failed") != std::string::npos);
     CHECK_FALSE(std::filesystem::exists(mvnLog));
 }
 

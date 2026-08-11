@@ -72,6 +72,7 @@ ReqPackConfig make_executor_test_config(const std::filesystem::path& root) {
     config.execution.transactionDatabasePath = (root / "transactions").string();
     config.execution.checkVirtualFileSystemWrite = false;
     config.history.historyPath = (root / "history").string();
+    config.rqp.statePath = (root / "rqp-state").string();
     return config;
 }
 

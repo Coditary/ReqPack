@@ -34,6 +34,8 @@ class Executer {
 		bool usesLocalTarget{false};
 		IPlugin* plugin{nullptr};
 		bool pluginLoadFailed{false};
+		// Non-nix systems that originally depended on this nix group (Windows soft-skip consumers).
+		std::vector<std::string> nixSoftSkipConsumers;
 	};
 
 	struct TaskGroupPlan {

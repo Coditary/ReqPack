@@ -1,6 +1,7 @@
 #include "registry_database_internal.h"
 
 #include "core/common/network_environment.h"
+#include "core/common/pipe_helpers.h"
 #include "core/common/version_compare.h"
 
 #include <cerrno>
@@ -41,13 +42,13 @@ ProcessResult run_process_capture(const std::vector<std::string>& arguments) {
     }
 
     int stdoutPipe[2];
-    if (::pipe(stdoutPipe) != 0) {
+    if (!create_pipe_cloexec(stdoutPipe)) {
         result.stderrText = std::string{"pipe(stdout) failed: "} + std::strerror(errno);
         return result;
     }
 
     int stderrPipe[2];
-    if (::pipe(stderrPipe) != 0) {
+    if (!create_pipe_cloexec(stderrPipe)) {
         result.stderrText = std::string{"pipe(stderr) failed: "} + std::strerror(errno);
         (void)::close(stdoutPipe[0]);
         (void)::close(stdoutPipe[1]);

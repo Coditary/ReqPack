@@ -7,6 +7,7 @@
 
 #include <cctype>
 #include <cstddef>
+#include <csignal>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -14,6 +15,12 @@
 #include <vector>
 
 namespace {
+
+volatile sig_atomic_t g_stdin_shutdown_requested = 0;
+
+void stdin_shutdown_handler(int) {
+    g_stdin_shutdown_requested = 1;
+}
 
 struct StdinCommand {
     std::size_t lineNumber{0};
@@ -144,6 +151,10 @@ int run_stdin_action_batch(Cli& cli,
     }
     ReqPackConfig effectiveConfig = apply_config_overrides(config, inheritedOverrides);
 
+    // Config accumulates across stdin lines: each line's overrides layer on top of the
+    // previous state. This is intentional — the batch runs as a single Orchestrator
+    // invocation with the final merged config. Scalar fields use last-writer-wins;
+    // list fields (enabledCategories, ignoreVulnerabilityIds) are replaced, not appended.
     for (const StdinCommand& command : commands) {
         const std::vector<std::string> commandTokens = tokenize_command_line(command.text);
         if (commandTokens.empty()) {
@@ -195,9 +206,16 @@ int run_stdin_serve_loop(Cli& cli,
     Logger& logger = Logger::instance();
     int exitCode = 0;
 
+    struct sigaction sa{};
+    sa.sa_handler = stdin_shutdown_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
+
     std::string line;
     std::size_t lineNumber = 0;
-    while (std::getline(std::cin, line)) {
+    while (std::getline(std::cin, line) && !g_stdin_shutdown_requested) {
         ++lineNumber;
         const std::string trimmed = trim_copy(line);
         if (trimmed.empty() || trimmed.rfind("#", 0) == 0) {

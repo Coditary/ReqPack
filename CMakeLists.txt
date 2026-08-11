@@ -3,6 +3,8 @@ project(ReqPack LANGUAGES CXX)
 enable_language(C)
 enable_testing()
 
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
+
 set(REQPACK_RELEASE_ID "v1.2.14" CACHE STRING "Build/release identity shown by rqp version output")
 
 option(REQPACK_ENABLE_COVERAGE "Build ReqPack targets with coverage instrumentation" OFF)
@@ -54,6 +56,25 @@ find_package(OpenSSL REQUIRED)
 find_library(REQPACK_ZSTD_LIBRARY NAMES zstd REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_program(REQPACK_GO_EXECUTABLE go REQUIRED)
+
+set(REQPACK_TRIVY_HELPER_DIR "${CMAKE_BINARY_DIR}/tools/trivydb-exporter")
+set(REQPACK_TRIVY_HELPER_PATH "${REQPACK_TRIVY_HELPER_DIR}/trivydb-exporter")
+
+add_custom_command(
+    OUTPUT ${REQPACK_TRIVY_HELPER_PATH}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${REQPACK_TRIVY_HELPER_DIR}
+    COMMAND ${REQPACK_GO_EXECUTABLE} build -o ${REQPACK_TRIVY_HELPER_PATH} .
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tools/trivydb-exporter
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/tools/trivydb-exporter/go.mod
+        ${CMAKE_SOURCE_DIR}/tools/trivydb-exporter/go.sum
+        ${CMAKE_SOURCE_DIR}/tools/trivydb-exporter/main.go
+    COMMENT "Building Trivy DB helper"
+    VERBATIM
+)
+
+add_custom_target(reqpack_trivy_helper ALL DEPENDS ${REQPACK_TRIVY_HELPER_PATH})
 
 set(REQPACK_LUA_LINK_LIBRARIES ${LUA_LIBRARIES})
 if(REQPACK_LINK_STATIC_LUA)
@@ -125,11 +146,26 @@ find_path(SOL2_INCLUDE_DIR
     PATHS /usr/include /usr/local/include
 )
 
+if(SOL2_INCLUDE_DIR STREQUAL "/usr/include" OR SOL2_INCLUDE_DIR STREQUAL "/usr/local/include")
+    set(SOL2_INCLUDE_DIR "")
+endif()
+
 if(NOT SOL2_INCLUDE_DIR)
-    message(FATAL_ERROR "Sol2 Header nicht gefunden!")
+    if(NOT EXISTS "/usr/include/sol/sol.hpp" AND NOT EXISTS "/usr/local/include/sol/sol.hpp")
+        message(FATAL_ERROR "Sol2 Header nicht gefunden!")
+    endif()
 endif()
 
 include_directories(src/main/include)
+
+set(REQPACK_PRIVATE_INCLUDE_DIRS
+    ${SOL2_INCLUDE_DIR}
+    src/main/include
+)
+
+if(LUA_INCLUDE_DIR AND NOT LUA_INCLUDE_DIR STREQUAL "/usr/include")
+    list(APPEND REQPACK_PRIVATE_INCLUDE_DIRS ${LUA_INCLUDE_DIR})
+endif()
 
 set(SOURCES
     src/main/cpp/main.cpp
@@ -181,6 +217,7 @@ set(SOURCES
     src/main/cpp/core/archive/archive_resolver_process.cpp
     src/main/cpp/core/archive/archive_resolver_extract.cpp
     src/main/cpp/core/common/network_environment.cpp
+    src/main/cpp/core/common/pipe_helpers.cpp
     src/main/cpp/core/common/version_compare.cpp
     src/main/cpp/core/config/configuration.cpp
     src/main/cpp/core/config/configuration_cli_overrides.cpp
@@ -272,7 +309,10 @@ set(SOURCES
     src/main/cpp/core/remote/serve_remote_session.cpp
     src/main/cpp/core/remote/serve_remote_socket.cpp
     src/main/cpp/core/remote/serve_remote_upload.cpp
+    src/main/cpp/core/security/gh_advisory_vulnerability_sync_service.cpp
     src/main/cpp/core/security/osv_core.cpp
+    src/main/cpp/core/security/snyk_vulnerability_sync_service.cpp
+    src/main/cpp/core/security/trivy_vulnerability_sync_service.cpp
     src/main/cpp/core/security/security_gateway_service.cpp
     src/main/cpp/core/security/validator.cpp
     src/main/cpp/core/security/validator_prepare.cpp
@@ -330,7 +370,10 @@ add_executable(core_integration_tests
     src/main/cpp/core/host/host_info.cpp
     src/main/cpp/core/host/host_info_codec.cpp
     src/main/cpp/core/host/host_info_probe.cpp
+    src/main/cpp/core/security/gh_advisory_vulnerability_sync_service.cpp
     src/main/cpp/core/security/osv_core.cpp
+    src/main/cpp/core/security/snyk_vulnerability_sync_service.cpp
+    src/main/cpp/core/security/trivy_vulnerability_sync_service.cpp
     src/main/cpp/core/planning/planner.cpp
     src/main/cpp/core/planning/planner_request_setup.cpp
     src/main/cpp/core/planning/planner_dependency_policy.cpp
@@ -386,6 +429,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/archive/archive_resolver_process.cpp
     src/main/cpp/core/archive/archive_resolver_extract.cpp
     src/main/cpp/core/common/version_compare.cpp
+    src/main/cpp/core/common/pipe_helpers.cpp
     src/main/cpp/core/config/configuration.cpp
     src/main/cpp/core/config/configuration_cli_overrides.cpp
     src/main/cpp/core/config/configuration_loader.cpp
@@ -465,6 +509,8 @@ add_executable(core_integration_tests
 )
 
 add_dependencies(core_integration_tests ReqPack)
+add_dependencies(ReqPack reqpack_trivy_helper)
+add_dependencies(core_integration_tests reqpack_trivy_helper)
 
 add_executable(core_unit_tests
     tests/cpp/test_main.cpp
@@ -483,7 +529,10 @@ add_executable(core_unit_tests
     tests/unit/core/planning/planner_core_tests.cpp
     tests/unit/core/registry/registry_database_tests.cpp
     tests/unit/core/registry/registry_json_parser_tests.cpp
+    tests/unit/core/security/gh_advisory_vulnerability_sync_service_tests.cpp
     tests/unit/core/security/osv_core_tests.cpp
+    tests/unit/core/security/snyk_vulnerability_sync_service_tests.cpp
+    tests/unit/core/security/trivy_vulnerability_sync_service_tests.cpp
     tests/unit/core/security/security_gateway_service_tests.cpp
     tests/unit/core/security/validator_policy_tests.cpp
     tests/unit/core/security/validator_validate_tests.cpp
@@ -492,6 +541,7 @@ add_executable(core_unit_tests
     tests/unit/core/state/transaction_database_serialization_tests.cpp
     tests/unit/output/logger/format_tests.cpp
     src/main/cpp/core/common/version_compare.cpp
+    src/main/cpp/core/common/pipe_helpers.cpp
     src/main/cpp/core/config/configuration.cpp
     src/main/cpp/core/config/configuration_cli_overrides.cpp
     src/main/cpp/core/config/configuration_loader.cpp
@@ -551,7 +601,10 @@ add_executable(core_unit_tests
     src/main/cpp/core/registry/registry_database_core.cpp
     src/main/cpp/core/registry/registry_json_parser.cpp
     src/main/cpp/core/remote/remote_profiles.cpp
+    src/main/cpp/core/security/gh_advisory_vulnerability_sync_service.cpp
     src/main/cpp/core/security/osv_core.cpp
+    src/main/cpp/core/security/snyk_vulnerability_sync_service.cpp
+    src/main/cpp/core/security/trivy_vulnerability_sync_service.cpp
     src/main/cpp/core/security/security_gateway_service.cpp
     src/main/cpp/core/security/validator.cpp
     src/main/cpp/core/security/validator_prepare.cpp
@@ -583,6 +636,8 @@ add_executable(core_unit_tests
     src/main/cpp/output/command_output.cpp
 )
 
+add_dependencies(core_unit_tests reqpack_trivy_helper)
+
 add_custom_target(reqpack_test_targets
     DEPENDS
         core_unit_tests
@@ -602,36 +657,26 @@ foreach(reqpack_target IN ITEMS
 endforeach()
 
 target_include_directories(ReqPack PRIVATE 
-    ${SOL2_INCLUDE_DIR}
-    ${LUA_INCLUDE_DIR}
-    src/main/include
+    ${REQPACK_PRIVATE_INCLUDE_DIRS}
 )
 
 target_include_directories(exec_rules_unit_tests PRIVATE
-    ${SOL2_INCLUDE_DIR}
-    ${LUA_INCLUDE_DIR}
-    src/main/include
+    ${REQPACK_PRIVATE_INCLUDE_DIRS}
     tests/cpp
 )
 
 target_include_directories(exec_rules_integration_tests PRIVATE
-    ${SOL2_INCLUDE_DIR}
-    ${LUA_INCLUDE_DIR}
-    src/main/include
+    ${REQPACK_PRIVATE_INCLUDE_DIRS}
     tests/cpp
 )
 
 target_include_directories(core_unit_tests PRIVATE
-    ${SOL2_INCLUDE_DIR}
-    ${LUA_INCLUDE_DIR}
-    src/main/include
+    ${REQPACK_PRIVATE_INCLUDE_DIRS}
     tests/cpp
 )
 
 target_include_directories(core_integration_tests PRIVATE
-    ${SOL2_INCLUDE_DIR}
-    ${LUA_INCLUDE_DIR}
-    src/main/include
+    ${REQPACK_PRIVATE_INCLUDE_DIRS}
     tests/cpp
 )
 
@@ -691,6 +736,7 @@ target_link_libraries(core_integration_tests PRIVATE
 
 target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)
 target_compile_definitions(ReqPack PRIVATE REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}")
+target_compile_definitions(ReqPack PRIVATE REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}")
 target_compile_definitions(exec_rules_unit_tests PRIVATE
     SOL_ALL_SAFETIES_ON=1
     REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
@@ -706,12 +752,14 @@ target_compile_definitions(core_unit_tests PRIVATE
     REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
     REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
     REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}"
+    REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}"
 )
 target_compile_definitions(core_integration_tests PRIVATE
     SOL_ALL_SAFETIES_ON=1
     REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
     REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
     REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}"
+    REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}"
 )
 
 include(CTest)

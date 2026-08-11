@@ -105,6 +105,14 @@ struct SecurityBackendConfig {
     OsvRefreshMode refreshMode{OsvRefreshMode::MANUAL};
     long refreshIntervalSeconds{24L * 60L * 60L};
     std::string overlayPath{};
+    std::string apiBaseUrl{};
+    std::string apiVersion{};
+    std::string tokenEnv{};
+    std::string orgId{};
+    std::string groupId{};
+    std::string dataset{};
+    std::vector<std::string> dbRepositories{};
+    std::string helperPath{};
 };
 
 struct SecurityConfig {

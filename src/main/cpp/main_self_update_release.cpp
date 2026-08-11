@@ -1,6 +1,7 @@
 #include "main_self_update_internal.h"
 
 #include "core/common/network_environment.h"
+#include "core/common/pipe_helpers.h"
 #include "core/registry/registry_database.h"
 #include "output/logger.h"
 
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <fcntl.h>
 #include <functional>
@@ -356,10 +358,10 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
 
     int stdoutPipe[2];
     int stderrPipe[2];
-    if (::pipe(stdoutPipe) != 0) {
+    if (!create_pipe_cloexec(stdoutPipe)) {
         return false;
     }
-    if (::pipe(stderrPipe) != 0) {
+    if (!create_pipe_cloexec(stderrPipe)) {
         (void)::close(stdoutPipe[0]);
         (void)::close(stdoutPipe[1]);
         return false;
@@ -482,10 +484,15 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
         {.fd = stderrPipe[0], .events = POLLIN},
     };
 
+    constexpr int POLL_TIMEOUT_MS = 30000;
     bool stdoutOpen = true;
     bool stderrOpen = true;
     while (stdoutOpen || stderrOpen) {
-        const int pollResult = ::poll(fds, 2, -1);
+        const int pollResult = ::poll(fds, 2, POLL_TIMEOUT_MS);
+        if (pollResult == 0) {
+            ::kill(pid, SIGTERM);
+            break;
+        }
         if (pollResult < 0) {
             if (errno == EINTR) {
                 continue;

@@ -3,6 +3,7 @@
 #include "executor_internal.h"
 
 #include "core/host/host_info.h"
+#include "core/planning/planner_platform_policy.h"
 #include "output/logger.h"
 
 #include <algorithm>
@@ -37,6 +38,44 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 
 std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const {
 	if (taskGroup.packages.empty() && !taskGroup.usesLocalTarget) {
+		return {};
+	}
+
+	if (planner_platform::softSkipNixInstalls() &&
+	    is_install_like_action(taskGroup.action) &&
+	    planner_platform::isNixInstallSystem(this->registry->resolvePluginName(taskGroup.system))) {
+		bool consumersReady = !taskGroup.nixSoftSkipConsumers.empty();
+		for (const std::string& consumerSystem : taskGroup.nixSoftSkipConsumers) {
+			if (this->registry->getPlugin(consumerSystem) == nullptr || !this->registry->loadPlugin(consumerSystem)) {
+				consumersReady = false;
+				break;
+			}
+		}
+		const bool stillRequired = taskGroup.nixSoftSkipConsumers.empty() || !consumersReady;
+
+		if (stillRequired) {
+			std::string packageList;
+			for (const Package& package : taskGroup.packages) {
+				if (!packageList.empty()) {
+					packageList += ", ";
+				}
+				packageList += package.name;
+				if (!package.version.empty()) {
+					packageList += "@" + package.version;
+				}
+			}
+			Logger::instance().diagnostic(make_warning_diagnostic(
+				"executor",
+				"Skipping nix install on Windows",
+				"ReqPack will not install nix packages on Windows and expects required tools to already be available on the host.",
+				"Install the required tools with a Windows package manager (for example Chocolatey or winget) or manually, then retry.",
+				packageList.empty() ? std::string{} : ("packages: " + packageList),
+				taskGroup.system,
+				"nix-soft-skip"
+			));
+		}
+
+		// Soft-skip: no plugin call and no success history records.
 		return {};
 	}
 

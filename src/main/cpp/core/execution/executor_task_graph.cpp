@@ -2,6 +2,8 @@
 
 #include "executor_internal.h"
 
+#include "core/planning/planner_platform_policy.h"
+
 #include <boost/graph/topological_sort.hpp>
 
 #include <algorithm>
@@ -75,6 +77,12 @@ std::vector<Executer::TaskGroup> Executer::createTaskGroups(const Graph& graph) 
 		}
 	}
 
+	if constexpr (planner_platform::reorderNonNixBeforeNix) {
+		std::stable_partition(groups.begin(), groups.end(), [](const TaskGroup& group) {
+			return !planner_platform::isNixInstallSystem(group.system);
+		});
+	}
+
 	return groups;
 }
 
@@ -113,7 +121,23 @@ std::vector<Executer::TaskGroupPlan> Executer::createTaskGroupPlans(const std::v
 		}
 	}
 
+	auto isInstallLike = [](const ActionType action) {
+		return action == ActionType::INSTALL || action == ActionType::ENSURE;
+	};
+
 	std::set<std::pair<std::size_t, std::size_t>> seenEdges;
+	auto addScheduleEdge = [&](const std::size_t sourceGroup, const std::size_t targetGroup) {
+		if (sourceGroup == targetGroup) {
+			return;
+		}
+		const std::pair<std::size_t, std::size_t> edge{sourceGroup, targetGroup};
+		if (!seenEdges.insert(edge).second) {
+			return;
+		}
+		plans[sourceGroup].successors.push_back(targetGroup);
+		++plans[targetGroup].pendingDependencies;
+	};
+
 	auto [edgeBegin, edgeEnd] = boost::edges(*graph);
 	for (auto edgeIt = edgeBegin; edgeIt != edgeEnd; ++edgeIt) {
 		const Package& sourcePackage = (*graph)[boost::source(*edgeIt, *graph)];
@@ -123,15 +147,45 @@ std::vector<Executer::TaskGroupPlan> Executer::createTaskGroupPlans(const std::v
 		if (sourceGroupIt == packageToGroupIndex.end() || targetGroupIt == packageToGroupIndex.end()) {
 			continue;
 		}
-		if (sourceGroupIt->second == targetGroupIt->second) {
+
+		const std::string resolvedSource = this->registry->resolvePluginName(sourcePackage.system);
+		const std::string resolvedTarget = this->registry->resolvePluginName(targetPackage.system);
+
+		if (planner_platform::isNixInstallSystem(resolvedSource) && !planner_platform::isNixInstallSystem(resolvedTarget)) {
+			auto& consumers = plans[sourceGroupIt->second].taskGroup.nixSoftSkipConsumers;
+			if (std::find(consumers.begin(), consumers.end(), resolvedTarget) == consumers.end()) {
+				consumers.push_back(resolvedTarget);
+			}
+		}
+
+		if (planner_platform::shouldIgnoreScheduleEdge(resolvedSource, resolvedTarget)) {
 			continue;
 		}
-		const std::pair<std::size_t, std::size_t> edge{sourceGroupIt->second, targetGroupIt->second};
-		if (!seenEdges.insert(edge).second) {
-			continue;
+
+		addScheduleEdge(sourceGroupIt->second, targetGroupIt->second);
+	}
+
+	if (planner_platform::needsNonNixBeforeNixBarrier()) {
+		std::vector<std::size_t> nonNixInstallGroups;
+		std::vector<std::size_t> nixInstallGroups;
+		for (std::size_t groupIndex = 0; groupIndex < plans.size(); ++groupIndex) {
+			const TaskGroup& group = plans[groupIndex].taskGroup;
+			if (!isInstallLike(group.action)) {
+				continue;
+			}
+			const std::string resolvedSystem = this->registry->resolvePluginName(group.system);
+			if (planner_platform::isNixInstallSystem(resolvedSystem)) {
+				nixInstallGroups.push_back(groupIndex);
+			} else {
+				nonNixInstallGroups.push_back(groupIndex);
+			}
 		}
-		plans[sourceGroupIt->second].successors.push_back(targetGroupIt->second);
-		++plans[targetGroupIt->second].pendingDependencies;
+
+		for (const std::size_t nixGroup : nixInstallGroups) {
+			for (const std::size_t nonNixGroup : nonNixInstallGroups) {
+				addScheduleEdge(nonNixGroup, nixGroup);
+			}
+		}
 	}
 
 	return plans;

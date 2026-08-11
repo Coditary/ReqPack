@@ -492,12 +492,29 @@ std::map<std::string, SecurityBackendConfig> load_security_backend_map(const sol
         assign_if_present(backendTable, "refreshMode", osv_refresh_mode_from_string, backend.refreshMode);
         assign_if_present(backendTable, "refreshIntervalSeconds", backend.refreshIntervalSeconds);
         assign_if_present(backendTable, "overlayPath", backend.overlayPath);
+        assign_if_present(backendTable, "apiBaseUrl", backend.apiBaseUrl);
+        assign_if_present(backendTable, "apiVersion", backend.apiVersion);
+        assign_if_present(backendTable, "tokenEnv", backend.tokenEnv);
+        assign_if_present(backendTable, "orgId", backend.orgId);
+        assign_if_present(backendTable, "groupId", backend.groupId);
+        assign_if_present(backendTable, "dataset", backend.dataset);
+        assign_if_present(backendTable, "helperPath", backend.helperPath);
+        const std::vector<std::string> dbRepositories = load_string_array(backendTable["dbRepositories"]);
+        if (!dbRepositories.empty()) {
+            backend.dbRepositories = dbRepositories;
+        }
 
         if (!backend.feedUrl.empty()) {
             backend.feedUrl = expand_user_path(backend.feedUrl).string();
         }
         if (!backend.overlayPath.empty()) {
             backend.overlayPath = expand_user_path(backend.overlayPath).string();
+        }
+        if (!backend.apiBaseUrl.empty()) {
+            backend.apiBaseUrl = expand_user_path(backend.apiBaseUrl).string();
+        }
+        if (!backend.helperPath.empty()) {
+            backend.helperPath = expand_user_path(backend.helperPath).string();
         }
 
         values[to_lower_copy(key.as<std::string>())] = std::move(backend);
