@@ -73,19 +73,19 @@ std::string plugin_test_report_to_json(const PluginTestRunReport& report) {
         }
         stream << "],\n";
         stream << "      \"stdout\": [";
-        for (std::size_t stdoutIndex = 0; stdoutIndex < entry.stdout.size(); ++stdoutIndex) {
+        for (std::size_t stdoutIndex = 0; stdoutIndex < entry.stdoutLines.size(); ++stdoutIndex) {
             if (stdoutIndex != 0) {
                 stream << ", ";
             }
-            stream << '"' << json_escape(entry.stdout[stdoutIndex]) << '"';
+            stream << '"' << json_escape(entry.stdoutLines[stdoutIndex]) << '"';
         }
         stream << "],\n";
         stream << "      \"stderr\": [";
-        for (std::size_t stderrIndex = 0; stderrIndex < entry.stderr.size(); ++stderrIndex) {
+        for (std::size_t stderrIndex = 0; stderrIndex < entry.stderrLines.size(); ++stderrIndex) {
             if (stderrIndex != 0) {
                 stream << ", ";
             }
-            stream << '"' << json_escape(entry.stderr[stderrIndex]) << '"';
+            stream << '"' << json_escape(entry.stderrLines[stderrIndex]) << '"';
         }
         stream << "],\n";
         stream << "      \"events\": [";

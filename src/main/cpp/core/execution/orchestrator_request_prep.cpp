@@ -232,7 +232,7 @@ bool prepare_requests_for_run(
 		std::filesystem::create_directories(tempDir, ec);
 		const std::filesystem::path tempFile = tempDir / filename;
 
-		Logger::instance().stdout("downloading " + request.localPath, request.system, "install");
+		Logger::instance().logStdout("downloading " + request.localPath, request.system, "install");
 
 		Downloader downloader(registry->getDatabase(), config);
 		if (!downloader.download(request.localPath, tempFile.string())) {

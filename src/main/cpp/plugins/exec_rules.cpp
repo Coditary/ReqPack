@@ -98,7 +98,7 @@ OutputContext plugin_output_context(const std::string& sourceId, const std::stri
 void log_exec_transcript_chunk(Logger& logger, const std::string& pluginId, const std::string& chunk, const bool mirrorToTerminal) {
     log_plugin_message(logger, spdlog::level::debug, pluginId, std::string("[exec] ") + chunk);
     if (mirrorToTerminal) {
-        logger.stdout(chunk, pluginId, "exec");
+        logger.logStdout(chunk, pluginId, "exec");
     }
 }
 

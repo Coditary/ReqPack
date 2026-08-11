@@ -750,8 +750,8 @@ PluginTestRuntimeCaseResult run_single_case(FakeExecHost& plugin, const ReqPackC
 
     result.events = plugin.takeRecentEvents();
     result.summary.commands = plugin.commands();
-    result.summary.stdout = plugin.stdout_lines();
-    result.summary.stderr = plugin.stderr_lines();
+    result.summary.stdoutLines = plugin.stdout_lines();
+    result.summary.stderrLines = plugin.stderr_lines();
     result.summary.artifacts = plugin.artifacts();
     for (const PluginEventRecord& event : result.events) {
         result.summary.events.push_back(event.name);
@@ -771,13 +771,13 @@ PluginTestRuntimeCaseResult run_single_case(FakeExecHost& plugin, const ReqPackC
     }
 
     if (!testCase.expectStdout.empty()) {
-        if (result.summary.stdout != testCase.expectStdout) {
+        if (result.summary.stdoutLines != testCase.expectStdout) {
             failures.push_back("stdout did not match expectation");
         }
     }
 
     if (!testCase.expectStderr.empty()) {
-        if (result.summary.stderr != testCase.expectStderr) {
+        if (result.summary.stderrLines != testCase.expectStderr) {
             failures.push_back("stderr did not match expectation");
         }
     }

@@ -27,10 +27,10 @@ namespace {
 
 int run_host_refresh(Logger& logger) {
     const std::shared_ptr<const HostInfoSnapshot> snapshot = HostInfoService::refreshSnapshot();
-    logger.stdout("host refresh: cache updated");
-    logger.stdout("host os: " + snapshot->platform.osFamily);
-    logger.stdout("host arch: " + snapshot->platform.arch);
-    logger.stdout("host cache: " + default_reqpack_host_info_cache_path().string());
+    logger.logStdout("host refresh: cache updated");
+    logger.logStdout("host os: " + snapshot->platform.osFamily);
+    logger.logStdout("host arch: " + snapshot->platform.arch);
+    logger.logStdout("host cache: " + default_reqpack_host_info_cache_path().string());
     return 0;
 }
 
@@ -155,7 +155,7 @@ int dispatch_main_command(Cli& cli,
     }
 
     if (is_version_command(rawArguments)) {
-        logger.stdout(config.applicationName + " " + reqpack_build_release_id());
+        logger.logStdout(config.applicationName + " " + reqpack_build_release_id());
         logger.flushSync();
         return 0;
     }

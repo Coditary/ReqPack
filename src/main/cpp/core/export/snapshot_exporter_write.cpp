@@ -55,11 +55,11 @@ bool write_snapshot_output(
 		const bool force = std::find(request.flags.begin(), request.flags.end(), "force") != request.flags.end();
 		if (!force) {
 			Logger& logger = Logger::instance();
-			logger.stdout(resolvedPath + " already exists. Overwrite? [y/N]");
+			logger.logStdout(resolvedPath + " already exists. Overwrite? [y/N]");
 			logger.flushSync();
 			std::string answer;
 			if (!std::getline(std::cin, answer) || (answer != "y" && answer != "Y")) {
-				logger.stdout("aborted.");
+				logger.logStdout("aborted.");
 				logger.flushSync();
 				return false;
 			}
