@@ -138,10 +138,14 @@ if(APPLE)
 endif()
 
 # MinGW fmt/spdlog headers fail with undeclared stdout/stderr inside template bodies.
-if(WIN32)
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>)
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-include stdio.h>)
-endif()
+function(reqpack_apply_windows_compile_options target_name)
+    if(WIN32)
+        target_compile_options(${target_name} PRIVATE
+            -Wno-template-body
+            "SHELL:-include stdio.h"
+        )
+    endif()
+endfunction()
 
 set(REQPACK_PLATFORM_LIBS)
 if(UNIX AND NOT APPLE)
@@ -791,6 +795,10 @@ target_compile_definitions(core_integration_tests PRIVATE
     REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}"
     REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}"
 )
+
+foreach(_reqpack_target IN ITEMS ReqPack exec_rules_unit_tests exec_rules_integration_tests core_unit_tests core_integration_tests)
+    reqpack_apply_windows_compile_options(${_reqpack_target})
+endforeach()
 
 include(CTest)
 include(${catch2_SOURCE_DIR}/contrib/Catch.cmake)
