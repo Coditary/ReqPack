@@ -13,8 +13,8 @@
 
 #if !defined(_WIN32)
 #include <sys/statvfs.h>
-#endif
 #include <sys/utsname.h>
+#endif
 
 #if defined(__linux__)
 #include <mntent.h>
@@ -114,6 +114,17 @@ HostPlatformInfo detect_platform_info() {
     platform.osFamily = "unknown";
 #endif
 
+#if defined(_WIN32)
+#if defined(_M_ARM64) || defined(__aarch64__)
+    platform.arch = normalize_host_architecture("aarch64");
+#elif defined(_M_X64) || defined(__amd64__) || defined(__x86_64__)
+    platform.arch = normalize_host_architecture("x86_64");
+#elif defined(_M_IX86) || defined(__i386__)
+    platform.arch = normalize_host_architecture("x86");
+#else
+    platform.arch = "unknown";
+#endif
+#else
     struct utsname uts{};
     if (::uname(&uts) == 0) {
         platform.arch = normalize_host_architecture(uts.machine);
@@ -121,6 +132,7 @@ HostPlatformInfo detect_platform_info() {
     if (platform.arch.empty()) {
         platform.arch = normalize_host_architecture(exec_read_first_line("uname -m 2>/dev/null").value_or(std::string{}));
     }
+#endif
     if (platform.arch.empty()) {
         platform.arch = "unknown";
     }
@@ -143,6 +155,11 @@ HostPlatformInfo detect_platform_info() {
 }
 
 void fill_uname_fields(HostKernelInfo& kernel, HostCpuInfo& cpu) {
+#if defined(_WIN32)
+    (void)kernel;
+    (void)cpu;
+    return;
+#else
     struct utsname uts{};
     if (::uname(&uts) != 0) {
         return;
@@ -154,6 +171,7 @@ void fill_uname_fields(HostKernelInfo& kernel, HostCpuInfo& cpu) {
     if (cpu.arch.empty()) {
         cpu.arch = normalize_host_architecture(uts.machine);
     }
+#endif
 }
 
 void fill_linux_os_info(HostInfoSnapshot& snapshot) {
