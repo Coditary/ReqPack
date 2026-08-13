@@ -122,17 +122,25 @@ if(REQPACK_LINK_STATIC_LUA)
 endif()
 
 set(REQPACK_FMT_TARGET fmt::fmt)
-if(TARGET fmt::fmt-header-only)
+# Prefer the compiled library on Windows/MinGW: header-only pulls format-inl.h and
+# hits GCC 16 -Wtemplate-body failures around stdout/stderr in system packages.
+if(NOT WIN32 AND TARGET fmt::fmt-header-only)
     set(REQPACK_FMT_TARGET fmt::fmt-header-only)
 endif()
 
 set(REQPACK_SPDLOG_TARGET spdlog::spdlog)
-if(TARGET spdlog::spdlog_header_only)
+if(NOT WIN32 AND TARGET spdlog::spdlog_header_only)
     set(REQPACK_SPDLOG_TARGET spdlog::spdlog_header_only)
 endif()
 
 if(APPLE)
     add_compile_options(-Wno-unknown-warning-option)
+endif()
+
+# GCC 16 enables -Wtemplate-body by default. MinGW fmt/spdlog headers then fail
+# with undeclared stdout/stderr inside template bodies (they only pull <stdio.h>).
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>)
 endif()
 
 set(REQPACK_PLATFORM_LIBS)
