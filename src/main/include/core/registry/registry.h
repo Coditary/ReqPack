@@ -11,6 +11,8 @@
 #include <optional>
 #include "plugins/iplugin.h"
 
+#include "core/common/windows_macro_guards.h"
+
 enum class PluginState {
     NOT_FOUND,
     REGISTERED,

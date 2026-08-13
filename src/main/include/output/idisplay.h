@@ -5,6 +5,8 @@
 
 #include "output/progress_metrics.h"
 
+#include "core/common/windows_macro_guards.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DisplayMode — mirrors ActionType but lives in output layer, no boost dep.
 // ─────────────────────────────────────────────────────────────────────────────
