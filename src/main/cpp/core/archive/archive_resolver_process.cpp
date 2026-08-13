@@ -1,6 +1,8 @@
 #include "archive_resolver_internal.h"
 
 #include "core/common/pipe_helpers.h"
+#include "core/common/process_runner.h"
+#include "core/common/temp_directory.h"
 
 #include <algorithm>
 #include <cctype>
@@ -13,15 +15,27 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
-#include <termios.h>
-#include <sys/wait.h>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <io.h>
+#else
 #include <fcntl.h>
+#include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
+#endif
 
 namespace {
 
+#if !defined(_WIN32)
 int normalize_exit_code(const int status) {
     if (status == -1) {
         return -1;
@@ -34,10 +48,31 @@ int normalize_exit_code(const int status) {
     }
     return status;
 }
+#endif
 
 class TerminalEchoGuard {
 public:
     explicit TerminalEchoGuard(const int fd) : fd_(fd) {
+#if defined(_WIN32)
+        if (fd_ < 0 || !_isatty(fd_)) {
+            return;
+        }
+
+        const HANDLE handle = reinterpret_cast<HANDLE>(_get_osfhandle(fd_));
+        if (handle == INVALID_HANDLE_VALUE) {
+            return;
+        }
+
+        DWORD mode = 0;
+        if (!GetConsoleMode(handle, &mode)) {
+            return;
+        }
+
+        originalMode_ = mode;
+        if (SetConsoleMode(handle, mode & ~ENABLE_ECHO_INPUT)) {
+            active_ = true;
+        }
+#else
         if (fd_ < 0 || ::tcgetattr(fd_, &original_) != 0) {
             return;
         }
@@ -47,12 +82,21 @@ public:
         if (::tcsetattr(fd_, TCSAFLUSH, &updated) == 0) {
             active_ = true;
         }
+#endif
     }
 
     ~TerminalEchoGuard() {
-        if (active_) {
-            (void)::tcsetattr(fd_, TCSAFLUSH, &original_);
+        if (!active_) {
+            return;
         }
+#if defined(_WIN32)
+        const HANDLE handle = reinterpret_cast<HANDLE>(_get_osfhandle(fd_));
+        if (handle != INVALID_HANDLE_VALUE) {
+            (void)SetConsoleMode(handle, originalMode_);
+        }
+#else
+        (void)::tcsetattr(fd_, TCSAFLUSH, &original_);
+#endif
     }
 
     bool active() const {
@@ -61,7 +105,11 @@ public:
 
 private:
     int fd_{-1};
+#if defined(_WIN32)
+    DWORD originalMode_{0};
+#else
     termios original_{};
+#endif
     bool active_{false};
 };
 
@@ -132,21 +180,7 @@ std::filesystem::path single_file_archive_output_path(
 }
 
 std::filesystem::path make_unique_directory(const std::filesystem::path& root, const std::string& prefix) {
-    std::error_code error;
-    std::filesystem::create_directories(root, error);
-    if (error) {
-        throw std::runtime_error("failed to create archive temp root: " + root.string());
-    }
-
-    const std::filesystem::path pattern = root / (prefix + "-XXXXXX");
-    std::string templateString = pattern.string();
-    std::vector<char> buffer(templateString.begin(), templateString.end());
-    buffer.push_back('\0');
-    char* created = ::mkdtemp(buffer.data());
-    if (created == nullptr) {
-        throw std::runtime_error("failed to create archive temp directory");
-    }
-    return created;
+    return reqpack_make_unique_directory(root, prefix);
 }
 
 std::filesystem::path make_unique_file_path(const std::filesystem::path& root, const std::string& stem, const std::string& suffix) {
@@ -179,6 +213,13 @@ std::string trim_line(std::string value) {
 }
 
 std::string run_command_capture(const std::string& command) {
+#if defined(_WIN32)
+    const ReqpackProcessResult captured = reqpack_run_process_capture({"bash", "-c", command});
+    if (!captured.success()) {
+        throw std::runtime_error("failed to inspect archive");
+    }
+    return captured.stdoutText;
+#else
     FILE* pipe = ::popen(command.c_str(), "r");
     if (pipe == nullptr) {
         throw std::runtime_error("failed to inspect archive");
@@ -194,9 +235,23 @@ std::string run_command_capture(const std::string& command) {
         throw std::runtime_error("failed to inspect archive");
     }
     return output;
+#endif
 }
 
 CommandResult run_command_capture_status(const std::string& command) {
+#if defined(_WIN32)
+    const ReqpackProcessResult captured = reqpack_run_process_capture({"bash", "-c", command});
+    CommandResult result;
+    result.exitCode = captured.exitCode;
+    result.output = captured.stdoutText;
+    if (!captured.stderrText.empty()) {
+        if (!result.output.empty()) {
+            result.output.push_back('\n');
+        }
+        result.output += captured.stderrText;
+    }
+    return result;
+#else
     int outputPipe[2];
     if (!create_pipe_cloexec(outputPipe)) {
         throw std::runtime_error("failed to run archive command");
@@ -258,6 +313,7 @@ CommandResult run_command_capture_status(const std::string& command) {
     }
 
     return CommandResult{.exitCode = normalize_exit_code(status), .output = std::move(output)};
+#endif
 }
 
 bool path_has_invalid_segments(const std::filesystem::path& path) {

@@ -1,13 +1,20 @@
 #include "configuration_internal.h"
 
 #include <cstdlib>
+#include <filesystem>
+#include <string>
+
+#if !defined(_WIN32)
 #include <pwd.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 namespace {
 
 constexpr const char* ARCHIVE_PASSWORD_ENV = "REQPACK_ARCHIVE_PASSWORD";
+
+#if !defined(_WIN32)
 
 std::optional<std::filesystem::path> passwd_home_from_user(const std::string& username) {
     if (username.empty()) {
@@ -33,6 +40,8 @@ std::optional<std::filesystem::path> passwd_home_from_uid(uid_t uid) {
     return std::nullopt;
 }
 
+#endif
+
 std::filesystem::path xdg_directory(const char* envName, const std::filesystem::path& fallback) {
     const char* value = std::getenv(envName);
     if (value != nullptr && std::string(value).size() > 0) {
@@ -46,6 +55,19 @@ std::filesystem::path xdg_directory(const char* envName, const std::filesystem::
 namespace configuration_internal {
 
 std::filesystem::path invoking_user_home_directory() {
+#if defined(_WIN32)
+    const char* userProfile = std::getenv("USERPROFILE");
+    if (userProfile != nullptr && std::string(userProfile).size() > 0) {
+        return std::filesystem::path(userProfile);
+    }
+
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && std::string(home).size() > 0) {
+        return std::filesystem::path(home);
+    }
+
+    return std::filesystem::current_path();
+#else
     const char* sudoUser = std::getenv("SUDO_USER");
     if (sudoUser != nullptr && std::string(sudoUser).size() > 0) {
         if (const auto home = passwd_home_from_user(sudoUser)) {
@@ -73,6 +95,7 @@ std::filesystem::path invoking_user_home_directory() {
     }
 
     return std::filesystem::current_path();
+#endif
 }
 
 std::filesystem::path expand_user_path(const std::filesystem::path& path) {

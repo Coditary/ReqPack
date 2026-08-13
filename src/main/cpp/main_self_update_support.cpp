@@ -1,6 +1,7 @@
 #include "main_self_update_internal.h"
 
 #include "core/common/process_runner.h"
+#include "core/common/temp_directory.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -10,10 +11,6 @@
 #include <sstream>
 #include <system_error>
 #include <vector>
-
-#if !defined(_WIN32)
-#include <unistd.h>
-#endif
 
 namespace self_update_internal {
 
@@ -175,27 +172,11 @@ std::optional<std::filesystem::path> create_self_update_temp_directory() {
         return std::nullopt;
     }
 
-    std::string tmpl = (base / "session-XXXXXX").string();
-#if defined(_WIN32)
-    for (int attempt = 0; attempt < 100; ++attempt) {
-        const std::filesystem::path candidate = base / ("session-" + std::to_string(attempt));
-        std::error_code createError;
-        if (std::filesystem::create_directory(candidate, createError) && !createError) {
-            return candidate;
-        }
-        createError.clear();
+    try {
+        return reqpack_make_unique_directory(base, "session");
+    } catch (...) {
+        return std::nullopt;
     }
-    return std::nullopt;
-#else
-    std::vector<char> tmplBuf(tmpl.begin(), tmpl.end());
-    tmplBuf.push_back('\0');
-    char* result = ::mkdtemp(tmplBuf.data());
-    if (result != nullptr) {
-        return std::filesystem::path(result);
-    }
-
-    return std::nullopt;
-#endif
 }
 
 bool remove_path_quietly(const std::filesystem::path& path) {

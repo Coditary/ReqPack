@@ -1,5 +1,6 @@
 #include "sbom_exporter_internal.h"
 
+#include "core/common/terminal_width.h"
 #include "output/ansi_color.h"
 
 #include <algorithm>
@@ -9,8 +10,6 @@
 #include <cstring>
 #include <iomanip>
 #include <sstream>
-#include <sys/ioctl.h>
-#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -59,12 +58,7 @@ std::size_t terminal_width() {
         }
     }
 
-    winsize size{};
-    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0) {
-        return static_cast<std::size_t>(size.ws_col);
-    }
-
-    return 120;
+    return reqpack_terminal_column_count(120);
 }
 
 std::string fit_table_cell(const std::string& value, const std::size_t width) {

@@ -1,6 +1,8 @@
 #include "output/logger.h"
 #include "output/logger_core.h"
 
+#include "core/common/time_helpers.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -59,7 +61,7 @@ std::string utc_timestamp_now() {
     const auto now = std::chrono::system_clock::now();
     const std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
     std::tm tm{};
-    gmtime_r(&currentTime, &tm);
+    (void)reqpack_gmtime_utc(&tm, &currentTime);
     std::ostringstream stream;
     stream << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
     return stream.str();

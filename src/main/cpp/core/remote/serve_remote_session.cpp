@@ -1,5 +1,7 @@
 #include "serve_remote_internal.h"
 
+#include "core/common/time_helpers.h"
+
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -14,7 +16,7 @@ std::string connection_protocol_name(ConnectionProtocol protocol) {
 std::string format_timestamp(const std::chrono::system_clock::time_point& timePoint) {
     const std::time_t time = std::chrono::system_clock::to_time_t(timePoint);
     std::tm tm{};
-    localtime_r(&time, &tm);
+    (void)reqpack_localtime(&tm, &time);
     std::ostringstream output;
     output << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
     return output.str();
