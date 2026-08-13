@@ -195,9 +195,6 @@ public:
 
 	std::uint64_t emit(OutputAction action, const OutputContext& context = {});
 	std::uint64_t emitDiagnostic(const DiagnosticMessage& diagnostic, bool mirrorToDisplay = true);
-	void stdout(const std::string& message,
-	            const std::string& source = {},
-	            const std::string& scope  = {});
 	void logStdout(const std::string& message,
 	               const std::string& source = {},
 	               const std::string& scope  = {});
