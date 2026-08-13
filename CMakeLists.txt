@@ -140,10 +140,7 @@ endif()
 # MinGW fmt/spdlog headers fail with undeclared stdout/stderr inside template bodies.
 function(reqpack_apply_windows_compile_options target_name)
     if(WIN32)
-        target_compile_options(${target_name} PRIVATE
-            -Wno-template-body
-            "SHELL:-include stdio.h"
-        )
+        target_compile_options(${target_name} PRIVATE -Wno-template-body)
     endif()
 endfunction()
 

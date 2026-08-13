@@ -1,6 +1,7 @@
 #include "audit_exporter_internal.h"
 
 #include "core/common/terminal_width.h"
+#include "core/common/tty_helpers.h"
 #include "output/ansi_color.h"
 
 #include <boost/graph/graph_traits.hpp>
@@ -280,7 +281,7 @@ bool table_colors_enabled() {
     if (force_color_enabled()) {
         return true;
     }
-    return isatty(STDOUT_FILENO);
+    return reqpack_stdout_is_tty();
 }
 
 }  // namespace audit_exporter_internal
