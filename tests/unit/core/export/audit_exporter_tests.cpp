@@ -12,6 +12,7 @@
 
 #include "core/export/audit_exporter.h"
 #include "output/logger.h"
+#include "test_helpers.h"
 
 namespace {
 
@@ -55,63 +56,6 @@ public:
         }
         return names;
     }
-};
-
-class ScopedColumnsEnv {
-public:
-    explicit ScopedColumnsEnv(const char* value) {
-        if (const char* existing = std::getenv("COLUMNS")) {
-            hadValue_ = true;
-            previousValue_ = existing;
-        }
-
-        if (value != nullptr) {
-            ::setenv("COLUMNS", value, 1);
-        } else {
-            ::unsetenv("COLUMNS");
-        }
-    }
-
-    ~ScopedColumnsEnv() {
-        if (hadValue_) {
-            ::setenv("COLUMNS", previousValue_.c_str(), 1);
-        } else {
-            ::unsetenv("COLUMNS");
-        }
-    }
-
-private:
-    bool hadValue_ = false;
-    std::string previousValue_;
-};
-
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* key, const char* value) : key_(key) {
-        if (const char* existing = std::getenv(key_)) {
-            hadValue_ = true;
-            previousValue_ = existing;
-        }
-
-        if (value != nullptr) {
-            ::setenv(key_, value, 1);
-        } else {
-            ::unsetenv(key_);
-        }
-    }
-
-    ~ScopedEnvVar() {
-        if (hadValue_) {
-            ::setenv(key_, previousValue_.c_str(), 1);
-        } else {
-            ::unsetenv(key_);
-        }
-    }
-
-private:
-    const char* key_;
-    bool hadValue_ = false;
-    std::string previousValue_;
 };
 
 std::string read_file(const std::filesystem::path& path) {
@@ -186,7 +130,7 @@ private:
 }  // namespace
 
 TEST_CASE("audit exporter renders default table output", "[unit][audit][export]") {
-    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar columns{"COLUMNS", "72"};
     ScopedEnvVar noColor{"NO_COLOR", "1"};
     ScopedEnvVar forceColor{"FORCE_COLOR", nullptr};
     AuditExporter exporter;
@@ -215,7 +159,7 @@ TEST_CASE("audit exporter renders default table output", "[unit][audit][export]"
 }
 
 TEST_CASE("audit exporter colorizes severity in terminal table output", "[unit][audit][export]") {
-    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar columns{"COLUMNS", "72"};
     ScopedEnvVar noColor{"NO_COLOR", nullptr};
     ScopedEnvVar forceColor{"FORCE_COLOR", "1"};
     AuditExporter exporter;
@@ -227,7 +171,7 @@ TEST_CASE("audit exporter colorizes severity in terminal table output", "[unit][
 }
 
 TEST_CASE("audit exporter supports no-wrap and wide table flags", "[unit][audit][export]") {
-    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar columns{"COLUMNS", "72"};
     ScopedEnvVar noColor{"NO_COLOR", "1"};
     ScopedEnvVar forceColor{"FORCE_COLOR", nullptr};
     AuditExporter exporter;
@@ -255,7 +199,7 @@ TEST_CASE("audit exporter supports no-wrap and wide table flags", "[unit][audit]
 }
 
 TEST_CASE("audit exporter keeps file exports plain even when color forced", "[unit][audit][export]") {
-    ScopedColumnsEnv columns{"72"};
+    ScopedEnvVar columns{"COLUMNS", "72"};
     ScopedEnvVar noColor{"NO_COLOR", nullptr};
     ScopedEnvVar forceColor{"FORCE_COLOR", "1"};
     AuditExporter exporter;

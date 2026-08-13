@@ -6,6 +6,7 @@
 #include <fstream>
 
 #include "core/host/host_info.h"
+#include "test_helpers.h"
 
 namespace {
 
@@ -28,29 +29,6 @@ public:
 
 private:
     std::filesystem::path path_;
-};
-
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(std::string name, std::string value)
-        : name_(std::move(name)) {
-        if (const char* existing = std::getenv(name_.c_str())) {
-            previous_ = std::string(existing);
-        }
-        ::setenv(name_.c_str(), value.c_str(), 1);
-    }
-
-    ~ScopedEnvVar() {
-        if (previous_.has_value()) {
-            ::setenv(name_.c_str(), previous_->c_str(), 1);
-        } else {
-            ::unsetenv(name_.c_str());
-        }
-    }
-
-private:
-    std::string name_;
-    std::optional<std::string> previous_;
 };
 
 void write_file(const std::filesystem::path& path, const std::string& content) {

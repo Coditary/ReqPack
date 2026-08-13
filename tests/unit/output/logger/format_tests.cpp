@@ -11,6 +11,7 @@
 #include "output/logger.h"
 #include "output/logger_core.h"
 #include "output/command_output.h"
+#include "test_helpers.h"
 
 #include <mutex>
 #include <utility>
@@ -67,30 +68,6 @@ public:
 
 private:
     std::mutex mutex_;
-};
-
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        if (const char* existing = std::getenv(name_)) {
-            hadPrevious_ = true;
-            previous_ = existing;
-        }
-        ::setenv(name_, value, 1);
-    }
-
-    ~ScopedEnvVar() {
-        if (hadPrevious_) {
-            ::setenv(name_, previous_.c_str(), 1);
-        } else {
-            ::unsetenv(name_);
-        }
-    }
-
-private:
-    const char* name_;
-    bool hadPrevious_{false};
-    std::string previous_;
 };
 
 class TestColorDisplay final : public ColorDisplay {
