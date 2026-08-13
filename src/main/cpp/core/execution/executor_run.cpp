@@ -89,6 +89,11 @@ bool Executer::execute(Graph *graph) {
 	);
 	std::vector<TransactionRecord> allRecords = records;
 	allRecords.insert(allRecords.end(), orphanRemovalRecords.begin(), orphanRemovalRecords.end());
+	if (jsonOutput && !inputAlreadyFiltered) {
+		const std::vector<TransactionRecord> alreadySatisfiedRecords =
+			this->buildAlreadySatisfiedRecords(allTaskGroups, taskGroups);
+		allRecords.insert(allRecords.end(), alreadySatisfiedRecords.begin(), alreadySatisfiedRecords.end());
+	}
 
 	const bool ok = std::none_of(allRecords.begin(), allRecords.end(), [](const TransactionRecord& record) {
 		return record.status != "success";

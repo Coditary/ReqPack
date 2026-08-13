@@ -151,6 +151,14 @@ bool Logger::isConsoleOutputEnabled() const {
     return consoleOutputEnabled.load(std::memory_order_acquire);
 }
 
+void Logger::setJsonOutputMode(bool enable) {
+    jsonOutputMode.store(enable, std::memory_order_release);
+}
+
+bool Logger::isJsonOutputMode() const {
+    return jsonOutputMode.load(std::memory_order_acquire);
+}
+
 void Logger::setLevel(const std::string& level) {
     logger->set_level(spdlog::level::from_str(level));
 }

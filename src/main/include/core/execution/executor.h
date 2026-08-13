@@ -83,6 +83,9 @@ class Executer {
 	bool dispatchTaskGroupToPlugin(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> buildSuccessRecords(const TaskGroup& taskGroup) const;
 	std::vector<TransactionRecord> buildFailureRecords(const TaskGroup& taskGroup) const;
+	std::vector<TransactionRecord> buildAlreadySatisfiedRecords(
+		const std::vector<TaskGroup>& allTaskGroups,
+		const std::vector<TaskGroup>& executableTaskGroups) const;
 
 public:
 	Executer(Registry* registry, const ReqPackConfig& config = default_reqpack_config());

@@ -214,6 +214,61 @@ std::vector<Executer::TransactionRecord> Executer::buildSuccessRecords(const Tas
 	return records;
 }
 
+std::vector<Executer::TransactionRecord> Executer::buildAlreadySatisfiedRecords(
+	const std::vector<TaskGroup>& allTaskGroups,
+	const std::vector<TaskGroup>& executableTaskGroups) const
+{
+	auto packageKey = [](const std::string& system, const std::string& name) {
+		return system + '\0' + name;
+	};
+
+	std::set<std::string> executableKeys;
+	for (const TaskGroup& taskGroup : executableTaskGroups) {
+		for (const Package& package : taskGroup.packages) {
+			executableKeys.insert(packageKey(taskGroup.system, package.name));
+		}
+	}
+
+	std::vector<InstalledEntry> installedState;
+	if (this->historyManager != nullptr) {
+		installedState = this->historyManager->loadInstalledState();
+	}
+
+	std::vector<TransactionRecord> records;
+	for (const TaskGroup& taskGroup : allTaskGroups) {
+		if (!actionUsesMissingPackageFilter(taskGroup.action) || taskGroup.usesLocalTarget) {
+			continue;
+		}
+
+		for (const Package& package : taskGroup.packages) {
+			if (executableKeys.find(packageKey(taskGroup.system, package.name)) != executableKeys.end()) {
+				continue;
+			}
+
+			std::string version = package.version;
+			if (version.empty()) {
+				for (const InstalledEntry& entry : installedState) {
+					if (entry.system == taskGroup.system && entry.name == package.name) {
+						version = entry.version;
+						break;
+					}
+				}
+			}
+
+			records.push_back(TransactionRecord{
+				.runId = {},
+				.system = taskGroup.system,
+				.action = taskGroup.action,
+				.packageName = package.name,
+				.packageVersion = version,
+				.status = "success"
+			});
+		}
+	}
+
+	return records;
+}
+
 std::vector<Executer::TransactionRecord> Executer::buildFailureRecords(const TaskGroup& taskGroup) const {
 	std::vector<TransactionRecord> records;
 	records.reserve(taskGroup.packages.size());

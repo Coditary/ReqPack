@@ -57,16 +57,18 @@ find_library(REQPACK_ZSTD_LIBRARY NAMES zstd REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 
-set(REQPACK_GO_EXECUTABLE "" CACHE FILEPATH "Path to the Go compiler")
 if(NOT REQPACK_GO_EXECUTABLE)
+    unset(REQPACK_GO_EXECUTABLE CACHE)
     find_program(REQPACK_GO_EXECUTABLE NAMES go go.exe
         HINTS
             "/opt/homebrew/bin"
             "/usr/local/bin"
+            "/usr/bin"
             "$ENV{HOME}/go/bin"
             "/usr/local/go/bin"
     )
 endif()
+set(REQPACK_GO_EXECUTABLE "${REQPACK_GO_EXECUTABLE}" CACHE FILEPATH "Path to the Go compiler")
 if(NOT REQPACK_GO_EXECUTABLE)
     message(FATAL_ERROR "Go compiler not found. Install Go or pass -DREQPACK_GO_EXECUTABLE=/path/to/go")
 endif()

@@ -90,6 +90,10 @@ int main(int argc, char* argv[]) {
 
     Logger& logger = Logger::instance();
     configure_logger_from_config(logger, config);
+    if (config.display.jsonOutput) {
+        logger.setJsonOutputMode(true);
+        logger.setConsoleOutput(false);
+    }
 
     std::unique_ptr<IDisplay> display;
     if (!config.display.jsonOutput) {

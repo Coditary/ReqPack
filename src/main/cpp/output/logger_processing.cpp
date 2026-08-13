@@ -230,6 +230,9 @@ void Logger::processEvent(const OutputEvent& event) {
             }
             break;
         case OutputAction::STDOUT:
+            if (jsonOutputMode.load(std::memory_order_acquire)) {
+                break;
+            }
             if (activeDisplay != nullptr) {
                 routeToDisplay(event);
             } else {
@@ -244,6 +247,9 @@ void Logger::processEvent(const OutputEvent& event) {
         case OutputAction::PLUGIN_PROGRESS:
         case OutputAction::PLUGIN_EVENT:
         case OutputAction::PLUGIN_ARTIFACT:
+            if (jsonOutputMode.load(std::memory_order_acquire)) {
+                break;
+            }
             if (activeDisplay != nullptr) {
                 routeToDisplay(event);
             } else {
