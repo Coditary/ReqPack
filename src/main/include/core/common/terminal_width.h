@@ -12,7 +12,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#include <io.h>
 #else
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -28,9 +27,11 @@ inline std::size_t reqpack_terminal_column_count(std::size_t fallback = 100) {
     }
 
 #if defined(_WIN32)
-    if (_isatty(_fileno(stdout))) {
+    DWORD consoleMode = 0;
+    const HANDLE stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (stdOut != INVALID_HANDLE_VALUE && GetConsoleMode(stdOut, &consoleMode)) {
         CONSOLE_SCREEN_BUFFER_INFO info{};
-        if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info)) {
+        if (GetConsoleScreenBufferInfo(stdOut, &info)) {
             const int width = info.srWindow.Right - info.srWindow.Left + 1;
             if (width > 0) {
                 return static_cast<std::size_t>(width);

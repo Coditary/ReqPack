@@ -137,9 +137,8 @@ if(APPLE)
     add_compile_options(-Wno-unknown-warning-option)
 endif()
 
-# GCC 16 enables -Wtemplate-body by default. MinGW fmt/spdlog headers then fail
-# with undeclared stdout/stderr inside template bodies (they only pull <stdio.h>).
-if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
+# MinGW fmt/spdlog headers fail with undeclared stdout/stderr inside template bodies.
+if(WIN32)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>)
 endif()
 
