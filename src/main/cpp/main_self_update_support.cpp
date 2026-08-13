@@ -1,19 +1,19 @@
 #include "main_self_update_internal.h"
 
-#include "core/common/network_environment.h"
+#include "core/common/process_runner.h"
 
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <spawn.h>
 #include <sstream>
-#include <sys/wait.h>
 #include <system_error>
 #include <vector>
 
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 namespace self_update_internal {
 
@@ -35,56 +35,7 @@ std::optional<std::string> trim_line(const std::string& value) {
 }
 
 bool run_process(const std::vector<std::string>& arguments, const std::filesystem::path& workingDirectory) {
-    if (arguments.empty()) {
-        return false;
-    }
-
-    posix_spawn_file_actions_t fileActions;
-    if (posix_spawn_file_actions_init(&fileActions) != 0) {
-        return false;
-    }
-
-    bool ready = true;
-#if defined(__linux__) || defined(__APPLE__)
-    if (!workingDirectory.empty()) {
-        ready = posix_spawn_file_actions_addchdir_np(&fileActions, workingDirectory.c_str()) == 0;
-    }
-#endif
-    if (!ready) {
-        posix_spawn_file_actions_destroy(&fileActions);
-        return false;
-    }
-
-    std::vector<char*> argv;
-    argv.reserve(arguments.size() + 1);
-    for (const std::string& argument : arguments) {
-        argv.push_back(const_cast<char*>(argument.c_str()));
-    }
-    argv.push_back(nullptr);
-
-    std::vector<std::string> environmentStorage = reqpack_sanitized_process_environment();
-    std::vector<char*> environmentPointers;
-    environmentPointers.reserve(environmentStorage.size() + 1);
-    for (std::string& entry : environmentStorage) {
-        environmentPointers.push_back(entry.data());
-    }
-    environmentPointers.push_back(nullptr);
-
-    pid_t pid = 0;
-    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), environmentPointers.data());
-    posix_spawn_file_actions_destroy(&fileActions);
-    if (spawnResult != 0) {
-        return false;
-    }
-
-    int status = 0;
-    while (waitpid(pid, &status, 0) == -1) {
-        if (errno != EINTR) {
-            return false;
-        }
-    }
-
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return reqpack_run_process(arguments, workingDirectory);
 }
 
 bool ensure_directory(const std::filesystem::path& path) {
@@ -225,6 +176,17 @@ std::optional<std::filesystem::path> create_self_update_temp_directory() {
     }
 
     std::string tmpl = (base / "session-XXXXXX").string();
+#if defined(_WIN32)
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const std::filesystem::path candidate = base / ("session-" + std::to_string(attempt));
+        std::error_code createError;
+        if (std::filesystem::create_directory(candidate, createError) && !createError) {
+            return candidate;
+        }
+        createError.clear();
+    }
+    return std::nullopt;
+#else
     std::vector<char> tmplBuf(tmpl.begin(), tmpl.end());
     tmplBuf.push_back('\0');
     char* result = ::mkdtemp(tmplBuf.data());
@@ -233,6 +195,7 @@ std::optional<std::filesystem::path> create_self_update_temp_directory() {
     }
 
     return std::nullopt;
+#endif
 }
 
 bool remove_path_quietly(const std::filesystem::path& path) {

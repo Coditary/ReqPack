@@ -1,7 +1,7 @@
 #include "main_self_update_internal.h"
 
 #include "core/common/network_environment.h"
-#include "core/common/pipe_helpers.h"
+#include "core/common/process_runner.h"
 #include "core/registry/registry_database.h"
 #include "output/logger.h"
 
@@ -13,22 +13,26 @@
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
-#include <fcntl.h>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
-#include <poll.h>
 #include <set>
-#include <spawn.h>
 #include <sstream>
 #include <string>
 #include <system_error>
-#include <sys/wait.h>
 #include <utility>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <poll.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+#include "core/common/pipe_helpers.h"
+#endif
 
 namespace {
 
@@ -356,6 +360,43 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
         return run_process({"tar", "-xzf", archivePath.string(), "-C", destinationPath.string()}, std::filesystem::current_path());
     }
 
+#if defined(_WIN32)
+    const std::vector<std::string> arguments{
+        "tar",
+        "-xzvf",
+        archivePath.string(),
+        "-C",
+        destinationPath.string(),
+    };
+    const ReqpackProcessResult captured = reqpack_run_process_capture(arguments, std::filesystem::current_path());
+    if (!captured.success()) {
+        return false;
+    }
+
+    std::size_t extractedEntries = 0;
+    std::set<std::string> extractedEntryNames;
+    const auto record_lines = [&](const std::string& text) {
+        std::istringstream stream(text);
+        std::string line;
+        while (std::getline(stream, line)) {
+            if (const std::optional<std::string> entry = detect_archive_entry_from_tar_output(line, expectedEntries); entry.has_value()) {
+                if (extractedEntryNames.insert(entry.value()).second) {
+                    extractedEntries = extractedEntryNames.size();
+                    onEntryExtracted(
+                        std::min(extractedEntries, totalEntries == 0 ? extractedEntries : totalEntries),
+                        totalEntries == 0 ? extractedEntries : totalEntries
+                    );
+                }
+            }
+        }
+    };
+    record_lines(captured.stdoutText);
+    record_lines(captured.stderrText);
+    if (totalEntries > 0 && extractedEntries < totalEntries) {
+        onEntryExtracted(totalEntries, totalEntries);
+    }
+    return captured.success();
+#else
     int stdoutPipe[2];
     int stderrPipe[2];
     if (!create_pipe_cloexec(stdoutPipe)) {
@@ -541,6 +582,7 @@ bool extract_release_archive(const std::filesystem::path& archivePath,
         onEntryExtracted(totalEntries, totalEntries);
     }
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
 }
 
 std::optional<std::filesystem::path> locate_extracted_binary(const std::filesystem::path& directory) {

@@ -1,18 +1,11 @@
 #include "registry_database_internal.h"
 
-#include "core/common/network_environment.h"
-#include "core/common/pipe_helpers.h"
+#include "core/common/process_runner.h"
 #include "core/common/version_compare.h"
 
-#include <cerrno>
 #include <cctype>
-#include <cstring>
-#include <fcntl.h>
-#include <spawn.h>
 #include <sstream>
 #include <string_view>
-#include <sys/wait.h>
-#include <unistd.h>
 
 namespace {
 
@@ -35,140 +28,12 @@ std::string trim_copy(const std::string& value) {
 }
 
 ProcessResult run_process_capture(const std::vector<std::string>& arguments) {
-    ProcessResult result;
-    if (arguments.empty()) {
-        result.stderrText = "empty command";
-        return result;
-    }
-
-    int stdoutPipe[2];
-    if (!create_pipe_cloexec(stdoutPipe)) {
-        result.stderrText = std::string{"pipe(stdout) failed: "} + std::strerror(errno);
-        return result;
-    }
-
-    int stderrPipe[2];
-    if (!create_pipe_cloexec(stderrPipe)) {
-        result.stderrText = std::string{"pipe(stderr) failed: "} + std::strerror(errno);
-        (void)::close(stdoutPipe[0]);
-        (void)::close(stdoutPipe[1]);
-        return result;
-    }
-
-    posix_spawn_file_actions_t fileActions;
-    if (posix_spawn_file_actions_init(&fileActions) != 0) {
-        result.stderrText = "posix_spawn_file_actions_init failed";
-        (void)::close(stdoutPipe[0]);
-        (void)::close(stdoutPipe[1]);
-        (void)::close(stderrPipe[0]);
-        (void)::close(stderrPipe[1]);
-        return result;
-    }
-
-    const bool actionsReady =
-        posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0 &&
-        posix_spawn_file_actions_adddup2(&fileActions, stdoutPipe[1], STDOUT_FILENO) == 0 &&
-        posix_spawn_file_actions_adddup2(&fileActions, stderrPipe[1], STDERR_FILENO) == 0 &&
-        posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[0]) == 0 &&
-        posix_spawn_file_actions_addclose(&fileActions, stdoutPipe[1]) == 0 &&
-        posix_spawn_file_actions_addclose(&fileActions, stderrPipe[0]) == 0 &&
-        posix_spawn_file_actions_addclose(&fileActions, stderrPipe[1]) == 0;
-    if (!actionsReady) {
-        posix_spawn_file_actions_destroy(&fileActions);
-        result.stderrText = "failed to configure process pipes";
-        (void)::close(stdoutPipe[0]);
-        (void)::close(stdoutPipe[1]);
-        (void)::close(stderrPipe[0]);
-        (void)::close(stderrPipe[1]);
-        return result;
-    }
-
-    std::vector<char*> argv;
-    argv.reserve(arguments.size() + 1);
-    for (const std::string& argument : arguments) {
-        argv.push_back(const_cast<char*>(argument.c_str()));
-    }
-    argv.push_back(nullptr);
-
-    std::vector<std::string> environmentStorage = reqpack_sanitized_process_environment();
-    std::vector<char*> environmentPointers;
-    environmentPointers.reserve(environmentStorage.size() + 1);
-    for (std::string& entry : environmentStorage) {
-        environmentPointers.push_back(entry.data());
-    }
-    environmentPointers.push_back(nullptr);
-
-    pid_t pid = 0;
-    const int spawnResult = posix_spawnp(&pid, arguments.front().c_str(), &fileActions, nullptr, argv.data(), environmentPointers.data());
-    posix_spawn_file_actions_destroy(&fileActions);
-    (void)::close(stdoutPipe[1]);
-    (void)::close(stderrPipe[1]);
-    if (spawnResult != 0) {
-        result.stderrText = std::string{"spawn failed: "} + std::strerror(spawnResult);
-        (void)::close(stdoutPipe[0]);
-        (void)::close(stderrPipe[0]);
-        return result;
-    }
-
-    char buffer[4096];
-    while (true) {
-        const ssize_t bytesRead = ::read(stdoutPipe[0], buffer, sizeof(buffer));
-        if (bytesRead > 0) {
-            result.stdoutText.append(buffer, static_cast<std::size_t>(bytesRead));
-            continue;
-        }
-        if (bytesRead == 0) {
-            break;
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        result.stderrText += std::string{"read(stdout) failed: "} + std::strerror(errno);
-        break;
-    }
-    (void)::close(stdoutPipe[0]);
-
-    while (true) {
-        const ssize_t bytesRead = ::read(stderrPipe[0], buffer, sizeof(buffer));
-        if (bytesRead > 0) {
-            result.stderrText.append(buffer, static_cast<std::size_t>(bytesRead));
-            continue;
-        }
-        if (bytesRead == 0) {
-            break;
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        result.stderrText += std::string{"read(stderr) failed: "} + std::strerror(errno);
-        break;
-    }
-    (void)::close(stderrPipe[0]);
-
-    int status = 0;
-    while (waitpid(pid, &status, 0) == -1) {
-        if (errno != EINTR) {
-            result.stderrText += std::string{"waitpid failed: "} + std::strerror(errno);
-            return result;
-        }
-    }
-
-    if (WIFEXITED(status)) {
-        result.exitCode = WEXITSTATUS(status);
-        return result;
-    }
-
-    if (WIFSIGNALED(status)) {
-        result.exitCode = 128 + WTERMSIG(status);
-        if (!result.stderrText.empty() && result.stderrText.back() != '\n') {
-            result.stderrText.push_back('\n');
-        }
-        result.stderrText += "terminated by signal " + std::to_string(WTERMSIG(status));
-        return result;
-    }
-
-    result.stderrText += "process ended unexpectedly";
-    return result;
+    const ReqpackProcessResult captured = reqpack_run_process_capture(arguments);
+    return ProcessResult{
+        .exitCode = captured.exitCode,
+        .stdoutText = captured.stdoutText,
+        .stderrText = captured.stderrText,
+    };
 }
 
 bool run_process_quiet(const std::vector<std::string>& arguments) {

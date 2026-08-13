@@ -241,6 +241,7 @@ set(SOURCES
     src/main/cpp/core/archive/archive_resolver_process.cpp
     src/main/cpp/core/archive/archive_resolver_extract.cpp
     src/main/cpp/core/common/network_environment.cpp
+    src/main/cpp/core/common/process_runner.cpp
     src/main/cpp/core/common/pipe_helpers.cpp
     src/main/cpp/core/common/version_compare.cpp
     src/main/cpp/core/config/configuration.cpp
@@ -472,6 +473,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/history/history_manager_log.cpp
     src/main/cpp/core/history/history_manager_store.cpp
     src/main/cpp/core/common/network_environment.cpp
+    src/main/cpp/core/common/process_runner.cpp
     src/main/cpp/core/manifest/manifest_loader.cpp
     src/main/cpp/core/packages/rq_package.cpp
     src/main/cpp/core/packages/rq_package_metadata.cpp
@@ -608,6 +610,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/history/history_manager_log.cpp
     src/main/cpp/core/history/history_manager_store.cpp
     src/main/cpp/core/common/network_environment.cpp
+    src/main/cpp/core/common/process_runner.cpp
     src/main/cpp/core/packages/rq_package.cpp
     src/main/cpp/core/packages/rq_package_metadata.cpp
     src/main/cpp/core/packages/rq_package_payload.cpp
