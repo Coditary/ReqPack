@@ -16,6 +16,9 @@
 #ifdef ERROR
 #undef ERROR
 #endif
+#ifdef FAILED
+#undef FAILED
+#endif
 #ifdef stdin
 #undef stdin
 #endif
