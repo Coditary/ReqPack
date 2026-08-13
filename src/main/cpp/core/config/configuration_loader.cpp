@@ -115,6 +115,7 @@ void load_security_section(const sol::table& root, ReqPackConfig& config) {
             osvBackend.overlayPath = config.security.osvOverlayPath;
         }
     }
+    configuration_internal::sync_osv_backend_feed_url(config);
     if (!config.security.backends.contains("snyk")) {
         SecurityBackendConfig snykBackend;
         snykBackend.apiBaseUrl = "https://api.snyk.io/rest";

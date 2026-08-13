@@ -2,3 +2,5 @@ build/
 gmon.out
 docs/
 rqp-plugins/
+
+build-check

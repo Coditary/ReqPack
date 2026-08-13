@@ -30,6 +30,19 @@ std::string package_index_path_for_ecosystem(const ReqPackConfig& config, const 
     return (root / ecosystem).string();
 }
 
+constexpr const char* kDefaultOsvFeedUrl = "https://storage.googleapis.com/osv-vulnerabilities";
+
+std::string resolve_osv_feed_url(const ReqPackConfig& config, const std::string& backendFeedUrl) {
+    const std::string& topLevel = config.security.osvFeedUrl;
+    if (!backendFeedUrl.empty()) {
+        if (backendFeedUrl == kDefaultOsvFeedUrl && topLevel != kDefaultOsvFeedUrl) {
+            return topLevel;
+        }
+        return backendFeedUrl;
+    }
+    return topLevel;
+}
+
 }  // namespace
 
 SecurityGatewayService::SecurityGatewayService(
@@ -191,9 +204,10 @@ std::vector<ValidationFinding> SecurityGatewayService::ensureEcosystemsReady(
         ReqPackConfig backendConfig = this->config;
         if (const auto backendIt = this->config.security.backends.find(backend); backendIt != this->config.security.backends.end()) {
             if (backend == "osv") {
-                backendConfig.security.osvFeedUrl = backendIt->second.feedUrl.empty()
-                    ? backendConfig.security.osvFeedUrl
-                    : backendIt->second.feedUrl;
+                backendConfig.security.osvFeedUrl = resolve_osv_feed_url(
+                    this->config,
+                    backendIt->second.feedUrl
+                );
                 backendConfig.security.osvRefreshMode = backendIt->second.refreshMode;
                 backendConfig.security.osvRefreshIntervalSeconds = backendIt->second.refreshIntervalSeconds;
                 if (!backendIt->second.overlayPath.empty()) {

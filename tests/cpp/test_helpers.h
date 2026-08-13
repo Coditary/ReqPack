@@ -59,6 +59,10 @@ inline std::filesystem::path build_root() {
     return std::filesystem::path(REQPACK_TEST_BUILD_DIR);
 }
 
+inline std::string hermetic_config_cli_arg() {
+    return " --config " + escape_shell_arg((repo_root() / "tests" / "fixtures" / "hermetic-config.lua").string());
+}
+
 inline void set_test_environment_value(const std::string& name, const std::optional<std::string>& value) {
 #if defined(_WIN32)
     _putenv_s(name.c_str(), value.has_value() ? value->c_str() : "");

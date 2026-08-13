@@ -13,6 +13,7 @@ std::string run_reqpack_case(const std::string& prompt) {
 
     const std::string inner =
         escape_shell_arg(binary.string()) +
+        hermetic_config_cli_arg() +
         " search smoke " + escape_shell_arg(prompt) +
         " --plugin-dir " + escape_shell_arg(pluginDir.string()) +
         " 2>&1";
@@ -28,6 +29,7 @@ std::string run_reqpack_case_verbose(const std::string& prompt) {
 
     const std::string inner =
         escape_shell_arg(binary.string()) +
+        hermetic_config_cli_arg() +
         " search smoke " + escape_shell_arg(prompt) +
         " --verbose" +
         " --plugin-dir " + escape_shell_arg(pluginDir.string()) +

@@ -116,6 +116,26 @@ void copy_repo_plugin(const std::filesystem::path& pluginRoot, const std::string
     }
 }
 
+void add_minimal_sys_apt_mocks(const std::filesystem::path& fakeBin) {
+    write_file(fakeBin / "apt-get",
+        "#!/bin/sh\n"
+        "exit 0\n");
+    write_file(fakeBin / "dpkg-query",
+        "#!/bin/sh\n"
+        "exit 1\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "apt-get").string()) + " " +
+        escape_shell_arg((fakeBin / "dpkg-query").string())).c_str()) == 0);
+}
+
+std::vector<std::pair<std::string, std::string>> minimal_sys_apt_environment(const std::filesystem::path& fakeBin) {
+    return {
+        {"REQPACK_SYS_BACKEND", "apt"},
+        {"REQPACK_SYS_NO_SUDO", "1"},
+        {"REQPACK_SYS_APT_BIN", (fakeBin / "apt-get").string()},
+        {"REQPACK_SYS_DPKG_QUERY_BIN", (fakeBin / "dpkg-query").string()},
+    };
+}
+
 std::filesystem::path write_config(
     const std::filesystem::path& root,
     const std::filesystem::path& pluginDirectory,
@@ -5632,20 +5652,21 @@ TEST_CASE("orchestrator install maven uses configured repositories and auth sett
     REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "java").string())).c_str()) == 0);
     REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "javac").string())).c_str()) == 0);
     REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "mvn").string())).c_str()) == 0);
+    add_minimal_sys_apt_mocks(fakeBin);
 
     const char* currentPath = std::getenv("PATH");
     const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+    std::vector<std::pair<std::string, std::string>> environment = minimal_sys_apt_environment(fakeBin);
+    environment.push_back({"PATH", pathValue});
+    environment.push_back({"REQPACK_TEST_NEXUS_TOKEN", "secret-token"});
+    environment.push_back({"REQPACK_MAVEN_REPO", (tempDir.path() / "custom-m2").string()});
 
     int status = 0;
     const std::string output = run_reqpack_with_home_env_and_status(
         tempDir.path(),
         configPath,
         tempDir.path(),
-        {
-            {"PATH", pathValue},
-            {"REQPACK_TEST_NEXUS_TOKEN", "secret-token"},
-            {"REQPACK_MAVEN_REPO", (tempDir.path() / "custom-m2").string()},
-        },
+        environment,
         {"install", "maven", "org.junit:junit:4.13"},
         status
     );
@@ -5705,25 +5726,26 @@ TEST_CASE("orchestrator install maven fails when configured repositories do not 
     REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "java").string())).c_str()) == 0);
     REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "javac").string())).c_str()) == 0);
     REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "mvn").string())).c_str()) == 0);
+    add_minimal_sys_apt_mocks(fakeBin);
 
     const char* currentPath = std::getenv("PATH");
     const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+    std::vector<std::pair<std::string, std::string>> environment = minimal_sys_apt_environment(fakeBin);
+    environment.push_back({"PATH", pathValue});
 
     int status = 0;
     const std::string output = run_reqpack_with_home_env_and_status(
         tempDir.path(),
         configPath,
         tempDir.path(),
-        {
-            {"PATH", pathValue},
-        },
+        environment,
         {"install", "maven", "org.junit:junit:4.13"},
         status
     );
     
     CHECK(status != 0);
     CHECK(output.find("no configured maven repository matched org.junit:junit") != std::string::npos);
-    CHECK(output.find("INSTALL done:  1 ok,  0 skipped,  1 failed") != std::string::npos);
+    CHECK(output.find("INSTALL done:  2 ok,  0 skipped,  1 failed") != std::string::npos);
     CHECK_FALSE(std::filesystem::exists(mvnLog));
 }
 
@@ -5859,23 +5881,24 @@ TEST_CASE("orchestrator sys plugin bootstraps nix when nix backend is selected b
 
     copy_repo_plugin(pluginDirectory, "sys");
 
-    write_file(bootstrapScript,
-        "#!/bin/sh\n"
-        "printf '%s\\n' bootstrap >> " + escape_shell_arg(bootstrapLog.string()) + "\n"
-        "mkdir -p " + escape_shell_arg(installedNix.parent_path().string()) + "\n"
-        "cat > " + escape_shell_arg(installedNix.string()) + " <<'EOF'\n"
+    write_file(fakeBin / "nix-env.stub",
         "#!/bin/sh\n"
         "if [ \"$1\" = \"-q\" ]; then\n"
         "  exit 1\n"
         "fi\n"
         "printf '%s\\n' \"$*\" >> " + escape_shell_arg(nixLog.string()) + "\n"
-        "exit 0\n"
-        "EOF\n"
-        "chmod +x " + escape_shell_arg(installedNix.string()) + "\n");
-    REQUIRE(std::system(("chmod +x " + escape_shell_arg(bootstrapScript.string())).c_str()) == 0);
+        "exit 0\n");
+    write_file(bootstrapScript,
+        "#!/bin/sh\n"
+        "printf '%s\\n' bootstrap >> " + escape_shell_arg(bootstrapLog.string()) + "\n"
+        "mkdir -p \"$HOME/.nix-profile/bin\"\n"
+        "/bin/cp " + escape_shell_arg((fakeBin / "nix-env.stub").string()) + " \"$HOME/.nix-profile/bin/nix-env\"\n"
+        "/bin/chmod +x \"$HOME/.nix-profile/bin/nix-env\"\n"
+        "exit 0\n");
+    REQUIRE(std::system(("chmod +x " + escape_shell_arg((fakeBin / "nix-env.stub").string()) + " " +
+        escape_shell_arg(bootstrapScript.string())).c_str()) == 0);
 
-    const char* currentPath = std::getenv("PATH");
-    const std::string pathValue = fakeBin.string() + ":" + (currentPath != nullptr ? currentPath : "");
+    const std::string pathValue = fakeBin.string();
     const std::filesystem::path homePath = tempDir.path() / "home";
     std::filesystem::create_directories(homePath);
 

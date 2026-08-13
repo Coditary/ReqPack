@@ -183,7 +183,7 @@ std::vector<PackageInfo> LuaBridge::list(const PluginCallContext& context) {
         return {};
     }
 
-    const bool silentRuntime = m_hostRuntime.hasSilentRuntimeFlag(context.flags);
+    const bool silentRuntime = m_hostRuntime.shouldUseSilentRuntime(context.flags);
     m_hostRuntime.setSilentRuntimeOutput(silentRuntime);
     auto result = func(context);
     m_hostRuntime.setSilentRuntimeOutput(false);
@@ -204,7 +204,10 @@ std::vector<PackageInfo> LuaBridge::outdated(const PluginCallContext& context) {
         return {};
     }
 
+    const bool silentRuntime = m_hostRuntime.shouldUseSilentRuntime(context.flags);
+    m_hostRuntime.setSilentRuntimeOutput(silentRuntime);
     auto result = func(context);
+    m_hostRuntime.setSilentRuntimeOutput(false);
     if (!result.valid()) {
         sol::error err = result;
         log_lua_error(m_logger, m_pluginId, std::string("Lua Error (outdated): ") + err.what());
@@ -222,7 +225,10 @@ std::vector<PackageInfo> LuaBridge::search(const PluginCallContext& context, con
         return {};
     }
 
+    const bool silentRuntime = m_hostRuntime.shouldUseSilentRuntime(context.flags);
+    m_hostRuntime.setSilentRuntimeOutput(silentRuntime);
     auto result = func(context, prompt);
+    m_hostRuntime.setSilentRuntimeOutput(false);
     if (!result.valid()) {
         sol::error err = result;
         log_lua_error(m_logger, m_pluginId, std::string("Lua Error (search): ") + err.what());
@@ -240,7 +246,7 @@ PackageInfo LuaBridge::info(const PluginCallContext& context, const std::string&
         return {};
     }
 
-    const bool silentRuntime = m_hostRuntime.hasSilentRuntimeFlag(context.flags);
+    const bool silentRuntime = m_hostRuntime.shouldUseSilentRuntime(context.flags);
     m_hostRuntime.setSilentRuntimeOutput(silentRuntime);
     auto result = func(context, packageName);
     m_hostRuntime.setSilentRuntimeOutput(false);

@@ -45,6 +45,13 @@ bool LuaBridgeHostRuntime::hasSilentRuntimeFlag(const std::vector<std::string>& 
     return std::find(flags.begin(), flags.end(), SILENT_RUNTIME_FLAG) != flags.end();
 }
 
+bool LuaBridgeHostRuntime::shouldUseSilentRuntime(const std::vector<std::string>& flags) const {
+    if (m_config.logging.consoleOutput) {
+        return hasSilentRuntimeFlag(flags);
+    }
+    return true;
+}
+
 void LuaBridgeHostRuntime::setSilentRuntimeOutput(const bool silent) {
     m_silentRuntimeOutput.store(silent);
 }
