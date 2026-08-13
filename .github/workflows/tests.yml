@@ -76,7 +76,7 @@ jobs:
             ${{ matrix.msys_package_prefix }}-openssl
             ${{ matrix.msys_package_prefix }}-fmt
             ${{ matrix.msys_package_prefix }}-spdlog
-            ${{ matrix.msys_package_prefix }}-lua
+            ${{ matrix.msys_package_prefix }}-lua54
             ${{ matrix.msys_package_prefix }}-zstd
             ${{ matrix.msys_package_prefix }}-cli11
             ${{ matrix.msys_package_prefix }}-go
@@ -258,7 +258,7 @@ jobs:
             ${{ matrix.msys_package_prefix }}-openssl
             ${{ matrix.msys_package_prefix }}-fmt
             ${{ matrix.msys_package_prefix }}-spdlog
-            ${{ matrix.msys_package_prefix }}-lua
+            ${{ matrix.msys_package_prefix }}-lua54
             ${{ matrix.msys_package_prefix }}-zstd
             ${{ matrix.msys_package_prefix }}-cli11
             ${{ matrix.msys_package_prefix }}-go
@@ -396,7 +396,7 @@ jobs:
           update: true
           install: >-
             ${{ matrix.msys_package_prefix }}-toolchain
-            ${{ matrix.msys_package_prefix }}-lua
+            ${{ matrix.msys_package_prefix }}-lua54
             ${{ matrix.msys_package_prefix }}-curl
             ${{ matrix.msys_package_prefix }}-openssl
             ${{ matrix.msys_package_prefix }}-fmt

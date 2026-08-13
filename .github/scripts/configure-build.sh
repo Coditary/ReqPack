@@ -74,6 +74,8 @@ if [ "$target_family" = "windows" ]; then
         -DCMAKE_C_COMPILER="${c_compiler}"
         -DCMAKE_CXX_COMPILER="${cxx_compiler}"
         -DCMAKE_PREFIX_PATH="${MSYSTEM_PREFIX}"
+        -DLUA_INCLUDE_DIR="${MSYSTEM_PREFIX}/include/lua5.4"
+        -DLUA_LIBRARIES="${MSYSTEM_PREFIX}/lib/liblua5.4.dll.a"
     )
 fi
 
