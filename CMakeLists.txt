@@ -140,6 +140,7 @@ endif()
 # MinGW fmt/spdlog headers fail with undeclared stdout/stderr inside template bodies.
 if(WIN32)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-include stdio.h>)
 endif()
 
 set(REQPACK_PLATFORM_LIBS)
