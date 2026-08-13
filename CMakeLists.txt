@@ -376,10 +376,17 @@ add_executable(exec_rules_integration_tests
     src/main/cpp/plugins/exec_rules_core.cpp
 )
 
+set(REQPACK_ORCHESTRATOR_INTEGRATION_TEST_SOURCES)
+if(NOT WIN32)
+    list(APPEND REQPACK_ORCHESTRATOR_INTEGRATION_TEST_SOURCES
+        tests/integration/core/execution/orchestrator_service_tests.cpp
+    )
+endif()
+
 add_executable(core_integration_tests
     tests/cpp/test_main.cpp
     tests/integration/core/execution/executor_service_tests.cpp
-    tests/integration/core/execution/orchestrator_service_tests.cpp
+    ${REQPACK_ORCHESTRATOR_INTEGRATION_TEST_SOURCES}
     tests/integration/core/plugins/plugin_test_runner_service_tests.cpp
     tests/integration/core/planning/planner_service_tests.cpp
     tests/integration/core/registry/registry_service_tests.cpp
