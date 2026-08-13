@@ -4,11 +4,6 @@
 
 #include "core/remote/remote_profiles.h"
 
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -39,8 +34,8 @@ int run_remote_serve(
         return 1;
     }
 
-    const int serverFd = create_server_socket(options, logger);
-    if (serverFd == -1) {
+    const ReqpackSocket serverFd = create_server_socket(options, logger);
+    if (serverFd == REQPACK_INVALID_SOCKET) {
         logger.flushSync();
         return 1;
     }
@@ -76,8 +71,8 @@ int run_remote_serve(
     while (!state.shutdownRequested.load() && !signalHandlers.shutdownRequested()) {
         sockaddr_storage clientAddress{};
         socklen_t clientLength = sizeof(clientAddress);
-        const int clientFd = ::accept(serverFd, reinterpret_cast<sockaddr*>(&clientAddress), &clientLength);
-        if (clientFd == -1) {
+        const ReqpackSocket clientFd = ::accept(serverFd, reinterpret_cast<sockaddr*>(&clientAddress), &clientLength);
+        if (clientFd == REQPACK_INVALID_SOCKET) {
             if (state.shutdownRequested.load() || signalHandlers.shutdownRequested()) {
                 break;
             }
@@ -91,7 +86,7 @@ int run_remote_serve(
                 ? json_response(false, output)
                 : text_response(false, output);
             (void)send_all(clientFd, response);
-            ::close(clientFd);
+            reqpack_close_socket(clientFd);
             continue;
         }
 
@@ -136,7 +131,7 @@ int run_remote_serve(
                     (void)send_all(clientFd, text_response(false, command_output_message(DisplayMode::SERVE, "unsupported negotiated protocol", false)));
                 }
             }
-            ::close(clientFd);
+            reqpack_close_socket(clientFd);
             std::lock_guard<std::mutex> lock(state.mutex);
             state.sessions.erase(sessionId);
         }).detach();
@@ -145,7 +140,7 @@ int run_remote_serve(
     if (signalHandlers.shutdownRequested()) {
         state.shutdownRequested.store(true);
         std::lock_guard<std::mutex> lock(state.mutex);
-        state.serverFd = -1;
+        state.serverFd = REQPACK_INVALID_SOCKET;
     }
 
     logger.flushSync();

@@ -2,9 +2,6 @@
 
 #include "core/common/time_helpers.h"
 
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <ctime>
 #include <iomanip>
 #include <sstream>
@@ -90,15 +87,15 @@ int active_connection_count(RemoteServerState& state) {
 }
 
 void request_server_shutdown(RemoteServerState& state) {
-    int serverFd = -1;
+    ReqpackSocket serverFd = REQPACK_INVALID_SOCKET;
     {
         std::lock_guard<std::mutex> lock(state.mutex);
         serverFd = state.serverFd;
-        state.serverFd = -1;
+        state.serverFd = REQPACK_INVALID_SOCKET;
     }
-    if (serverFd != -1) {
-        ::shutdown(serverFd, SHUT_RDWR);
-        ::close(serverFd);
+    if (serverFd != REQPACK_INVALID_SOCKET) {
+        (void)reqpack_shutdown_socket(serverFd);
+        reqpack_close_socket(serverFd);
     }
 }
 

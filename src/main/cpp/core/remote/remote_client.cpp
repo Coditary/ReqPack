@@ -2,13 +2,9 @@
 
 #include "cli/cli.h"
 
+#include "core/common/socket_platform.h"
 #include "output/command_output.h"
 #include "output/logger.h"
-
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <cctype>
 #include <cstdio>
@@ -176,10 +172,10 @@ std::optional<UploadInstallRequest> detect_upload_install_request(
     return request;
 }
 
-bool send_all(int fd, const std::string& data) {
+bool send_all(ReqpackSocket fd, const std::string& data) {
     std::size_t offset = 0;
     while (offset < data.size()) {
-        const ssize_t written = ::send(fd, data.data() + offset, data.size() - offset, 0);
+        const auto written = ::send(fd, data.data() + offset, static_cast<int>(data.size() - offset), 0);
         if (written <= 0) {
             return false;
         }
@@ -188,11 +184,11 @@ bool send_all(int fd, const std::string& data) {
     return true;
 }
 
-std::optional<std::string> read_line(int fd) {
+std::optional<std::string> read_line(ReqpackSocket fd) {
     std::string line;
     char c = '\0';
     for (;;) {
-        const ssize_t received = ::recv(fd, &c, 1, 0);
+        const auto received = ::recv(fd, &c, 1, 0);
         if (received == 0) {
             if (line.empty()) {
                 return std::nullopt;
@@ -212,11 +208,11 @@ std::optional<std::string> read_line(int fd) {
     return line;
 }
 
-std::string read_bytes(int fd, std::size_t count) {
+std::string read_bytes(ReqpackSocket fd, std::size_t count) {
     std::string out(count, '\0');
     std::size_t offset = 0;
     while (offset < count) {
-        const ssize_t received = ::recv(fd, out.data() + offset, count - offset, 0);
+        const auto received = ::recv(fd, out.data() + offset, static_cast<int>(count - offset), 0);
         if (received <= 0) {
             throw std::runtime_error("failed to read remote response body");
         }
@@ -225,7 +221,7 @@ std::string read_bytes(int fd, std::size_t count) {
     return out;
 }
 
-std::pair<std::string, std::string> read_text_response(int fd) {
+std::pair<std::string, std::string> read_text_response(ReqpackSocket fd) {
     const std::optional<std::string> header = read_line(fd);
     if (!header.has_value()) {
         throw std::runtime_error("remote server closed connection");
@@ -294,7 +290,9 @@ std::optional<std::string> extract_json_string_field(const std::string& json, co
     return std::nullopt;
 }
 
-int connect_remote(const RemoteProfile& profile) {
+ReqpackSocket connect_remote(const RemoteProfile& profile) {
+    reqpack_ensure_socket_runtime();
+
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -305,27 +303,27 @@ int connect_remote(const RemoteProfile& profile) {
         throw std::runtime_error("invalid remote host: " + profile.host);
     }
 
-    int fd = -1;
+    ReqpackSocket fd = REQPACK_INVALID_SOCKET;
     for (addrinfo* address = addresses; address != nullptr; address = address->ai_next) {
         fd = ::socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-        if (fd == -1) {
+        if (fd == REQPACK_INVALID_SOCKET) {
             continue;
         }
-        if (::connect(fd, address->ai_addr, address->ai_addrlen) == 0) {
+        if (::connect(fd, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0) {
             break;
         }
-        ::close(fd);
-        fd = -1;
+        reqpack_close_socket(fd);
+        fd = REQPACK_INVALID_SOCKET;
     }
 
     ::freeaddrinfo(addresses);
-    if (fd == -1) {
+    if (fd == REQPACK_INVALID_SOCKET) {
         throw std::runtime_error("failed to connect to remote profile '" + profile.name + "'");
     }
     return fd;
 }
 
-int send_text_command_and_render_response(int fd, const std::string& command, IDisplay* display) {
+int send_text_command_and_render_response(ReqpackSocket fd, const std::string& command, IDisplay* display) {
 	(void)display;
     if (!send_all(fd, command + "\n")) {
         throw std::runtime_error("failed to send remote command");
@@ -335,7 +333,7 @@ int send_text_command_and_render_response(int fd, const std::string& command, ID
     return response.first == "OK" ? 0 : 1;
 }
 
-int send_upload_install_request(int fd, const UploadInstallRequest& request, IDisplay* display) {
+int send_upload_install_request(ReqpackSocket fd, const UploadInstallRequest& request, IDisplay* display) {
 	(void)display;
     const std::string header = join_arguments({
         REMOTE_UPLOAD_INSTALL_COMMAND,
@@ -382,8 +380,8 @@ int run_text_client_session(const RemoteProfile& profile, const std::vector<std:
         }
     }
 
-    const int fd = connect_remote(profile);
-    auto closeGuard = [&]() { ::close(fd); };
+    const ReqpackSocket fd = connect_remote(profile);
+    auto closeGuard = [&]() { reqpack_close_socket(fd); };
 
     if (profile.token.has_value()) {
         if (!send_all(fd, "auth token " + profile.token.value() + "\n")) {
@@ -475,8 +473,8 @@ int run_json_client_session(const RemoteProfile& profile, const std::vector<std:
             : "file upload requires text protocol");
     }
 
-    const int fd = connect_remote(profile);
-    auto closeGuard = [&]() { ::close(fd); };
+    const ReqpackSocket fd = connect_remote(profile);
+    auto closeGuard = [&]() { reqpack_close_socket(fd); };
 
     std::string request = "{" + json_string_field("command", join_arguments(forwardedArguments));
     if (profile.token.has_value()) {

@@ -2,6 +2,7 @@
 
 #include "core/remote/serve_remote.h"
 #include "core/remote/remote_profiles.h"
+#include "core/common/socket_platform.h"
 
 #include <atomic>
 #include <cctype>
@@ -73,7 +74,7 @@ struct RemoteServerState {
     std::filesystem::path configPath;
     ReqPackConfigOverrides configOverrides;
     std::filesystem::path remoteUsersPath;
-    int serverFd{-1};
+    ReqpackSocket serverFd{REQPACK_INVALID_SOCKET};
     int nextSessionId{1};
     std::atomic<bool> shutdownRequested{false};
 };
@@ -151,7 +152,7 @@ inline std::vector<std::string> merged_command_arguments(
 
 class ScopedRemoteSignalHandlers {
 public:
-    explicit ScopedRemoteSignalHandlers(int serverFd);
+    explicit ScopedRemoteSignalHandlers(ReqpackSocket serverFd);
     ~ScopedRemoteSignalHandlers();
 
     bool shutdownRequested() const;
@@ -167,15 +168,15 @@ private:
     bool installed_{false};
 };
 
-bool send_all(int fd, const std::string& data);
-bool read_exact_bytes(int fd, char* buffer, std::size_t count);
-bool discard_bytes(int fd, std::uintmax_t count);
-std::optional<std::string> read_line_from_socket(int fd);
+bool send_all(ReqpackSocket fd, const std::string& data);
+bool read_exact_bytes(ReqpackSocket fd, char* buffer, std::size_t count);
+bool discard_bytes(ReqpackSocket fd, std::uintmax_t count);
+std::optional<std::string> read_line_from_socket(ReqpackSocket fd);
 std::optional<ConnectionProtocol> detect_connection_protocol(
     const ServeRuntimeOptions& options,
     const std::string& firstLine
 );
-int create_server_socket(const ServeRuntimeOptions& options, Logger& logger);
+ReqpackSocket create_server_socket(const ServeRuntimeOptions& options, Logger& logger);
 
 RemoteStateSnapshot snapshot_remote_state(RemoteServerState& state);
 std::string connection_protocol_name(ConnectionProtocol protocol);
@@ -227,7 +228,7 @@ private:
     std::filesystem::path path_;
 };
 
-ScopedPathCleanup write_uploaded_file_to_temp(int clientFd, const UploadInstallEnvelope& envelope);
+ScopedPathCleanup write_uploaded_file_to_temp(ReqpackSocket clientFd, const UploadInstallEnvelope& envelope);
 std::string substitute_upload_path(const std::string& commandTemplate, const std::filesystem::path& path);
 
 bool reload_remote_state(RemoteServerState& state, Logger& logger, std::string& error);
@@ -243,7 +244,7 @@ RemoteResponse execute_command(
     std::mutex& commandMutex
 );
 RemoteResponse execute_upload_install_command(
-    int clientFd,
+    ReqpackSocket clientFd,
     Cli& cli,
     RemoteServerState& state,
     Logger& logger,
@@ -257,7 +258,7 @@ std::optional<JsonCommand> parse_json_command(const std::string& line);
 std::string json_response(bool ok, const CommandOutput& output);
 std::string text_response(bool ok, const CommandOutput& output);
 void handle_text_client(
-    int clientFd,
+    ReqpackSocket clientFd,
     Cli& cli,
     RemoteServerState& state,
     Logger& logger,
@@ -267,7 +268,7 @@ void handle_text_client(
     std::optional<std::string> pendingLine = std::nullopt
 );
 void handle_json_client(
-    int clientFd,
+    ReqpackSocket clientFd,
     Cli& cli,
     RemoteServerState& state,
     Logger& logger,

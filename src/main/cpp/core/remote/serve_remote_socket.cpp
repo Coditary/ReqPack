@@ -1,10 +1,5 @@
 #include "serve_remote_internal.h"
 
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <csignal>
 #include <cstring>
@@ -12,23 +7,29 @@
 namespace {
 
 volatile std::sig_atomic_t g_remote_signal_shutdown_requested = 0;
+#if !defined(_WIN32)
 volatile std::sig_atomic_t g_remote_signal_server_fd = -1;
+#endif
 
 void handle_remote_serve_signal(int) {
     g_remote_signal_shutdown_requested = 1;
+#if !defined(_WIN32)
     const int serverFd = static_cast<int>(g_remote_signal_server_fd);
     if (serverFd != -1) {
         ::shutdown(serverFd, SHUT_RDWR);
         ::close(serverFd);
         g_remote_signal_server_fd = -1;
     }
+#endif
 }
 
 }  // namespace
 
-ScopedRemoteSignalHandlers::ScopedRemoteSignalHandlers(int serverFd) {
+ScopedRemoteSignalHandlers::ScopedRemoteSignalHandlers(ReqpackSocket serverFd) {
     g_remote_signal_shutdown_requested = 0;
-    g_remote_signal_server_fd = serverFd;
+#if !defined(_WIN32)
+    g_remote_signal_server_fd = static_cast<std::sig_atomic_t>(serverFd);
+#endif
 
 #if defined(_WIN32)
     oldTerm_ = std::signal(SIGTERM, handle_remote_serve_signal);
@@ -51,7 +52,9 @@ ScopedRemoteSignalHandlers::ScopedRemoteSignalHandlers(int serverFd) {
 }
 
 ScopedRemoteSignalHandlers::~ScopedRemoteSignalHandlers() {
+#if !defined(_WIN32)
     g_remote_signal_server_fd = -1;
+#endif
     g_remote_signal_shutdown_requested = 0;
     if (installed_) {
 #if defined(_WIN32)
@@ -68,10 +71,10 @@ bool ScopedRemoteSignalHandlers::shutdownRequested() const {
     return g_remote_signal_shutdown_requested != 0;
 }
 
-bool send_all(int fd, const std::string& data) {
+bool send_all(ReqpackSocket fd, const std::string& data) {
     std::size_t offset = 0;
     while (offset < data.size()) {
-        const ssize_t written = ::send(fd, data.data() + offset, data.size() - offset, 0);
+        const auto written = ::send(fd, data.data() + offset, static_cast<int>(data.size() - offset), 0);
         if (written <= 0) {
             return false;
         }
@@ -80,10 +83,10 @@ bool send_all(int fd, const std::string& data) {
     return true;
 }
 
-bool read_exact_bytes(int fd, char* buffer, std::size_t count) {
+bool read_exact_bytes(ReqpackSocket fd, char* buffer, std::size_t count) {
     std::size_t offset = 0;
     while (offset < count) {
-        const ssize_t received = ::recv(fd, buffer + offset, count - offset, 0);
+        const auto received = ::recv(fd, buffer + offset, static_cast<int>(count - offset), 0);
         if (received <= 0) {
             return false;
         }
@@ -92,7 +95,7 @@ bool read_exact_bytes(int fd, char* buffer, std::size_t count) {
     return true;
 }
 
-bool discard_bytes(int fd, std::uintmax_t count) {
+bool discard_bytes(ReqpackSocket fd, std::uintmax_t count) {
     char buffer[8192];
     std::uintmax_t remaining = count;
     while (remaining > 0) {
@@ -105,11 +108,11 @@ bool discard_bytes(int fd, std::uintmax_t count) {
     return true;
 }
 
-std::optional<std::string> read_line_from_socket(int fd) {
+std::optional<std::string> read_line_from_socket(ReqpackSocket fd) {
     std::string line;
     char c = '\0';
     for (;;) {
-        const ssize_t received = ::recv(fd, &c, 1, 0);
+        const auto received = ::recv(fd, &c, 1, 0);
         if (received == 0) {
             if (line.empty()) {
                 return std::nullopt;
@@ -146,7 +149,9 @@ std::optional<ConnectionProtocol> detect_connection_protocol(
     return std::nullopt;
 }
 
-int create_server_socket(const ServeRuntimeOptions& options, Logger& logger) {
+ReqpackSocket create_server_socket(const ServeRuntimeOptions& options, Logger& logger) {
+    reqpack_ensure_socket_runtime();
+
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -156,30 +161,31 @@ int create_server_socket(const ServeRuntimeOptions& options, Logger& logger) {
     const std::string portString = std::to_string(options.port);
     if (::getaddrinfo(options.bind.c_str(), portString.c_str(), &hints, &addresses) != 0) {
         logger.err("failed to resolve bind address '" + options.bind + "'");
-        return -1;
+        return REQPACK_INVALID_SOCKET;
     }
 
-    int serverFd = -1;
+    ReqpackSocket serverFd = REQPACK_INVALID_SOCKET;
     for (addrinfo* address = addresses; address != nullptr; address = address->ai_next) {
         serverFd = ::socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-        if (serverFd == -1) {
+        if (serverFd == REQPACK_INVALID_SOCKET) {
             continue;
         }
 
         int reuse = 1;
-        (void)::setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+        (void)::setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
 
-        if (::bind(serverFd, address->ai_addr, address->ai_addrlen) == 0 && ::listen(serverFd, SOMAXCONN) == 0) {
+        if (::bind(serverFd, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0 &&
+            ::listen(serverFd, SOMAXCONN) == 0) {
             break;
         }
 
-        ::close(serverFd);
-        serverFd = -1;
+        reqpack_close_socket(serverFd);
+        serverFd = REQPACK_INVALID_SOCKET;
     }
 
     ::freeaddrinfo(addresses);
 
-    if (serverFd == -1) {
+    if (serverFd == REQPACK_INVALID_SOCKET) {
         logger.err("failed to bind remote server on " + options.bind + ":" + portString);
     }
     return serverFd;
