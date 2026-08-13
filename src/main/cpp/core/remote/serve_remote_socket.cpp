@@ -30,6 +30,11 @@ ScopedRemoteSignalHandlers::ScopedRemoteSignalHandlers(int serverFd) {
     g_remote_signal_shutdown_requested = 0;
     g_remote_signal_server_fd = serverFd;
 
+#if defined(_WIN32)
+    oldTerm_ = std::signal(SIGTERM, handle_remote_serve_signal);
+    oldInt_ = std::signal(SIGINT, handle_remote_serve_signal);
+    installed_ = oldTerm_ != SIG_ERR && oldInt_ != SIG_ERR;
+#else
     struct sigaction action {};
     action.sa_handler = handle_remote_serve_signal;
     sigemptyset(&action.sa_mask);
@@ -42,14 +47,20 @@ ScopedRemoteSignalHandlers::ScopedRemoteSignalHandlers(int serverFd) {
         return;
     }
     installed_ = true;
+#endif
 }
 
 ScopedRemoteSignalHandlers::~ScopedRemoteSignalHandlers() {
     g_remote_signal_server_fd = -1;
     g_remote_signal_shutdown_requested = 0;
     if (installed_) {
+#if defined(_WIN32)
+        std::signal(SIGTERM, oldTerm_);
+        std::signal(SIGINT, oldInt_);
+#else
         ::sigaction(SIGTERM, &oldTerm_, nullptr);
         ::sigaction(SIGINT, &oldInt_, nullptr);
+#endif
     }
 }
 

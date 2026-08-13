@@ -157,8 +157,13 @@ public:
     bool shutdownRequested() const;
 
 private:
+#if defined(_WIN32)
+    void (*oldTerm_)(int){SIG_DFL};
+    void (*oldInt_)(int){SIG_DFL};
+#else
     struct sigaction oldTerm_ {};
     struct sigaction oldInt_ {};
+#endif
     bool installed_{false};
 };
 

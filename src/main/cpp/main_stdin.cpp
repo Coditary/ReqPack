@@ -206,12 +206,17 @@ int run_stdin_serve_loop(Cli& cli,
     Logger& logger = Logger::instance();
     int exitCode = 0;
 
+#if defined(_WIN32)
+    std::signal(SIGTERM, stdin_shutdown_handler);
+    std::signal(SIGINT, stdin_shutdown_handler);
+#else
     struct sigaction sa{};
     sa.sa_handler = stdin_shutdown_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     sigaction(SIGTERM, &sa, nullptr);
     sigaction(SIGINT, &sa, nullptr);
+#endif
 
     std::string line;
     std::size_t lineNumber = 0;
