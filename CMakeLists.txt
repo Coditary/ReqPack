@@ -139,7 +139,7 @@ endif()
 
 # MinGW fmt/spdlog headers fail with undeclared stdout/stderr inside template bodies.
 function(reqpack_apply_windows_compile_options target_name)
-    if(WIN32)
+    if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(${target_name} PRIVATE -Wno-template-body)
     endif()
 endfunction()

@@ -11,7 +11,9 @@
 #include <thread>
 #include <vector>
 
+#if !defined(_WIN32)
 #include <sys/statvfs.h>
+#endif
 #include <sys/utsname.h>
 
 #if defined(__linux__)
@@ -376,6 +378,11 @@ bool should_skip_mount_type(const std::string& fsType) {
 }
 
 void fill_mount_capacity(const std::string& mountPoint, HostMountInfo& mount) {
+#if defined(_WIN32)
+    (void)mountPoint;
+    (void)mount;
+    return;
+#else
     struct statvfs info{};
     if (::statvfs(mountPoint.c_str(), &info) != 0) {
         return;
@@ -390,6 +397,7 @@ void fill_mount_capacity(const std::string& mountPoint, HostMountInfo& mount) {
         mount.usedBytes = total - freeBytes;
     }
     mount.readOnly = (info.f_flag & ST_RDONLY) != 0;
+#endif
 }
 
 #if defined(__linux__)
