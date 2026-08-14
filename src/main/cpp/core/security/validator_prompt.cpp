@@ -53,7 +53,7 @@ std::vector<ValidationFinding> disposition_findings(const Graph& graph, const st
 
 bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findings) const {
 	Logger& logger = Logger::instance();
-	logger.stdout("unsafe findings require confirmation:");
+	logger.logStdout("unsafe findings require confirmation:");
 	std::size_t shown = 0;
 	for (const ValidationFinding& finding : findings) {
 		std::string message = finding.message.empty() ? finding.id : finding.message;
@@ -63,7 +63,7 @@ bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findin
 		if (!finding.package.system.empty() && !finding.package.name.empty()) {
 			message += " [" + finding.package.system + ":" + finding.package.name + "]";
 		}
-		logger.stdout("- " + message);
+		logger.logStdout("- " + message);
 		++shown;
 		if (shown >= 5) {
 			break;
@@ -81,11 +81,11 @@ bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findin
 		return false;
 	}
 
-	logger.stdout("Continue? [y/N]");
+	logger.logStdout("Continue? [y/N]");
 	logger.flushSync();
 	std::string answer;
 	if (!std::getline(std::cin, answer)) {
-		logger.stdout("aborted.");
+		logger.logStdout("aborted.");
 		logger.flushSync();
 		return false;
 	}
@@ -95,7 +95,7 @@ bool Validator::requestUserDecision(const std::vector<ValidationFinding>& findin
 		return true;
 	}
 
-	logger.stdout("aborted.");
+	logger.logStdout("aborted.");
 	logger.flushSync();
 	return false;
 }

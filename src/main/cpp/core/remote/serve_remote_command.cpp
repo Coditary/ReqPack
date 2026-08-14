@@ -290,7 +290,7 @@ RemoteResponse execute_command(
 }
 
 RemoteResponse execute_upload_install_command(
-    int clientFd,
+    ReqpackSocket clientFd,
     Cli& cli,
     RemoteServerState& state,
     Logger& logger,

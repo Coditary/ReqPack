@@ -41,7 +41,7 @@ LuaBridge::LuaBridge(const std::string& scriptPath, const ReqPackConfig& config)
             message += LuaBridgeValueMapper::valueToString(argument);
         }
 
-        m_logger.stdout(message, "lua", m_pluginId);
+        m_logger.logStdout(message, "lua", m_pluginId);
     };
 
     m_bindings.registerReqpackNamespace();

@@ -43,7 +43,7 @@ std::uint64_t Logger::emitDiagnostic(const DiagnosticMessage& diagnostic, bool m
         });
 }
 
-void Logger::stdout(const std::string& message, const std::string& source, const std::string& scope) {
+void Logger::logStdout(const std::string& message, const std::string& source, const std::string& scope) {
     emit(OutputAction::STDOUT,
         OutputContext{
             .level = spdlog::level::info,

@@ -1,17 +1,29 @@
 #include "plugins/exec_rules.h"
 
+#include "core/common/pipe_helpers.h"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <fcntl.h>
+#include <functional>
 #include <optional>
-#include <spawn.h>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <spawn.h>
 #if defined(__APPLE__)
 #include <util.h>
 #else
@@ -20,6 +32,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 #include "core/common/network_environment.h"
 #include "plugins/exec_rules_core.h"
@@ -85,7 +98,7 @@ OutputContext plugin_output_context(const std::string& sourceId, const std::stri
 void log_exec_transcript_chunk(Logger& logger, const std::string& pluginId, const std::string& chunk, const bool mirrorToTerminal) {
     log_plugin_message(logger, spdlog::level::debug, pluginId, std::string("[exec] ") + chunk);
     if (mirrorToTerminal) {
-        logger.stdout(chunk, pluginId, "exec");
+        logger.logStdout(chunk, pluginId, "exec");
     }
 }
 
@@ -145,6 +158,11 @@ spdlog::level::level_enum parse_log_level(const std::string& value) {
 }
 
 bool write_all(int fd, const std::string& value) {
+#if defined(_WIN32)
+    (void)fd;
+    (void)value;
+    return false;
+#else
     std::size_t written = 0;
     while (written < value.size()) {
         const ssize_t count = ::write(fd, value.data() + written, value.size() - written);
@@ -157,6 +175,7 @@ bool write_all(int fd, const std::string& value) {
         written += static_cast<std::size_t>(count);
     }
     return true;
+#endif
 }
 
 void emit_log_action(Logger& logger, const std::string& pluginId, spdlog::level::level_enum level, const std::string& message) {
@@ -336,6 +355,155 @@ void dispatch_evaluation_result(
     }
 }
 
+#if defined(_WIN32)
+
+std::string resolve_windows_cmd_exe() {
+    char buffer[MAX_PATH];
+    const DWORD length = GetEnvironmentVariableA("ComSpec", buffer, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        return std::string(buffer, length);
+    }
+    return "C:\\Windows\\System32\\cmd.exe";
+}
+
+bool read_windows_pipe_to_result(
+    HANDLE readPipe,
+    ExecResult& result,
+    const std::function<void(const std::string&)>& onChunk
+) {
+    std::array<char, 4096> buffer{};
+    for (;;) {
+        DWORD count = 0;
+        if (!ReadFile(readPipe, buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr)) {
+            const DWORD error = GetLastError();
+            if (error == ERROR_BROKEN_PIPE) {
+                return true;
+            }
+            result.stderrText = "read failed: Windows error " + std::to_string(error);
+            return false;
+        }
+        if (count == 0) {
+            return true;
+        }
+        const std::string chunk(buffer.data(), static_cast<std::size_t>(count));
+        result.stdoutText += chunk;
+        onChunk(chunk);
+    }
+}
+
+ExecResult run_shell_command(
+    Logger& logger,
+    const std::string& pluginScope,
+    const std::string& command,
+    const std::function<void(const std::string&)>& onChunk,
+    const bool silent
+) {
+    ExecResult result;
+
+    SECURITY_ATTRIBUTES securityAttributes{};
+    securityAttributes.nLength = sizeof(securityAttributes);
+    securityAttributes.bInheritHandle = TRUE;
+
+    HANDLE readPipe = nullptr;
+    HANDLE writePipe = nullptr;
+    if (!CreatePipe(&readPipe, &writePipe, &securityAttributes, 0)) {
+        result.stderrText = "failed to create pipe: Windows error " + std::to_string(GetLastError());
+        return result;
+    }
+    if (!SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0)) {
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        result.stderrText = "failed to configure pipe inheritance: Windows error " + std::to_string(GetLastError());
+        return result;
+    }
+
+    HANDLE nulInput = CreateFileA(
+        "NUL",
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        &securityAttributes,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+    if (nulInput == INVALID_HANDLE_VALUE) {
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        result.stderrText = "failed to open NUL: Windows error " + std::to_string(GetLastError());
+        return result;
+    }
+
+    STARTUPINFOA startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    startupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startupInfo.wShowWindow = SW_HIDE;
+    startupInfo.hStdInput = nulInput;
+    startupInfo.hStdOutput = writePipe;
+    startupInfo.hStdError = writePipe;
+
+    PROCESS_INFORMATION processInfo{};
+    const std::string cmdExe = resolve_windows_cmd_exe();
+    std::string commandLine = "\"" + cmdExe + "\" /c " + command;
+
+    const BOOL created = CreateProcessA(
+        cmdExe.c_str(),
+        commandLine.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        nullptr,
+        &startupInfo,
+        &processInfo
+    );
+
+    CloseHandle(writePipe);
+    CloseHandle(nulInput);
+
+    if (!created) {
+        CloseHandle(readPipe);
+        result.stderrText = "spawn failed: Windows error " + std::to_string(GetLastError());
+        return result;
+    }
+
+    CloseHandle(processInfo.hThread);
+
+    const auto consumeChunk = [&](const std::string& chunk) {
+        log_exec_transcript_chunk(logger, pluginScope, chunk, !silent && logger.isConsoleOutputEnabled());
+        onChunk(chunk);
+    };
+    (void)read_windows_pipe_to_result(readPipe, result, consumeChunk);
+    CloseHandle(readPipe);
+
+    if (WaitForSingleObject(processInfo.hProcess, INFINITE) != WAIT_OBJECT_0) {
+        CloseHandle(processInfo.hProcess);
+        result.stderrText = "wait failed: Windows error " + std::to_string(GetLastError());
+        result.exitCode = 1;
+        result.success = false;
+        return result;
+    }
+
+    DWORD exitCode = 1;
+    if (!GetExitCodeProcess(processInfo.hProcess, &exitCode)) {
+        CloseHandle(processInfo.hProcess);
+        result.stderrText = "failed to read exit code: Windows error " + std::to_string(GetLastError());
+        result.exitCode = 1;
+        result.success = false;
+        return result;
+    }
+    CloseHandle(processInfo.hProcess);
+
+    result.exitCode = static_cast<int>(exitCode);
+    result.success = result.exitCode == 0;
+    if (!result.success && result.stderrText.empty()) {
+        result.stderrText = result.stdoutText;
+    }
+    return result;
+}
+
+#else
+
 bool read_fd_to_result(Logger& logger, const std::string& pluginId, int fd, ExecResult& result, const std::function<void(const std::string&)>& onChunk) {
     std::array<char, 4096> buffer{};
     for (;;) {
@@ -361,7 +529,7 @@ ExecResult run_shell_command(Logger& logger, const std::string& pluginScope, con
     ExecResult result;
 
     int pipeFds[2] = {-1, -1};
-    if (::pipe(pipeFds) != 0) {
+    if (!create_pipe_cloexec(pipeFds)) {
         result.stderrText = std::string("failed to create pipe: ") + std::strerror(errno);
         return result;
     }
@@ -439,6 +607,8 @@ ExecResult run_shell_command(Logger& logger, const std::string& pluginScope, con
     return result;
 }
 
+#endif
+
 ExecResult run_plain_command(Logger& logger, const std::string& pluginScope, const std::string& command, const bool silent) {
     return run_shell_command(logger, pluginScope, command, [](const std::string&) {}, silent);
 }
@@ -461,6 +631,10 @@ ExecResult run_line_command(Logger& logger, const std::string& sourceId, const s
 }
 
 ExecResult run_pty_command(Logger& logger, const std::string& sourceId, const std::string& pluginScope, const std::string& command, const ExecRuleset& ruleset, const bool silent) {
+#if defined(_WIN32)
+    // No ConPTY integration yet: fall back to cmd.exe line capture.
+    return run_line_command(logger, sourceId, pluginScope, command, ruleset, silent);
+#else
     ExecResult result;
 
     int masterFd = -1;
@@ -540,6 +714,7 @@ ExecResult run_pty_command(Logger& logger, const std::string& sourceId, const st
         result.stderrText = result.stdoutText;
     }
     return result;
+#endif
 }
 
 }  // namespace

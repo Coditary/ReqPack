@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "name": "trivy",
+  "version": "0.1.0",
+  "summary": "Trivy plugin",
+  "description": "fixture trivy security provider",
+  "license": "MIT"
+}

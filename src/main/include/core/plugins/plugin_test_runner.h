@@ -28,8 +28,8 @@ struct PluginTestCaseSummary {
     std::string message;
     std::vector<std::string> commands{};
     std::vector<std::string> events{};
-    std::vector<std::string> stdout{};
-    std::vector<std::string> stderr{};
+    std::vector<std::string> stdoutLines{};
+    std::vector<std::string> stderrLines{};
     std::vector<std::string> artifacts{};
     struct EventRecord {
         std::string name;

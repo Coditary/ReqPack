@@ -39,6 +39,7 @@ ReqPackConfig apply_config_overrides(const ReqPackConfig& base, const ReqPackCon
     if (overrides.reportOutputPath.has_value()) config.reports.outputPath = configuration_internal::expand_user_path(overrides.reportOutputPath.value()).string();
 
     if (overrides.dryRun.has_value()) config.execution.dryRun = overrides.dryRun.value();
+    if (overrides.jsonOutput.has_value()) config.display.jsonOutput = overrides.jsonOutput.value();
     if (overrides.stopOnFirstFailure.has_value()) config.execution.stopOnFirstFailure = overrides.stopOnFirstFailure.value();
     if (overrides.useTransactionDb.has_value()) config.execution.useTransactionDb = overrides.useTransactionDb.value();
     if (overrides.jobs.has_value()) config.execution.jobs = std::max(1u, overrides.jobs.value());
@@ -194,6 +195,10 @@ bool consume_cli_config_flag(const std::vector<std::string>& arguments, std::siz
     }
     if (argument == "--dry-run") {
         overrides.dryRun = true;
+        return true;
+    }
+    if (argument == "--json") {
+        overrides.jsonOutput = true;
         return true;
     }
     if (argument == "--jobs") {

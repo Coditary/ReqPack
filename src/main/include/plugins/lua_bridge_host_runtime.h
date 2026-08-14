@@ -37,6 +37,7 @@ public:
     const LuaBridgeRuntimeBindingContext* runtimeBindingContext(std::uint64_t contextId) const;
 
     bool hasSilentRuntimeFlag(const std::vector<std::string>& flags) const;
+    bool shouldUseSilentRuntime(const std::vector<std::string>& flags) const;
     void setSilentRuntimeOutput(bool silent);
     bool silentRuntimeOutput() const;
 

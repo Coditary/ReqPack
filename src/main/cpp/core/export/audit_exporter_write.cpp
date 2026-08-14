@@ -41,11 +41,11 @@ bool write_output_file(const std::string& rendered, const Request& request, cons
             if (!interactive) {
                 return false;
             }
-            logger.stdout(resolvedOutputPath + " already exists. Overwrite? [y/N]");
+            logger.logStdout(resolvedOutputPath + " already exists. Overwrite? [y/N]");
             logger.flushSync();
             std::string answer;
             if (!std::getline(std::cin, answer) || (answer != "y" && answer != "Y")) {
-                logger.stdout("aborted.");
+                logger.logStdout("aborted.");
                 logger.flushSync();
                 return false;
             }

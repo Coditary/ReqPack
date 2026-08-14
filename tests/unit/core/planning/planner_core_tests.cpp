@@ -4,6 +4,30 @@
 #include <vector>
 
 #include "core/planning/planner_core.h"
+#include "core/planning/planner_platform_policy.h"
+
+TEST_CASE("planner platform policy recognizes nix install system", "[unit][planner][platform]") {
+    CHECK(planner_platform::isNixInstallSystem("nix"));
+    CHECK_FALSE(planner_platform::isNixInstallSystem("npm"));
+    CHECK_FALSE(planner_platform::isNixInstallSystem("choco"));
+}
+
+TEST_CASE("planner platform schedule edge policy matches compile-time host", "[unit][planner][platform]") {
+#if defined(_WIN32)
+    CHECK(planner_platform::reorderNonNixBeforeNix);
+    CHECK(planner_platform::needsNonNixBeforeNixBarrier());
+    CHECK(planner_platform::softSkipNixInstalls());
+    CHECK(planner_platform::shouldIgnoreScheduleEdge("nix", "npm"));
+    CHECK_FALSE(planner_platform::shouldIgnoreScheduleEdge("npm", "eslint"));
+    CHECK_FALSE(planner_platform::shouldIgnoreScheduleEdge("choco", "nix"));
+    CHECK_FALSE(planner_platform::shouldIgnoreScheduleEdge("nix", "nix"));
+#else
+    CHECK_FALSE(planner_platform::reorderNonNixBeforeNix);
+    CHECK_FALSE(planner_platform::needsNonNixBeforeNixBarrier());
+    CHECK_FALSE(planner_platform::softSkipNixInstalls());
+    CHECK_FALSE(planner_platform::shouldIgnoreScheduleEdge("nix", "npm"));
+#endif
+}
 
 TEST_CASE("planner expands configured system aliases and preserves unknown systems", "[unit][planner][alias]") {
     const std::vector<Request> requests{

@@ -188,6 +188,14 @@ function plugin.info(context, packageName)
   end
   return { name = packageName, version = "4.5.6", description = result.stdout }
 end
+
+function plugin.outdated(context)
+  return {}
+end
+
+function plugin.shutdown()
+  return true
+end
 )";
 
 const char* PASS_CASE = R"(
@@ -355,6 +363,64 @@ return {
     commands = { "fake-pm list" },
     resultCount = 1,
     resultName = "alpha",
+  }
+}
+)";
+
+const char* FIXTURE_INFO_PLUGIN = R"(
+plugin = {}
+
+function plugin.getName() return "fixture-demo" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "test" } end
+function plugin.getMissingPackages(packages) return packages or {} end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return true end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.list(context) return {} end
+function plugin.search(context, prompt) return {} end
+function plugin.outdated(context) return {} end
+function plugin.shutdown() return true end
+
+function plugin.info(context, packageName)
+  local root = os.getenv("REQPACK_TEST_FIXTURE_ROOT") or ""
+  if root == "" then
+    return {}
+  end
+  local path = root .. "/payload/info.txt"
+  local file = io.open(path, "rb")
+  if file == nil then
+    return {}
+  end
+  local content = file:read("*a")
+  file:close()
+  return { name = packageName, version = "fixture", description = content }
+end
+)";
+
+const char* FIXTURE_INFO_CASE = R"(
+return {
+  name = "fixture-backed info",
+  request = {
+    action = "info",
+    system = "fixture-demo",
+    prompt = "alpha"
+  },
+  fixtureRoot = "../fixtures-root",
+  fixtureDirs = { "payload" },
+  fixtureFiles = {
+    { path = "payload/info.txt", content = "from fixture" }
+  },
+  environment = {
+    REQPACK_TEST_FIXTURE_ROOT = "${fixtureRoot}"
+  },
+  expect = {
+    success = true,
+    resultCount = 1,
+    resultName = "alpha",
+    resultVersion = "fixture"
   }
 }
 )";
@@ -1004,6 +1070,23 @@ TEST_CASE("plugin test command supports query cases and help", "[integration][pl
     CHECK(helpOutput.find("Run hermetic plugin conformance cases") != std::string::npos);
     CHECK(helpOutput.find("--plugin <value>") != std::string::npos);
     CHECK(helpOutput.find("--preset <name>") != std::string::npos);
+}
+
+TEST_CASE("plugin test command supports filesystem fixtures", "[integration][plugin-test][service]") {
+    TempDir tempDir{"reqpack-plugin-test-fixtures"};
+    const std::filesystem::path plugins = tempDir.path() / "plugins";
+    const std::filesystem::path cases = tempDir.path() / "cases";
+    write_plugin_bundle(plugins, "fixture-demo", FIXTURE_INFO_PLUGIN);
+    write_file(cases / "fixture-info.lua", FIXTURE_INFO_CASE);
+    const std::filesystem::path configPath = write_config(tempDir.path(), plugins);
+
+    const std::string output = run_reqpack(tempDir.path(), configPath, {
+        "test-plugin", "--plugin", "fixture-demo", "--case", (cases / "fixture-info.lua").string()
+    });
+
+    INFO(output);
+    CHECK(output.find("[PASS] fixture-backed info") != std::string::npos);
+    CHECK(output.find("Cases: 1, Passed: 1, Failed: 0") != std::string::npos);
 }
 
 TEST_CASE("plugin test command validates artifacts and supports presets", "[integration][plugin-test][service]") {

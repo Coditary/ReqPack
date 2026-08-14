@@ -9,6 +9,21 @@
 
 #include "core/common/build_info.h"
 
+#if defined(_WIN32)
+#ifdef IGNORE
+#undef IGNORE
+#endif
+#ifdef ERROR
+#undef ERROR
+#endif
+#ifdef FAILED
+#undef FAILED
+#endif
+#ifdef stdin
+#undef stdin
+#endif
+#endif
+
 enum class SeverityLevel {
     UNASSIGNED,
     LOW,
@@ -77,7 +92,7 @@ enum class RepositoryAuthType {
 enum class RepositoryChecksumPolicy {
     FAIL,
     WARN,
-    IGNORE
+    SKIP
 };
 
 struct LoggingConfig {
@@ -105,6 +120,14 @@ struct SecurityBackendConfig {
     OsvRefreshMode refreshMode{OsvRefreshMode::MANUAL};
     long refreshIntervalSeconds{24L * 60L * 60L};
     std::string overlayPath{};
+    std::string apiBaseUrl{};
+    std::string apiVersion{};
+    std::string tokenEnv{};
+    std::string orgId{};
+    std::string groupId{};
+    std::string dataset{};
+    std::vector<std::string> dbRepositories{};
+    std::string helperPath{};
 };
 
 struct SecurityConfig {
@@ -331,6 +354,7 @@ struct DisplayColorScheme {
 struct DisplayConfig {
     DisplayRenderer renderer{DisplayRenderer::PLAIN};
     DisplayColorScheme colors{};
+    bool jsonOutput{false};
 };
 
 struct ReqPackConfig {
@@ -395,6 +419,7 @@ struct ReqPackConfigOverrides {
     std::optional<std::string> reportOutputPath;
 
     std::optional<bool> dryRun;
+    std::optional<bool> jsonOutput;
     std::optional<bool> stopOnFirstFailure;
     std::optional<bool> useTransactionDb;
     std::optional<unsigned int> jobs;
@@ -609,7 +634,7 @@ inline std::string to_string(RepositoryChecksumPolicy policy) {
     switch (policy) {
         case RepositoryChecksumPolicy::FAIL:
             return "fail";
-        case RepositoryChecksumPolicy::IGNORE:
+        case RepositoryChecksumPolicy::SKIP:
             return "ignore";
         case RepositoryChecksumPolicy::WARN:
         default:

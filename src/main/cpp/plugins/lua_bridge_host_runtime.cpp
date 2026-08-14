@@ -1,12 +1,12 @@
 #include "plugins/lua_bridge_host_runtime.h"
 
+#include "core/common/temp_directory.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <system_error>
 #include <utility>
-
-#include <unistd.h>
 
 namespace {
 
@@ -43,6 +43,13 @@ const LuaBridgeRuntimeBindingContext* LuaBridgeHostRuntime::runtimeBindingContex
 
 bool LuaBridgeHostRuntime::hasSilentRuntimeFlag(const std::vector<std::string>& flags) const {
     return std::find(flags.begin(), flags.end(), SILENT_RUNTIME_FLAG) != flags.end();
+}
+
+bool LuaBridgeHostRuntime::shouldUseSilentRuntime(const std::vector<std::string>& flags) const {
+    if (m_config.logging.consoleOutput) {
+        return hasSilentRuntimeFlag(flags);
+    }
+    return true;
 }
 
 void LuaBridgeHostRuntime::setSilentRuntimeOutput(const bool silent) {
@@ -112,17 +119,15 @@ void LuaBridgeHostRuntime::cleanupAfterShutdown() {
 }
 
 std::string LuaBridgeHostRuntime::createTempDirectory(const std::string& pluginId) {
-    std::filesystem::path tempDir = std::filesystem::temp_directory_path() / ("reqpack-" + pluginId + "-XXXXXX");
-    std::string templateString = tempDir.string();
-    std::vector<char> buffer(templateString.begin(), templateString.end());
-    buffer.push_back('\0');
-    char* created = ::mkdtemp(buffer.data());
-    if (created == nullptr) {
+    try {
+        const std::filesystem::path created =
+            reqpack_make_unique_directory(std::filesystem::temp_directory_path(), "reqpack-" + pluginId);
+        m_tempDirectories.emplace_back(created.string());
+        if (!m_runtimeWriteRoots.empty()) {
+            m_runtimeWriteRoots.emplace_back(created.lexically_normal());
+        }
+        return created.string();
+    } catch (...) {
         return {};
     }
-    m_tempDirectories.emplace_back(created);
-    if (!m_runtimeWriteRoots.empty()) {
-        m_runtimeWriteRoots.emplace_back(std::filesystem::path(created).lexically_normal());
-    }
-    return created;
 }

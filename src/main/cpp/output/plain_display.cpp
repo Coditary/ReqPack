@@ -2,15 +2,14 @@
 
 #include "plain_display_internal.h"
 
+#include "core/common/terminal_width.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
-
-#include <sys/ioctl.h>
-#include <unistd.h>
 
 namespace plain_display_internal {
 
@@ -62,12 +61,7 @@ size_t terminal_width() {
         }
     }
 
-    winsize size{};
-    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0) {
-        return size.ws_col;
-    }
-
-    return 100;
+    return reqpack_terminal_column_count(100);
 }
 
 std::string truncate_middle(const std::string& text, size_t width) {

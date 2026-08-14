@@ -1,0 +1,8 @@
+{
+  "formatVersion": 1,
+  "name": "gh-advisory",
+  "version": "0.1.0",
+  "summary": "ReqPack security-provider wrapper for GitHub Advisory DB sync",
+  "description": "ReqPack Lua wrapper plugin for importing GitHub Advisory Database advisories into ReqPack shared vulnerability indexes",
+  "license": "MIT"
+}

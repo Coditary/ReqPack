@@ -344,6 +344,32 @@ TEST_CASE("downloader copies bundled plugin directories and skips git metadata",
     CHECK_FALSE(std::filesystem::exists(targetDirectory / ".git"));
 }
 
+TEST_CASE("downloader copies bundled plugin from repo root letter-grouped layout", "[unit][downloader][service]") {
+    TempDir tempDir{"reqpack-downloader-grouped-bundle-copy"};
+    const std::string script = "return { getName = function() return 'huggingface' end }\n";
+    const std::filesystem::path repositoryRoot = tempDir.path() / "repo";
+    const std::filesystem::path bundleRoot = write_plugin_bundle(repositoryRoot / "rqp-plugins" / "h", "huggingface", script);
+    write_file(bundleRoot / "lib" / "helper.txt", "helper\n");
+
+    ReqPackConfig config = make_downloader_test_config(tempDir.path());
+    config.registry.sources["huggingface"] = RegistrySourceEntry{
+        .source = repositoryRoot.string(),
+        .alias = false,
+        .description = "huggingface bundle",
+    };
+
+    RegistryDatabase database(config);
+    REQUIRE(database.ensureReady());
+
+    const std::filesystem::path targetDirectory = tempDir.path() / "plugins" / "huggingface";
+    Downloader downloader(&database, config);
+    REQUIRE(downloader.downloadPlugin("huggingface"));
+
+    CHECK(read_file(targetDirectory / "run.lua") == script);
+    CHECK(read_file(targetDirectory / "metadata.json").find("\"name\": \"huggingface\"") != std::string::npos);
+    CHECK(read_file(targetDirectory / "lib" / "helper.txt") == "helper\n");
+}
+
 TEST_CASE("downloader materializes run.lua bundles and removes stale bootstrap files", "[unit][downloader][service]") {
     TempDir tempDir{"reqpack-downloader-run-bundle"};
 

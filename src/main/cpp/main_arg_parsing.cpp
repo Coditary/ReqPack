@@ -137,7 +137,7 @@ bool parse_serve_runtime_options(const std::vector<std::string>& arguments,
     for (std::size_t i = 1; i < filtered.size(); ++i) {
         const std::string& argument = filtered[i];
         if (argument == "--stdin") {
-            options.stdin = true;
+            options.useStdin = true;
             continue;
         }
         if (argument == "--remote") {
@@ -202,7 +202,12 @@ bool parse_serve_runtime_options(const std::vector<std::string>& arguments,
         options.inheritedArguments.push_back(argument);
     }
 
-    if (options.stdin == options.remote) {
+    // --json is also a global output flag and may be stripped before this loop.
+    if (options.remote && options.remoteProtocol == ServeRemoteProtocol::TEXT && contains_flag(arguments, "--json")) {
+        options.remoteProtocol = ServeRemoteProtocol::JSON;
+    }
+
+    if (options.useStdin == options.remote) {
         error = "serve requires exactly one of --stdin or --remote";
         return true;
     }
@@ -214,7 +219,7 @@ bool parse_serve_runtime_options(const std::vector<std::string>& arguments,
         error = "--max-connections must be greater than 0";
         return true;
     }
-    if (options.stdin) {
+    if (options.useStdin) {
         if (options.token.has_value() || options.username.has_value() || options.password.has_value() ||
             options.bind != "127.0.0.1" || options.port != 4545 || options.remoteProtocol != ServeRemoteProtocol::TEXT ||
             options.maxConnections != 16) {

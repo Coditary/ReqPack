@@ -1,5 +1,7 @@
 #include "history_manager_internal.h"
 
+#include "core/common/time_helpers.h"
+
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -65,7 +67,7 @@ std::string utc_timestamp_now() {
 	const auto now = std::chrono::system_clock::now();
 	const std::time_t t = std::chrono::system_clock::to_time_t(now);
 	std::tm tm{};
-	gmtime_r(&t, &tm);
+	(void)reqpack_gmtime_utc(&tm, &t);
 	std::ostringstream oss;
 	oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
 	return oss.str();

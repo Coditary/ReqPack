@@ -3,6 +3,7 @@
 #include "output/diagnostic.h"
 #include "output/idisplay.h"
 
+#include <cstdio>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -137,6 +138,7 @@ class Logger {
 	bool                            stopRequested{false};
 	std::string                     pattern{"%^[%T] [%l] %v%$"};
 	std::atomic<bool>              consoleOutputEnabled{true};
+	std::atomic<bool>              jsonOutputMode{false};
 	std::ofstream                   structuredFileStream;
 	std::string                     structuredFilePath{};
 	bool                            captureDisplayEvents{true};
@@ -175,6 +177,8 @@ public:
 	void setPattern(const std::string& pattern);
 	void setConsoleOutput(bool enable);
 	bool isConsoleOutputEnabled() const;
+	void setJsonOutputMode(bool enable);
+	bool isJsonOutputMode() const;
 	void setFileSink(const std::string& filename);
 	void disableFileSink();
 	void setStructuredFileSink(const std::string& filename);
@@ -191,9 +195,9 @@ public:
 
 	std::uint64_t emit(OutputAction action, const OutputContext& context = {});
 	std::uint64_t emitDiagnostic(const DiagnosticMessage& diagnostic, bool mirrorToDisplay = true);
-	void stdout(const std::string& message,
-	            const std::string& source = {},
-	            const std::string& scope  = {});
+	void logStdout(const std::string& message,
+	               const std::string& source = {},
+	               const std::string& scope  = {});
 	void flush();
 	void flushSync();
 

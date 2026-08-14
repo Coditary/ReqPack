@@ -115,6 +115,7 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     overrides.reportFormat = ReportFormat::CYCLONEDX;
     overrides.reportOutputPath = "~/reports/bom.json";
     overrides.dryRun = true;
+    overrides.jsonOutput = true;
     overrides.jobs = 4;
     overrides.jobsMode = ExecutionJobsMode::FIXED;
     overrides.enableProxyExpansion = false;
@@ -157,6 +158,7 @@ TEST_CASE("configuration applies CLI overrides and expands path fields", "[unit]
     CHECK(config.reports.format == ReportFormat::CYCLONEDX);
     CHECK(std::filesystem::path(config.reports.outputPath) == home / "reports/bom.json");
     CHECK(config.execution.dryRun);
+    CHECK(config.display.jsonOutput);
     CHECK(config.execution.jobs == 4);
     CHECK(config.execution.jobsMode == ExecutionJobsMode::FIXED);
     CHECK_FALSE(config.planner.enableProxyExpansion);
@@ -432,6 +434,7 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
     std::vector<std::string> arguments{
         "ReqPack",
         "--dry-run",
+        "--json",
         "--jobs",
         "6",
         "--registry=/tmp/reqpack-registry",
@@ -462,6 +465,8 @@ TEST_CASE("configuration extracts multiple CLI overrides in one pass", "[unit][c
 
     REQUIRE(overrides.dryRun.has_value());
     CHECK(overrides.dryRun.value());
+    REQUIRE(overrides.jsonOutput.has_value());
+    CHECK(overrides.jsonOutput.value());
     REQUIRE(overrides.jobs.has_value());
     CHECK(overrides.jobs.value() == 6);
     REQUIRE(overrides.jobsMode.has_value());

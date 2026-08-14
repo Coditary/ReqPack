@@ -3,6 +3,7 @@
 #include "executor_internal.h"
 
 #include "core/host/host_info.h"
+#include "core/planning/planner_platform_policy.h"
 #include "output/logger.h"
 
 #include <algorithm>
@@ -37,6 +38,44 @@ PluginCallContext Executer::buildPluginContext(IPlugin* plugin, const TaskGroup&
 
 std::vector<Executer::TransactionRecord> Executer::executeTaskGroup(const TaskGroup& taskGroup, const std::string& runId) const {
 	if (taskGroup.packages.empty() && !taskGroup.usesLocalTarget) {
+		return {};
+	}
+
+	if (planner_platform::softSkipNixInstalls() &&
+	    is_install_like_action(taskGroup.action) &&
+	    planner_platform::isNixInstallSystem(this->registry->resolvePluginName(taskGroup.system))) {
+		bool consumersReady = !taskGroup.nixSoftSkipConsumers.empty();
+		for (const std::string& consumerSystem : taskGroup.nixSoftSkipConsumers) {
+			if (this->registry->getPlugin(consumerSystem) == nullptr || !this->registry->loadPlugin(consumerSystem)) {
+				consumersReady = false;
+				break;
+			}
+		}
+		const bool stillRequired = taskGroup.nixSoftSkipConsumers.empty() || !consumersReady;
+
+		if (stillRequired) {
+			std::string packageList;
+			for (const Package& package : taskGroup.packages) {
+				if (!packageList.empty()) {
+					packageList += ", ";
+				}
+				packageList += package.name;
+				if (!package.version.empty()) {
+					packageList += "@" + package.version;
+				}
+			}
+			Logger::instance().diagnostic(make_warning_diagnostic(
+				"executor",
+				"Skipping nix install on Windows",
+				"ReqPack will not install nix packages on Windows and expects required tools to already be available on the host.",
+				"Install the required tools with a Windows package manager (for example Chocolatey or winget) or manually, then retry.",
+				packageList.empty() ? std::string{} : ("packages: " + packageList),
+				taskGroup.system,
+				"nix-soft-skip"
+			));
+		}
+
+		// Soft-skip: no plugin call and no success history records.
 		return {};
 	}
 
@@ -170,6 +209,61 @@ std::vector<Executer::TransactionRecord> Executer::buildSuccessRecords(const Tas
 			.packageVersion = package.version,
 			.status = "success"
 		});
+	}
+
+	return records;
+}
+
+std::vector<Executer::TransactionRecord> Executer::buildAlreadySatisfiedRecords(
+	const std::vector<TaskGroup>& allTaskGroups,
+	const std::vector<TaskGroup>& executableTaskGroups) const
+{
+	auto packageKey = [](const std::string& system, const std::string& name) {
+		return system + '\0' + name;
+	};
+
+	std::set<std::string> executableKeys;
+	for (const TaskGroup& taskGroup : executableTaskGroups) {
+		for (const Package& package : taskGroup.packages) {
+			executableKeys.insert(packageKey(taskGroup.system, package.name));
+		}
+	}
+
+	std::vector<InstalledEntry> installedState;
+	if (this->historyManager != nullptr) {
+		installedState = this->historyManager->loadInstalledState();
+	}
+
+	std::vector<TransactionRecord> records;
+	for (const TaskGroup& taskGroup : allTaskGroups) {
+		if (!actionUsesMissingPackageFilter(taskGroup.action) || taskGroup.usesLocalTarget) {
+			continue;
+		}
+
+		for (const Package& package : taskGroup.packages) {
+			if (executableKeys.find(packageKey(taskGroup.system, package.name)) != executableKeys.end()) {
+				continue;
+			}
+
+			std::string version = package.version;
+			if (version.empty()) {
+				for (const InstalledEntry& entry : installedState) {
+					if (entry.system == taskGroup.system && entry.name == package.name) {
+						version = entry.version;
+						break;
+					}
+				}
+			}
+
+			records.push_back(TransactionRecord{
+				.runId = {},
+				.system = taskGroup.system,
+				.action = taskGroup.action,
+				.packageName = package.name,
+				.packageVersion = version,
+				.status = "success"
+			});
+		}
 	}
 
 	return records;

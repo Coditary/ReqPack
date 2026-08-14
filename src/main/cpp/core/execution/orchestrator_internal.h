@@ -25,6 +25,7 @@ bool prepare_requests_for_run(
 );
 
 void rewrite_registry_package_requests(std::vector<Request>& requests, const RegistryDatabase* database);
+void rewrite_security_gateway_package_requests(std::vector<Request>& requests, Registry* registry, const ReqPackConfig& config);
 
 bool requests_target_plugin_install(const std::vector<Request>& requests);
 bool requests_target_plugin_remove(const std::vector<Request>& requests);

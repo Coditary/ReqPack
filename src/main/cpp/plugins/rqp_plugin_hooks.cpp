@@ -2,6 +2,7 @@
 
 #include "core/archive/archive_resolver.h"
 #include "core/common/network_environment.h"
+#include "core/common/temp_directory.h"
 
 #include "output/logger.h"
 #include "plugins/exec_rules.h"
@@ -20,8 +21,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <unistd.h>
 
 namespace {
 
@@ -148,16 +147,14 @@ public:
     }
 
     std::string createTempDirectory(const std::string& pluginId) override {
-        std::filesystem::path tempDir = std::filesystem::temp_directory_path() / ("reqpack-" + pluginId + "-XXXXXX");
-        std::string templateString = tempDir.string();
-        std::vector<char> buffer(templateString.begin(), templateString.end());
-        buffer.push_back('\0');
-        char* created = ::mkdtemp(buffer.data());
-        if (created == nullptr) {
+        try {
+            const std::filesystem::path created =
+                reqpack_make_unique_directory(std::filesystem::temp_directory_path(), "reqpack-" + pluginId);
+            tempDirectories_.emplace_back(created.string());
+            return created.string();
+        } catch (...) {
             return {};
         }
-        tempDirectories_.emplace_back(created);
-        return created;
     }
 
     DownloadResult download(const std::string& pluginId, const std::string& url, const std::string& destinationPath) override {

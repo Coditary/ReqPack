@@ -46,6 +46,31 @@ inline std::optional<unsigned int> unsigned_int_from_string(const std::string& v
     }
 }
 
+inline constexpr const char* default_osv_feed_url() {
+    return "https://storage.googleapis.com/osv-vulnerabilities";
+}
+
+inline std::string resolve_osv_feed_url(const ReqPackConfig& config, const std::string& backendFeedUrl) {
+    const std::string& topLevel = config.security.osvFeedUrl;
+    if (!backendFeedUrl.empty()) {
+        if (backendFeedUrl == default_osv_feed_url() && topLevel != default_osv_feed_url()) {
+            return topLevel;
+        }
+        return backendFeedUrl;
+    }
+    return topLevel;
+}
+
+inline void sync_osv_backend_feed_url(ReqPackConfig& config) {
+    if (!config.security.backends.contains("osv")) {
+        return;
+    }
+    SecurityBackendConfig& osvBackend = config.security.backends["osv"];
+    if (osvBackend.feedUrl == default_osv_feed_url() && config.security.osvFeedUrl != default_osv_feed_url()) {
+        osvBackend.feedUrl = config.security.osvFeedUrl;
+    }
+}
+
 inline std::vector<std::string> normalize_string_list(std::vector<std::string> values) {
     for (std::string& value : values) {
         value = to_lower_copy(value);

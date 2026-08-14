@@ -19,7 +19,7 @@ enum class ServeRemoteProtocol {
 };
 
 struct ServeRuntimeOptions {
-    bool stdin{false};
+    bool useStdin{false};
     bool remote{false};
     ServeRemoteProtocol remoteProtocol{ServeRemoteProtocol::TEXT};
     std::string bind{"127.0.0.1"};

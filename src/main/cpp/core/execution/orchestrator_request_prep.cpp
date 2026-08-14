@@ -4,6 +4,7 @@
 #include "core/download/downloader.h"
 #include "core/planning/request_resolution.h"
 #include "core/registry/registry_database_core.h"
+#include "core/security/security_gateway_service.h"
 #include "output/diagnostic.h"
 #include "output/logger.h"
 
@@ -129,6 +130,37 @@ bool resolve_local_target(
 
 namespace orchestrator_internal {
 
+void rewrite_security_gateway_package_requests(std::vector<Request>& requests, Registry* registry, const ReqPackConfig& config) {
+	if (registry == nullptr || requests.size() < 2) {
+		return;
+	}
+
+	SecurityGatewayService gateway(registry, registry, config);
+	const Request& first = requests.front();
+	if (first.system.empty() || !gateway.isGatewaySystem(first.system) ||
+	    (first.action != ActionType::INSTALL && first.action != ActionType::UPDATE && first.action != ActionType::ENSURE) ||
+	    first.usesLocalTarget || !first.packages.empty()) {
+		return;
+	}
+
+	std::vector<std::string> gatewayPackages;
+	gatewayPackages.reserve(requests.size() - 1);
+	for (std::size_t index = 1; index < requests.size(); ++index) {
+		const Request& request = requests[index];
+		if (request.action != first.action || request.system.empty() || request.usesLocalTarget || !request.packages.empty()) {
+			return;
+		}
+		if (!registry->getPluginSecurityMetadata(request.system).has_value()) {
+			return;
+		}
+		gatewayPackages.push_back(request.system);
+	}
+
+	Request rewritten = first;
+	rewritten.packages = std::move(gatewayPackages);
+	requests = {std::move(rewritten)};
+}
+
 void rewrite_registry_package_requests(std::vector<Request>& requests, const RegistryDatabase* database) {
 	if (database == nullptr) {
 		return;
@@ -200,7 +232,7 @@ bool prepare_requests_for_run(
 		std::filesystem::create_directories(tempDir, ec);
 		const std::filesystem::path tempFile = tempDir / filename;
 
-		Logger::instance().stdout("downloading " + request.localPath, request.system, "install");
+		Logger::instance().logStdout("downloading " + request.localPath, request.system, "install");
 
 		Downloader downloader(registry->getDatabase(), config);
 		if (!downloader.download(request.localPath, tempFile.string())) {

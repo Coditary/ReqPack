@@ -3,6 +3,7 @@
 #include "executor_internal.h"
 
 #include "output/logger.h"
+#include "output/run_result_json.h"
 
 #include <algorithm>
 #include <vector>
@@ -61,8 +62,9 @@ bool Executer::execute(Graph *graph) {
 		}
 	}
 
+	const bool jsonOutput = this->config.display.jsonOutput;
 	bool sessionBegun = false;
-	if (!taskGroups.empty()) {
+	if (!taskGroups.empty() && !jsonOutput) {
 		std::vector<std::string> itemIds;
 		for (const TaskGroup& tg : taskGroups) {
 			if (tg.usesLocalTarget) {
@@ -87,8 +89,33 @@ bool Executer::execute(Graph *graph) {
 	);
 	std::vector<TransactionRecord> allRecords = records;
 	allRecords.insert(allRecords.end(), orphanRemovalRecords.begin(), orphanRemovalRecords.end());
+	if (jsonOutput && !inputAlreadyFiltered) {
+		const std::vector<TransactionRecord> alreadySatisfiedRecords =
+			this->buildAlreadySatisfiedRecords(allTaskGroups, taskGroups);
+		allRecords.insert(allRecords.end(), alreadySatisfiedRecords.begin(), alreadySatisfiedRecords.end());
+	}
 
-	if (sessionBegun) {
+	const bool ok = std::none_of(allRecords.begin(), allRecords.end(), [](const TransactionRecord& record) {
+		return record.status != "success";
+	});
+
+	if (jsonOutput) {
+		RunResultJsonDocument document;
+		document.ok = ok;
+		document.dryRun = this->config.execution.dryRun;
+		document.items.reserve(allRecords.size());
+		for (const TransactionRecord& record : allRecords) {
+			const bool success = record.status == "success";
+			RunResultJsonItem item;
+			item.system = record.system;
+			item.name = record.packageName;
+			item.version = record.packageVersion;
+			item.status = run_result_status_for_action(record.action, success, this->config.execution.dryRun);
+			item.errorMessage = record.errorMessage;
+			document.items.push_back(std::move(item));
+		}
+		emit_run_result_json(document);
+	} else if (sessionBegun) {
 		int succeeded = 0;
 		int failed = 0;
 		for (const TransactionRecord& r : allRecords) {
@@ -117,7 +144,5 @@ bool Executer::execute(Graph *graph) {
 		}
 	}
 
-	return std::none_of(allRecords.begin(), allRecords.end(), [](const TransactionRecord& record) {
-		return record.status != "success";
-	});
+	return ok;
 }

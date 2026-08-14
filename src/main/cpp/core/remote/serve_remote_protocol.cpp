@@ -90,7 +90,7 @@ std::string text_response(bool ok, const CommandOutput& output) {
 }
 
 void handle_text_client(
-    int clientFd,
+    ReqpackSocket clientFd,
     Cli& cli,
     RemoteServerState& state,
     Logger& logger,
@@ -160,7 +160,7 @@ void handle_text_client(
 }
 
 void handle_json_client(
-    int clientFd,
+    ReqpackSocket clientFd,
     Cli& cli,
     RemoteServerState& state,
     Logger& logger,

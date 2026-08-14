@@ -1,5 +1,7 @@
 #include "rq_package_internal.h"
 
+#include "core/common/temp_directory.h"
+
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -7,21 +9,10 @@
 #include <set>
 #include <stdexcept>
 
-#include <unistd.h>
-
 namespace {
 
 std::filesystem::path make_unique_directory(const std::filesystem::path& parent, const std::string& prefix) {
-    std::filesystem::create_directories(parent);
-    std::filesystem::path pattern = parent / (prefix + "-XXXXXX");
-    std::string value = pattern.string();
-    std::vector<char> buffer(value.begin(), value.end());
-    buffer.push_back('\0');
-    char* created = ::mkdtemp(buffer.data());
-    if (created == nullptr) {
-        throw std::runtime_error("failed to create temporary directory");
-    }
-    return std::filesystem::path(created);
+    return reqpack_make_unique_directory(parent, prefix);
 }
 
 }  // namespace

@@ -417,7 +417,7 @@ void LuaBridgeBindings::registerContextTypes() {
                         binding->sourceId,
                         command,
                         rules,
-                        m_hostRuntime.hasSilentRuntimeFlag(binding->flags)
+                        m_hostRuntime.shouldUseSilentRuntime(binding->flags)
                     );
                 }
             ));

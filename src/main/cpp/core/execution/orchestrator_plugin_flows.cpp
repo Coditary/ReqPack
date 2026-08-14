@@ -6,6 +6,7 @@
 #include "core/plugins/plugin_bundle.h"
 #include "output/diagnostic.h"
 #include "output/logger.h"
+#include "output/run_result_json.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -235,30 +236,45 @@ int Orchestrator::runSystemWidePackageUpdates() {
 
 int Orchestrator::runPluginInstallRequests() {
 	Logger& logger = Logger::instance();
+	const bool jsonOutput = this->config.display.jsonOutput;
 	std::vector<std::string> itemIds;
 	itemIds.reserve(this->requests.size());
 	for (const Request& request : this->requests) {
 		itemIds.push_back(request.system);
 	}
 
-	logger.displaySessionBegin(DisplayMode::INSTALL, itemIds);
+	if (!jsonOutput) {
+		logger.displaySessionBegin(DisplayMode::INSTALL, itemIds);
+	}
 	int succeeded = 0;
 	int failed = 0;
+	RunResultJsonDocument jsonDocument;
+	jsonDocument.dryRun = this->config.execution.dryRun;
 	Downloader downloader(this->registry->getDatabase(), this->config);
 	for (const Request& request : this->requests) {
-		logger.displayItemBegin(request.system, request.system);
-		logger.displayItemStep(request.system, "install plugin wrapper");
+		if (!jsonOutput) {
+			logger.displayItemBegin(request.system, request.system);
+			logger.displayItemStep(request.system, "install plugin wrapper");
+		}
 		const std::string resolvedSystem = this->registry->resolvePluginName(request.system);
+		RunResultJsonItem jsonItem;
+		jsonItem.system = "rqp";
+		jsonItem.name = request.system;
 		if (resolvedSystem.empty()) {
-			logger.displayItemFailure(request.system, make_error_diagnostic(
-				"install",
-				"Plugin install failed",
-				"ReqPack could not resolve requested system to a plugin wrapper.",
-				"Check plugin name and registry sources, then retry.",
-				{},
-				request.system,
-				"plugin-install"
-			));
+			if (!jsonOutput) {
+				logger.displayItemFailure(request.system, make_error_diagnostic(
+					"install",
+					"Plugin install failed",
+					"ReqPack could not resolve requested system to a plugin wrapper.",
+					"Check plugin name and registry sources, then retry.",
+					{},
+					request.system,
+					"plugin-install"
+				));
+			}
+			jsonItem.status = run_result_status_for_action(ActionType::INSTALL, false, this->config.execution.dryRun);
+			jsonItem.errorMessage = "plugin resolve failed";
+			jsonDocument.items.push_back(std::move(jsonItem));
 			++failed;
 			continue;
 		}
@@ -269,68 +285,103 @@ int Orchestrator::runPluginInstallRequests() {
 			installed = plugin_bundle_exists(this->config, resolvedSystem);
 		}
 		if (installed) {
-			logger.displayItemSuccess(request.system);
+			if (!jsonOutput) {
+				logger.displayItemSuccess(request.system);
+			}
+			jsonItem.status = run_result_status_for_action(ActionType::INSTALL, true, this->config.execution.dryRun);
+			jsonDocument.items.push_back(std::move(jsonItem));
 			++succeeded;
 			continue;
 		}
 
-		logger.displayItemFailure(request.system, make_error_diagnostic(
-			"install",
-			"Plugin install failed",
-			"ReqPack could not install requested plugin wrapper from configured local registry sources.",
-			"Check registry source path, plugin bundle contents, and auto-download settings, then retry.",
-			{},
-			request.system,
-			"plugin-install"
-		));
+		if (!jsonOutput) {
+			logger.displayItemFailure(request.system, make_error_diagnostic(
+				"install",
+				"Plugin install failed",
+				"ReqPack could not install requested plugin wrapper from configured local registry sources.",
+				"Check registry source path, plugin bundle contents, and auto-download settings, then retry.",
+				{},
+				request.system,
+				"plugin-install"
+			));
+		}
+		jsonItem.status = run_result_status_for_action(ActionType::INSTALL, false, this->config.execution.dryRun);
+		jsonItem.errorMessage = "plugin install failed";
+		jsonDocument.items.push_back(std::move(jsonItem));
 		++failed;
 	}
 
-	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
+	jsonDocument.ok = failed == 0;
+	if (jsonOutput) {
+		emit_run_result_json(jsonDocument);
+	} else {
+		logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
+	}
 	return failed == 0 ? 0 : 1;
 }
 
 int Orchestrator::runPluginRemoveRequests() {
 	Logger& logger = Logger::instance();
+	const bool jsonOutput = this->config.display.jsonOutput;
 	std::vector<std::string> itemIds;
 	itemIds.reserve(this->requests.size());
 	for (const Request& request : this->requests) {
 		itemIds.push_back(request.system);
 	}
 
-	logger.displaySessionBegin(DisplayMode::REMOVE, itemIds);
+	if (!jsonOutput) {
+		logger.displaySessionBegin(DisplayMode::REMOVE, itemIds);
+	}
 	int succeeded = 0;
 	int failed = 0;
+	RunResultJsonDocument jsonDocument;
+	jsonDocument.dryRun = this->config.execution.dryRun;
 	for (const Request& request : this->requests) {
-		logger.displayItemBegin(request.system, request.system);
-		logger.displayItemStep(request.system, "remove plugin wrapper");
+		if (!jsonOutput) {
+			logger.displayItemBegin(request.system, request.system);
+			logger.displayItemStep(request.system, "remove plugin wrapper");
+		}
+
+		RunResultJsonItem jsonItem;
+		jsonItem.system = "rqp";
+		jsonItem.name = request.system;
 
 		const std::string resolvedSystem = this->registry->resolvePluginName(request.system);
 		if (resolvedSystem.empty()) {
-			logger.displayItemFailure(request.system, make_error_diagnostic(
-				"remove",
-				"Plugin remove failed",
-				"ReqPack could not resolve requested system to an installed plugin wrapper.",
-				"Check plugin name and local plugin state, then retry.",
-				{},
-				request.system,
-				"plugin-remove"
-			));
+			if (!jsonOutput) {
+				logger.displayItemFailure(request.system, make_error_diagnostic(
+					"remove",
+					"Plugin remove failed",
+					"ReqPack could not resolve requested system to an installed plugin wrapper.",
+					"Check plugin name and local plugin state, then retry.",
+					{},
+					request.system,
+					"plugin-remove"
+				));
+			}
+			jsonItem.status = run_result_status_for_action(ActionType::REMOVE, false, this->config.execution.dryRun);
+			jsonItem.errorMessage = "plugin resolve failed";
+			jsonDocument.items.push_back(std::move(jsonItem));
 			++failed;
 			continue;
 		}
 
 		const std::optional<PluginBundleLayout> layout = plugin_bundle_find_installed(this->config, resolvedSystem);
 		if (!layout.has_value()) {
-			logger.displayItemFailure(request.system, make_error_diagnostic(
-				"remove",
-				"Plugin remove failed",
-				"Requested plugin wrapper is not installed in current plugin directory.",
-				"Install plugin first or verify configured plugin directory before retrying remove.",
-				{},
-				request.system,
-				"plugin-remove"
-			));
+			if (!jsonOutput) {
+				logger.displayItemFailure(request.system, make_error_diagnostic(
+					"remove",
+					"Plugin remove failed",
+					"Requested plugin wrapper is not installed in current plugin directory.",
+					"Install plugin first or verify configured plugin directory before retrying remove.",
+					{},
+					request.system,
+					"plugin-remove"
+				));
+			}
+			jsonItem.status = run_result_status_for_action(ActionType::REMOVE, false, this->config.execution.dryRun);
+			jsonItem.errorMessage = "plugin not installed";
+			jsonDocument.items.push_back(std::move(jsonItem));
 			++failed;
 			continue;
 		}
@@ -370,15 +421,20 @@ int Orchestrator::runPluginRemoveRequests() {
 			}
 
 			if (!dependencyRemovalOk) {
-				logger.displayItemFailure(request.system, make_error_diagnostic(
-					"remove",
-					"Plugin remove failed",
-					"ReqPack could not remove one or more plugin dependency packages before deleting wrapper files.",
-					"Inspect dependency plugin output and retry once dependent packages can be removed cleanly.",
-					{},
-					request.system,
-					"plugin-remove"
-				));
+				if (!jsonOutput) {
+					logger.displayItemFailure(request.system, make_error_diagnostic(
+						"remove",
+						"Plugin remove failed",
+						"ReqPack could not remove one or more plugin dependency packages before deleting wrapper files.",
+						"Inspect dependency plugin output and retry once dependent packages can be removed cleanly.",
+						{},
+						request.system,
+						"plugin-remove"
+					));
+				}
+				jsonItem.status = run_result_status_for_action(ActionType::REMOVE, false, this->config.execution.dryRun);
+				jsonItem.errorMessage = "plugin dependency remove failed";
+				jsonDocument.items.push_back(std::move(jsonItem));
 				++failed;
 				continue;
 			}
@@ -387,15 +443,20 @@ int Orchestrator::runPluginRemoveRequests() {
 			std::error_code error;
 			std::filesystem::remove_all(layout->rootDir, error);
 			if (error) {
-				logger.displayItemFailure(request.system, make_error_diagnostic(
-					"remove",
-					"Plugin remove failed",
-					"ReqPack could not delete installed plugin wrapper files from disk.",
-					"Check filesystem permissions and retry remove after closing any process using that plugin directory.",
-					error.message(),
-					request.system,
-					"plugin-remove"
-				));
+				if (!jsonOutput) {
+					logger.displayItemFailure(request.system, make_error_diagnostic(
+						"remove",
+						"Plugin remove failed",
+						"ReqPack could not delete installed plugin wrapper files from disk.",
+						"Check filesystem permissions and retry remove after closing any process using that plugin directory.",
+						error.message(),
+						request.system,
+						"plugin-remove"
+					));
+				}
+				jsonItem.status = run_result_status_for_action(ActionType::REMOVE, false, this->config.execution.dryRun);
+				jsonItem.errorMessage = error.message();
+				jsonDocument.items.push_back(std::move(jsonItem));
 				++failed;
 				continue;
 			}
@@ -403,10 +464,19 @@ int Orchestrator::runPluginRemoveRequests() {
 			this->registry->scanDirectory(this->config.registry.pluginDirectory);
 		}
 
-		logger.displayItemSuccess(request.system);
+		if (!jsonOutput) {
+			logger.displayItemSuccess(request.system);
+		}
+		jsonItem.status = run_result_status_for_action(ActionType::REMOVE, true, this->config.execution.dryRun);
+		jsonDocument.items.push_back(std::move(jsonItem));
 		++succeeded;
 	}
 
-	logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
+	jsonDocument.ok = failed == 0;
+	if (jsonOutput) {
+		emit_run_result_json(jsonDocument);
+	} else {
+		logger.displaySessionEnd(failed == 0, succeeded, 0, failed);
+	}
 	return failed == 0 ? 0 : 1;
 }

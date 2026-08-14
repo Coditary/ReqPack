@@ -76,7 +76,7 @@ void ScopedPathCleanup::reset() {
     path_.clear();
 }
 
-ScopedPathCleanup write_uploaded_file_to_temp(int clientFd, const UploadInstallEnvelope& envelope) {
+ScopedPathCleanup write_uploaded_file_to_temp(ReqpackSocket clientFd, const UploadInstallEnvelope& envelope) {
     const std::filesystem::path tempRoot = std::filesystem::temp_directory_path() / "reqpack" / "remote-upload";
     std::error_code dirError;
     std::filesystem::create_directories(tempRoot, dirError);

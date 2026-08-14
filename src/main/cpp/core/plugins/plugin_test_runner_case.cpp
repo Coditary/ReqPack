@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -83,6 +85,11 @@ struct FakeExecResponse {
     ExecResult result;
 };
 
+struct PluginTestFixtureFile {
+    std::string path;
+    std::string content;
+};
+
 struct PluginTestCase {
     std::string name;
     std::string sourcePath;
@@ -92,6 +99,10 @@ struct PluginTestCase {
     std::vector<Package> packages{};
     std::string localPath;
     std::string prompt;
+    std::filesystem::path fixtureRoot;
+    std::vector<std::string> fixtureDirs{};
+    std::vector<PluginTestFixtureFile> fixtureFiles{};
+    std::map<std::string, std::string> environment{};
     std::vector<FakeExecResponse> fakeExec{};
     std::optional<bool> expectSuccess;
     std::vector<std::string> expectStdout{};
@@ -114,6 +125,238 @@ class PluginTestError : public std::runtime_error {
 public:
     explicit PluginTestError(const std::string& message)
         : std::runtime_error(message) {}
+};
+
+std::filesystem::path default_fixture_root_for_case(const std::filesystem::path& casePath) {
+    const std::string stem = casePath.stem().string();
+    std::string sanitized;
+    sanitized.reserve(stem.size());
+    for (unsigned char ch : stem) {
+        if (std::isalnum(ch) || ch == '-' || ch == '_') {
+            sanitized.push_back(static_cast<char>(ch));
+        } else {
+            sanitized.push_back('-');
+        }
+    }
+    if (sanitized.empty()) {
+        sanitized = "case";
+    }
+
+    const std::size_t pathHash = std::hash<std::string>{}(casePath.string());
+    std::ostringstream suffix;
+    suffix << std::hex << pathHash;
+    return (std::filesystem::temp_directory_path() / ("reqpack-plugin-test-" + sanitized + "-" + suffix.str())).lexically_normal();
+}
+
+std::map<std::string, std::string> string_map_from_table(const sol::object& object) {
+    if (!object.valid() || object.is<sol::lua_nil_t>() || object.get_type() != sol::type::table) {
+        return {};
+    }
+
+    std::map<std::string, std::string> values;
+    for (const auto& [key, entry] : object.as<sol::table>()) {
+        if (key.get_type() != sol::type::string || entry.get_type() != sol::type::string) {
+            continue;
+        }
+        values.emplace(key.as<std::string>(), entry.as<std::string>());
+    }
+    return values;
+}
+
+std::vector<PluginTestFixtureFile> fixture_files_from_table(const sol::object& object, const std::filesystem::path& path) {
+    if (!object.valid() || object.is<sol::lua_nil_t>() || object.get_type() != sol::type::table) {
+        return {};
+    }
+
+    std::vector<PluginTestFixtureFile> files;
+    for (const auto& [_, entry] : object.as<sol::table>()) {
+        if (entry.get_type() != sol::type::table) {
+            continue;
+        }
+        const sol::table file = entry.as<sol::table>();
+        const sol::optional<std::string> fixturePath = file["path"];
+        if (!fixturePath.has_value() || fixturePath->empty()) {
+            throw PluginTestError("fixtureFiles.path is required: " + path.string());
+        }
+        const sol::optional<std::string> content = file["content"];
+        files.push_back(PluginTestFixtureFile{
+            .path = fixturePath.value(),
+            .content = content.has_value() ? content.value() : std::string{},
+        });
+    }
+    return files;
+}
+
+std::filesystem::path resolve_fixture_path(const PluginTestCase& testCase, const std::string& rawPath) {
+    const std::filesystem::path path(rawPath);
+    if (path.is_absolute()) {
+        return path.lexically_normal();
+    }
+    return (testCase.fixtureRoot / path).lexically_normal();
+}
+
+std::string replace_all(std::string value, const std::string& needle, const std::string& replacement) {
+    if (needle.empty()) {
+        return value;
+    }
+    std::size_t position = 0;
+    while ((position = value.find(needle, position)) != std::string::npos) {
+        value.replace(position, needle.size(), replacement);
+        position += replacement.size();
+    }
+    return value;
+}
+
+std::map<std::string, std::string> resolved_case_environment(const PluginTestCase& testCase) {
+    std::map<std::string, std::string> values = testCase.environment;
+    const std::string fixtureRoot = testCase.fixtureRoot.string();
+    const std::string caseDirectory = std::filesystem::path(testCase.sourcePath).parent_path().string();
+    for (auto& [_, value] : values) {
+        value = replace_all(value, "${fixtureRoot}", fixtureRoot);
+        value = replace_all(value, "${caseDir}", caseDirectory);
+    }
+    if (!fixtureRoot.empty() && values.find("REQPACK_TEST_FIXTURE_ROOT") == values.end()) {
+        values.emplace("REQPACK_TEST_FIXTURE_ROOT", fixtureRoot);
+    }
+    return values;
+}
+
+void apply_case_placeholders(PluginTestCase& testCase) {
+    const std::string fixtureRoot = testCase.fixtureRoot.string();
+    const std::string caseDirectory = std::filesystem::path(testCase.sourcePath).parent_path().string();
+    const auto expand = [&](const std::string& value) {
+        return replace_all(replace_all(value, "${fixtureRoot}", fixtureRoot), "${caseDir}", caseDirectory);
+    };
+
+    testCase.localPath = expand(testCase.localPath);
+    testCase.prompt = expand(testCase.prompt);
+    for (FakeExecResponse& response : testCase.fakeExec) {
+        response.match = expand(response.match);
+        response.result.stdoutText = expand(response.result.stdoutText);
+        response.result.stderrText = expand(response.result.stderrText);
+    }
+    for (std::string& value : testCase.expectCommands) {
+        value = expand(value);
+    }
+    for (std::string& flag : testCase.flags) {
+        flag = expand(flag);
+    }
+    for (Package& package : testCase.packages) {
+        package.name = expand(package.name);
+        package.version = expand(package.version);
+        package.sourcePath = expand(package.sourcePath);
+        for (std::string& flag : package.flags) {
+            flag = expand(flag);
+        }
+    }
+}
+
+void write_fixture_file(const std::filesystem::path& path, const std::string& content) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) {
+        throw PluginTestError("failed to create fixture directory: " + path.parent_path().string());
+    }
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+        throw PluginTestError("failed to write fixture file: " + path.string());
+    }
+    output << content;
+}
+
+void prepare_case_fixture_files(const PluginTestCase& testCase) {
+    if (testCase.fixtureRoot.empty()) {
+        return;
+    }
+
+    const std::string fixtureRoot = testCase.fixtureRoot.string();
+    const std::string caseDirectory = std::filesystem::path(testCase.sourcePath).parent_path().string();
+
+    std::error_code error;
+    std::filesystem::remove_all(testCase.fixtureRoot, error);
+    error.clear();
+    std::filesystem::create_directories(testCase.fixtureRoot, error);
+    if (error) {
+        throw PluginTestError("failed to create fixture root: " + testCase.fixtureRoot.string());
+    }
+
+    for (const std::string& directory : testCase.fixtureDirs) {
+        const std::filesystem::path resolved = resolve_fixture_path(testCase, directory);
+        std::filesystem::create_directories(resolved, error);
+        if (error) {
+            throw PluginTestError("failed to create fixture directory: " + resolved.string());
+        }
+    }
+
+    for (const PluginTestFixtureFile& file : testCase.fixtureFiles) {
+        write_fixture_file(
+            resolve_fixture_path(testCase, file.path),
+            replace_all(replace_all(file.content, "${fixtureRoot}", fixtureRoot), "${caseDir}", caseDirectory)
+        );
+    }
+}
+
+class PreparedCaseFixtures {
+public:
+    explicit PreparedCaseFixtures(const std::vector<PluginTestCase>& cases) {
+        roots_.reserve(cases.size());
+        for (const PluginTestCase& testCase : cases) {
+            prepare_case_fixture_files(testCase);
+            if (!testCase.fixtureRoot.empty()) {
+                roots_.push_back(testCase.fixtureRoot);
+            }
+        }
+    }
+
+    ~PreparedCaseFixtures() {
+        for (const std::filesystem::path& root : roots_) {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+        }
+    }
+
+private:
+    std::vector<std::filesystem::path> roots_{};
+};
+
+std::optional<std::string> environment_value(const std::string& name) {
+    const char* value = std::getenv(name.c_str());
+    if (value == nullptr) {
+        return std::nullopt;
+    }
+    return std::string{value};
+}
+
+void set_environment_value(const std::string& name, const std::optional<std::string>& value) {
+#ifdef _WIN32
+    _putenv_s(name.c_str(), value.has_value() ? value->c_str() : "");
+#else
+    if (value.has_value()) {
+        setenv(name.c_str(), value->c_str(), 1);
+    } else {
+        unsetenv(name.c_str());
+    }
+#endif
+}
+
+class ScopedEnvironmentOverride {
+public:
+    explicit ScopedEnvironmentOverride(const std::map<std::string, std::string>& values) {
+        previous_.reserve(values.size());
+        for (const auto& [name, value] : values) {
+            previous_.push_back({name, environment_value(name)});
+            set_environment_value(name, value);
+        }
+    }
+
+    ~ScopedEnvironmentOverride() {
+        for (auto it = previous_.rbegin(); it != previous_.rend(); ++it) {
+            set_environment_value(it->first, it->second);
+        }
+    }
+
+private:
+    std::vector<std::pair<std::string, std::optional<std::string>>> previous_{};
 };
 
 class FakeExecHost : public LuaBridge {
@@ -338,6 +581,7 @@ PluginTestCase load_case_file(const std::filesystem::path& path) {
     PluginTestCase testCase;
     testCase.sourcePath = path.string();
     testCase.name = optional_string_field(root, "name").value_or(path.stem().string());
+    testCase.fixtureRoot = default_fixture_root_for_case(path);
 
     const sol::object requestObject = root["request"];
     if (!requestObject.valid() || requestObject.get_type() != sol::type::table) {
@@ -390,6 +634,16 @@ PluginTestCase load_case_file(const std::filesystem::path& path) {
         }
     }
 
+    if (const sol::optional<std::string> fixtureRoot = root["fixtureRoot"]; fixtureRoot.has_value() && !fixtureRoot->empty()) {
+        const std::filesystem::path customRoot(fixtureRoot.value());
+        testCase.fixtureRoot = customRoot.is_absolute()
+            ? customRoot.lexically_normal()
+            : (path.parent_path() / customRoot).lexically_normal();
+    }
+    testCase.fixtureDirs = string_list_from_table(root["fixtureDirs"]);
+    testCase.fixtureFiles = fixture_files_from_table(root["fixtureFiles"], path);
+    testCase.environment = string_map_from_table(root["environment"]);
+
     const sol::object expectObject = root["expect"];
     if (expectObject.valid() && expectObject.get_type() == sol::type::table) {
         const sol::table expect = expectObject.as<sol::table>();
@@ -417,6 +671,8 @@ PluginTestCase load_case_file(const std::filesystem::path& path) {
         }
     }
 
+    apply_case_placeholders(testCase);
+
     return testCase;
 }
 
@@ -443,6 +699,7 @@ std::string package_display_name(const PackageInfo& info) {
 
 PluginTestRuntimeCaseResult run_single_case(FakeExecHost& plugin, const ReqPackConfig& config, const PluginTestCase& testCase) {
     plugin.setCaseResponses(testCase.fakeExec);
+    ScopedEnvironmentOverride environmentOverride(resolved_case_environment(testCase));
 
     PluginTestRuntimeCaseResult result;
     result.summary.name = testCase.name;
@@ -493,8 +750,8 @@ PluginTestRuntimeCaseResult run_single_case(FakeExecHost& plugin, const ReqPackC
 
     result.events = plugin.takeRecentEvents();
     result.summary.commands = plugin.commands();
-    result.summary.stdout = plugin.stdout_lines();
-    result.summary.stderr = plugin.stderr_lines();
+    result.summary.stdoutLines = plugin.stdout_lines();
+    result.summary.stderrLines = plugin.stderr_lines();
     result.summary.artifacts = plugin.artifacts();
     for (const PluginEventRecord& event : result.events) {
         result.summary.events.push_back(event.name);
@@ -514,13 +771,13 @@ PluginTestRuntimeCaseResult run_single_case(FakeExecHost& plugin, const ReqPackC
     }
 
     if (!testCase.expectStdout.empty()) {
-        if (result.summary.stdout != testCase.expectStdout) {
+        if (result.summary.stdoutLines != testCase.expectStdout) {
             failures.push_back("stdout did not match expectation");
         }
     }
 
     if (!testCase.expectStderr.empty()) {
-        if (result.summary.stderr != testCase.expectStderr) {
+        if (result.summary.stderrLines != testCase.expectStderr) {
             failures.push_back("stderr did not match expectation");
         }
     }
@@ -620,6 +877,8 @@ PluginTestRunReport run_plugin_test_cases_impl(const ReqPackConfig& config, cons
         bootstrapResponses.insert(bootstrapResponses.end(), testCase.fakeExec.begin(), testCase.fakeExec.end());
         loadedCases.push_back(std::move(testCase));
     }
+
+    PreparedCaseFixtures preparedFixtures(loadedCases);
 
     FakeExecHost plugin(pluginScript.string(), config);
     plugin.setCaseResponses(std::move(bootstrapResponses));
