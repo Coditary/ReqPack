@@ -231,6 +231,7 @@ set_target_properties(lua_cffi PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(lua_cffi PRIVATE
     ${cffi_lua_SOURCE_DIR}/src
     ${REQPACK_FFI_INCLUDE_DIR}
+    ${LUA_INCLUDE_DIR}
 )
 if(DEFINED CMAKE_CXX_BYTE_ORDER)
     if(CMAKE_CXX_BYTE_ORDER STREQUAL "BIG_ENDIAN")

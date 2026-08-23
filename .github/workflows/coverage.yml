@@ -41,7 +41,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates cmake curl git pkg-config python3 \
             libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
-            liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+            libffi-dev liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
 
       - name: Install sol2 headers
         run: |
