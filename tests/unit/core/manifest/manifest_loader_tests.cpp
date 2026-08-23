@@ -370,3 +370,28 @@ TEST_CASE("manifest error message contains failing entry index", "[unit][manifes
         CHECK(msg.find("#2") != std::string::npos);
     }
 }
+
+// ---------------------------------------------------------------------------
+// FFI availability inside the manifest environment
+// ---------------------------------------------------------------------------
+
+TEST_CASE("manifest environment exposes ffi module", "[unit][manifest][ffi]") {
+    TempDir dir{"reqpack-manifest-ffi"};
+    write_file(dir.manifest(), R"(
+        assert(type(ffi) == "table", "global ffi missing in manifest env")
+        local ffiModule = require("ffi")
+        assert(type(ffiModule) == "table", "require('ffi') failed in manifest env")
+        ffi.cdef("typedef int reqpack_manifest_ffi_probe_t;")
+        return {
+            packages = {
+                { system = "dnf", name = "curl-" .. ffi.sizeof("reqpack_manifest_ffi_probe_t") },
+            }
+        }
+    )");
+
+    const std::vector<ManifestEntry> entries = ManifestLoader::load(dir.manifest());
+
+    REQUIRE(entries.size() == 1);
+    CHECK(entries[0].system == "dnf");
+    CHECK(entries[0].name == "curl-4");
+}

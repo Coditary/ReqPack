@@ -157,7 +157,13 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/LMDB/lmdb.git
     GIT_TAG LMDB_0.9.33
 )
+FetchContent_Declare(
+    cffi_lua
+    GIT_REPOSITORY https://github.com/q66/cffi-lua.git
+    GIT_TAG v0.2.4
+)
 FetchContent_MakeAvailable(lmdb)
+FetchContent_MakeAvailable(cffi_lua)
 FetchContent_MakeAvailable(Catch2)
 
 add_library(lmdb STATIC
@@ -167,6 +173,83 @@ add_library(lmdb STATIC
 
 set_target_properties(lmdb PROPERTIES LINKER_LANGUAGE C)
 target_include_directories(lmdb PUBLIC ${lmdb_SOURCE_DIR}/libraries/liblmdb)
+
+# libffi backs the vendored cffi-lua module (Lua FFI for non-LuaJIT environments).
+find_path(REQPACK_FFI_INCLUDE_DIR
+    NAMES ffi.h
+    HINTS
+        /opt/homebrew/opt/libffi/include
+        /usr/local/opt/libffi/include
+)
+find_library(REQPACK_FFI_LIBRARY
+    NAMES ffi libffi
+    HINTS
+        /opt/homebrew/opt/libffi/lib
+        /usr/local/opt/libffi/lib
+)
+if(NOT REQPACK_FFI_INCLUDE_DIR OR NOT REQPACK_FFI_LIBRARY)
+    message(FATAL_ERROR "libffi nicht gefunden! Bitte installieren (Debian/Ubuntu: libffi-dev, Fedora: libffi-devel, MSYS2: mingw-w64-x86_64-libffi, macOS: brew install libffi) oder via -DREQPACK_FFI_INCLUDE_DIR/-DREQPACK_FFI_LIBRARY angeben.")
+endif()
+
+set(REQPACK_FFI_LINK_LIBRARY ${REQPACK_FFI_LIBRARY})
+if(REQPACK_LINK_STATIC_LUA)
+    # Release builds bundle everything feasible; prefer the static libffi
+    # archive next to the discovered library so the shipped binary does not
+    # gain a new runtime dependency.
+    set(_reqpack_saved_library_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+
+    get_filename_component(_reqpack_ffi_lib_dir "${REQPACK_FFI_LIBRARY}" DIRECTORY)
+    find_library(REQPACK_FFI_STATIC_LIBRARY
+        NAMES ffi libffi
+        HINTS
+            ${_reqpack_ffi_lib_dir}
+            /opt/homebrew/opt/libffi/lib
+            /usr/local/opt/libffi/lib
+    )
+
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${_reqpack_saved_library_suffixes})
+
+    if(REQPACK_FFI_STATIC_LIBRARY)
+        set(REQPACK_FFI_LINK_LIBRARY ${REQPACK_FFI_STATIC_LIBRARY})
+        message(STATUS "Using static libffi: ${REQPACK_FFI_STATIC_LIBRARY}")
+    else()
+        message(WARNING "Static libffi not found; falling back to ${REQPACK_FFI_LIBRARY}")
+    endif()
+endif()
+
+add_library(lua_cffi STATIC
+    ${cffi_lua_SOURCE_DIR}/src/util.cc
+    ${cffi_lua_SOURCE_DIR}/src/ffilib.cc
+    ${cffi_lua_SOURCE_DIR}/src/parser.cc
+    ${cffi_lua_SOURCE_DIR}/src/ast.cc
+    ${cffi_lua_SOURCE_DIR}/src/lib.cc
+    ${cffi_lua_SOURCE_DIR}/src/ffi.cc
+    ${cffi_lua_SOURCE_DIR}/src/main.cc
+)
+set_target_properties(lua_cffi PROPERTIES LINKER_LANGUAGE CXX)
+target_include_directories(lua_cffi PRIVATE
+    ${cffi_lua_SOURCE_DIR}/src
+    ${REQPACK_FFI_INCLUDE_DIR}
+)
+if(DEFINED CMAKE_CXX_BYTE_ORDER)
+    if(CMAKE_CXX_BYTE_ORDER STREQUAL "BIG_ENDIAN")
+        target_compile_definitions(lua_cffi PRIVATE FFI_BIG_ENDIAN)
+    else()
+        target_compile_definitions(lua_cffi PRIVATE FFI_LITTLE_ENDIAN)
+    endif()
+elseif(WIN32)
+    target_compile_definitions(lua_cffi PRIVATE FFI_LITTLE_ENDIAN)
+else()
+    include(TestBigEndian)
+    test_big_endian(REQPACK_CFFI_BIG_ENDIAN)
+    if(REQPACK_CFFI_BIG_ENDIAN)
+        target_compile_definitions(lua_cffi PRIVATE FFI_BIG_ENDIAN)
+    else()
+        target_compile_definitions(lua_cffi PRIVATE FFI_LITTLE_ENDIAN)
+    endif()
+endif()
+target_link_libraries(lua_cffi PUBLIC ${CMAKE_DL_LIBS} ${REQPACK_FFI_LINK_LIBRARY})
 
 find_path(SOL2_INCLUDE_DIR 
     NAMES sol/sol.hpp
@@ -296,6 +379,7 @@ set(SOURCES
     src/main/cpp/core/host/host_info.cpp
     src/main/cpp/core/host/host_info_codec.cpp
     src/main/cpp/core/host/host_info_probe.cpp
+    src/main/cpp/core/luaenv/lua_env_ffi.cpp
     src/main/cpp/core/manifest/manifest_loader.cpp
     src/main/cpp/core/packages/rq_package.cpp
     src/main/cpp/core/packages/rq_package_metadata.cpp
@@ -485,6 +569,7 @@ add_executable(core_integration_tests
     src/main/cpp/core/history/history_manager_store.cpp
     src/main/cpp/core/common/network_environment.cpp
     src/main/cpp/core/common/process_runner.cpp
+    src/main/cpp/core/luaenv/lua_env_ffi.cpp
     src/main/cpp/core/manifest/manifest_loader.cpp
     src/main/cpp/core/packages/rq_package.cpp
     src/main/cpp/core/packages/rq_package_metadata.cpp
@@ -560,6 +645,7 @@ add_executable(core_unit_tests
     tests/unit/core/export/audit_exporter_tests.cpp
     tests/unit/core/export/sbom_exporter_tests.cpp
     tests/unit/core/history/history_manager_tests.cpp
+    tests/unit/core/luaenv/lua_env_ffi_tests.cpp
     tests/unit/core/host/host_info_tests.cpp
     tests/unit/core/manifest/manifest_loader_tests.cpp
     tests/unit/core/packages/rq_package_tests.cpp
@@ -598,6 +684,7 @@ add_executable(core_unit_tests
     src/main/cpp/core/archive/archive_resolver.cpp
     src/main/cpp/core/archive/archive_resolver_process.cpp
     src/main/cpp/core/archive/archive_resolver_extract.cpp
+    src/main/cpp/core/luaenv/lua_env_ffi.cpp
     src/main/cpp/core/manifest/manifest_loader.cpp
     src/main/cpp/core/download/downloader.cpp
     src/main/cpp/core/download/downloader_plugin.cpp
@@ -725,6 +812,7 @@ target_link_libraries(ReqPack PRIVATE
 	CLI11::CLI11
 	CURL::libcurl
 	lmdb
+	lua_cffi
 	OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
 	${REQPACK_ZSTD_LIBRARY}
@@ -753,6 +841,7 @@ target_link_libraries(core_unit_tests PRIVATE
     CLI11::CLI11
     CURL::libcurl
     lmdb
+    lua_cffi
     OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
     ${REQPACK_ZSTD_LIBRARY}
@@ -766,6 +855,7 @@ target_link_libraries(core_integration_tests PRIVATE
     Catch2::Catch2
     CURL::libcurl
     lmdb
+    lua_cffi
     OpenSSL::Crypto
 	${REQPACK_PLATFORM_LIBS}
     ${REQPACK_ZSTD_LIBRARY}

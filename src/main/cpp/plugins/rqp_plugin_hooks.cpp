@@ -3,6 +3,7 @@
 #include "core/archive/archive_resolver.h"
 #include "core/common/network_environment.h"
 #include "core/common/temp_directory.h"
+#include "core/luaenv/lua_env_ffi.h"
 
 #include "output/logger.h"
 #include "plugins/exec_rules.h"
@@ -274,6 +275,7 @@ bool RqpPlugin::runHook(const PluginCallContext& context, const RqPackageLayout&
 
     sol::state lua;
     lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::table, sol::lib::string, sol::lib::math, sol::lib::os);
+    ensure_ffi_available(lua);
 
     sol::table contextTable = lua.create_table();
     sol::table metadataTable = lua.create_table();
@@ -418,6 +420,7 @@ bool RqpPlugin::runInstalledHook(const PluginCallContext& context, const RqpInst
 
     sol::state lua;
     lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::table, sol::lib::string, sol::lib::math, sol::lib::os);
+    ensure_ffi_available(lua);
 
     sol::table contextTable = lua.create_table();
     sol::table metadataTable = lua.create_table();

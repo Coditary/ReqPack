@@ -2,6 +2,8 @@
 
 #include <sol/sol.hpp>
 
+#include "core/luaenv/lua_env_ffi.h"
+
 #include <stdexcept>
 #include <string>
 
@@ -18,6 +20,7 @@ std::vector<ManifestEntry> ManifestLoader::load(const std::filesystem::path& man
         sol::lib::string,
         sol::lib::math
     );
+    ensure_ffi_available(lua);
 
     sol::load_result loadResult = lua.load_file(manifestPath.string());
     if (!loadResult.valid()) {

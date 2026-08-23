@@ -28,7 +28,7 @@ sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential ca-certificates cmake curl git pkg-config \
   libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
-  liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+  libffi-dev liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
 
 git clone https://github.com/Coditary/ReqPack.git
 cd ReqPack
@@ -41,7 +41,7 @@ ctest --test-dir build --output-on-failure
 ### macOS
 
 ```bash
-brew install cli11 fmt spdlog boost zstd openssl@3 lua@5.4 ccache
+brew install cli11 fmt spdlog boost zstd openssl@3 lua@5.4 libffi ccache
 
 git clone https://github.com/Coditary/ReqPack.git
 cd ReqPack

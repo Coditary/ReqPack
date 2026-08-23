@@ -102,12 +102,12 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates ccache cmake curl git pkg-config \
             libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
-            liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+            libffi-dev liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
 
       - name: Install macOS dependencies
         if: matrix.family == 'macos'
         run: |
-          brew install ccache cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4 go
+          brew install ccache cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4 libffi go
           {
             echo "BREW_PREFIX=$(brew --prefix)"
             echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)"
@@ -270,12 +270,12 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             cmake \
             libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
-            liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+            libffi-dev liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
 
       - name: Install macOS runtime dependencies
         if: matrix.family == 'macos'
         run: |
-          brew install cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4 go
+          brew install cmake cli11 fmt spdlog boost zstd openssl@3 lua@5.4 libffi go
 
       - name: Download build tree artifact
         uses: actions/download-artifact@v4
@@ -397,6 +397,7 @@ jobs:
           install: >-
             ${{ matrix.msys_package_prefix }}-toolchain
             ${{ matrix.msys_package_prefix }}-lua54
+            ${{ matrix.msys_package_prefix }}-libffi
             ${{ matrix.msys_package_prefix }}-curl
             ${{ matrix.msys_package_prefix }}-openssl
             ${{ matrix.msys_package_prefix }}-fmt

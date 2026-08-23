@@ -831,3 +831,77 @@ TEST_CASE("lua bridge blocks writes outside declared scopes under thin-layer pol
     ));
     CHECK_FALSE(std::filesystem::exists(blockedPath));
 }
+
+const char* FFI_PLUGIN = R"(
+plugin = {}
+
+function plugin.init() return true end
+function plugin.getName() return "ffi-probe" end
+function plugin.getVersion() return "1.0.0" end
+function plugin.getRequirements() return {} end
+function plugin.getCategories() return { "test" } end
+function plugin.getMissingPackages(packages) return packages end
+function plugin.install(context, packages) return true end
+function plugin.installLocal(context, path) return path ~= "" end
+function plugin.remove(context, packages) return true end
+function plugin.update(context, packages) return true end
+function plugin.outdated(context) return {} end
+
+local ffiGlobalPresent = type(ffi) == "table"
+
+function plugin.list(context)
+  local ffiModule = ffi
+  assert(type(ffiModule) == "table", "global ffi missing")
+  ffiModule.cdef("typedef struct { int a; double b; } reqpack_bridge_ffi_probe_t;")
+  return {
+    {
+      name = ffiGlobalPresent and "ffi-ok" or "ffi-global-missing",
+      version = tostring(ffiModule.sizeof("reqpack_bridge_ffi_probe_t")),
+      description = type(ffiModule.cast),
+    }
+  }
+end
+
+function plugin.search(context, prompt)
+  local ffiModule = ffi
+  return {
+    {
+      name = prompt,
+      version = tostring(ffiModule.sizeof("int")),
+      description = "ffi",
+    }
+  }
+end
+
+function plugin.info(context, package)
+  return {
+    name = package,
+    version = "1.0.0",
+    description = "ffi",
+  }
+end
+
+function plugin.shutdown() return true end
+)";
+
+TEST_CASE("lua bridge runtime exposes ffi module to plugin scripts", "[integration][lua_bridge][service][ffi]") {
+    TempDir tempDir{"reqpack-lua-bridge-ffi"};
+    ReqPackConfig config;
+    const std::filesystem::path pluginDirectory = tempDir.path() / "plugins" / "ffi";
+    const std::filesystem::path scriptPath = write_plugin_bundle(pluginDirectory, "ffi", FFI_PLUGIN);
+
+    LuaBridge bridge(scriptPath.string(), config);
+    REQUIRE(bridge.init());
+
+    const PluginCallContext context = make_context(bridge, config);
+
+    const std::vector<PackageInfo> listed = bridge.list(context);
+    REQUIRE(listed.size() == 1);
+    CHECK(listed[0].name == "ffi-ok");
+    CHECK(listed[0].version == "16");
+    CHECK(listed[0].description == "function");
+
+    const std::vector<PackageInfo> searched = bridge.search(context, "probe");
+    REQUIRE(searched.size() == 1);
+    CHECK(searched[0].version == "4");
+}

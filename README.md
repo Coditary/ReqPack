@@ -14,6 +14,7 @@ Examples in this README use `rqp`, because that is built binary name.
 
 - One command surface for multiple ecosystems.
 - Manifest-based installs via `reqpack.lua`.
+- Embedded Lua environments with a guaranteed `ffi` module (LuaJIT `ffi` when present, otherwise the vendored cffi-lua module).
 - Plugin wrappers and registry-backed plugin refresh.
 - Built-in audit and SBOM export flows.
 - Remote command server and remote client profiles.
@@ -62,6 +63,7 @@ ReqPack core currently targets:
 - CMake 3.15+.
 - C++20 compiler.
 - Lua 5.4 development files.
+- libffi (vendored cffi-lua is built and linked from source).
 - CLI11.
 - libcurl.
 - Boost.
@@ -155,7 +157,7 @@ sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   build-essential ca-certificates cmake curl git pkg-config \
   libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
-  liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+  libffi-dev liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
 
 git clone https://github.com/Coditary/ReqPack.git
 cd ReqPack
@@ -174,7 +176,7 @@ Run binary with:
 ### Option 4: Build From Source On macOS
 
 ```bash
-brew install cli11 fmt spdlog boost zstd openssl@3 lua@5.4 ccache
+brew install cli11 fmt spdlog boost zstd openssl@3 lua@5.4 libffi ccache
 
 git clone https://github.com/Coditary/ReqPack.git
 cd ReqPack
@@ -492,6 +494,23 @@ return {
     { system = "npm", name = "express", version = "4.18.0" },
   }
 }
+```
+
+## Lua Environments And FFI
+
+Every embedded Lua environment (manifests, plugin scripts, package hooks)
+always provides an `ffi` module:
+
+- On LuaJIT-based builds, the built-in LuaJIT `ffi` is used.
+- Otherwise, ReqPack bundles [cffi-lua](https://github.com/q66/cffi-lua)
+  (a portable, libffi-backed FFI that is mostly API-compatible with the
+  LuaJIT FFI) and registers it as global `ffi` and via `require("ffi")`
+  where the `package` library is open.
+
+```lua
+-- usable inside reqpack.lua manifests
+local ffi = require("ffi")
+ffi.cdef("typedef struct { int major; int minor; } version_t;")
 ```
 
 ## Minimal Config Example
