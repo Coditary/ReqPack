@@ -20,5 +20,6 @@ struct RunResultJsonDocument {
 };
 
 std::string run_result_status_for_action(ActionType action, bool success, bool dryRun);
+std::string run_result_status_skipped(ActionType action);
 std::string serialize_run_result_json(const RunResultJsonDocument& document);
 void emit_run_result_json(const RunResultJsonDocument& document);

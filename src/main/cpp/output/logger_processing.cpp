@@ -28,6 +28,7 @@ bool is_display_action(OutputAction action) {
         case OutputAction::DISPLAY_ITEM_PROGRESS:
         case OutputAction::DISPLAY_ITEM_STEP:
         case OutputAction::DISPLAY_ITEM_SUCCESS:
+        case OutputAction::DISPLAY_ITEM_SKIPPED:
         case OutputAction::DISPLAY_ITEM_FAILURE:
         case OutputAction::DISPLAY_MESSAGE:
         case OutputAction::DISPLAY_TABLE_HEADER:
@@ -176,6 +177,9 @@ void Logger::routeToDisplay(const OutputEvent& event) {
         case OutputAction::DISPLAY_ITEM_SUCCESS:
             activeDisplay->onItemSuccess(context.source);
             break;
+        case OutputAction::DISPLAY_ITEM_SKIPPED:
+            activeDisplay->onItemSkipped(context.source, context.message);
+            break;
         case OutputAction::DISPLAY_ITEM_FAILURE:
             activeDisplay->onItemFailure(context.source, context.message);
             break;
@@ -263,6 +267,7 @@ void Logger::processEvent(const OutputEvent& event) {
         case OutputAction::DISPLAY_ITEM_PROGRESS:
         case OutputAction::DISPLAY_ITEM_STEP:
         case OutputAction::DISPLAY_ITEM_SUCCESS:
+        case OutputAction::DISPLAY_ITEM_SKIPPED:
         case OutputAction::DISPLAY_ITEM_FAILURE:
         case OutputAction::DISPLAY_MESSAGE:
         case OutputAction::DISPLAY_TABLE_HEADER:

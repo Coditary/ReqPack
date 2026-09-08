@@ -31,6 +31,7 @@ std::string action_to_event_name(OutputAction action) {
 			case OutputAction::DISPLAY_ITEM_PROGRESS: return "item_progress";
 			case OutputAction::DISPLAY_ITEM_STEP: return "item_step";
 			case OutputAction::DISPLAY_ITEM_SUCCESS: return "item_success";
+			case OutputAction::DISPLAY_ITEM_SKIPPED: return "item_skipped";
 			case OutputAction::DISPLAY_ITEM_FAILURE: return "item_failure";
 		case OutputAction::DISPLAY_MESSAGE: return "display_message";
 		case OutputAction::DISPLAY_TABLE_HEADER: return "table_header";
@@ -199,6 +200,8 @@ std::string logger_render_output_event(const OutputEvent& event) {
 			return "[display:item_step] "    + event.context.source + " " + event.context.message;
 		case OutputAction::DISPLAY_ITEM_SUCCESS:
 			return "[display:item_success] " + event.context.source;
+		case OutputAction::DISPLAY_ITEM_SKIPPED:
+			return "[display:item_skipped] " + event.context.source + " " + event.context.message;
 		case OutputAction::DISPLAY_ITEM_FAILURE:
 			return "[display:item_failure] " + event.context.source + " " + event.context.message;
 		case OutputAction::DISPLAY_MESSAGE:

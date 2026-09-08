@@ -133,6 +133,10 @@ void Logger::displayItemSuccess(const std::string& itemId) {
     emit(OutputAction::DISPLAY_ITEM_SUCCESS, OutputContext{.source = itemId});
 }
 
+void Logger::displayItemSkipped(const std::string& itemId, const std::string& reason) {
+    emit(OutputAction::DISPLAY_ITEM_SKIPPED, OutputContext{.message = reason, .source = itemId});
+}
+
 void Logger::displayItemFailure(const std::string& itemId, const std::string& reason) {
     emit(OutputAction::DISPLAY_ITEM_FAILURE, OutputContext{.message = reason, .source = itemId});
 }

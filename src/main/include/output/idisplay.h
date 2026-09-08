@@ -34,6 +34,7 @@ enum class DisplayItemState {
 	PENDING,
 	RUNNING,
 	SUCCESS,
+	SKIPPED,
 	FAILED
 };
 
@@ -99,6 +100,9 @@ public:
 
 	/// Item completed successfully; progress implied 100 %.
 	virtual void onItemSuccess(const std::string& itemId) = 0;
+
+	/// Item was skipped because desired state is already satisfied.
+	virtual void onItemSkipped(const std::string& itemId, const std::string& reason) = 0;
 
 	/// Item failed.
 	/// @param reason  Optional human-readable failure description.

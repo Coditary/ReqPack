@@ -57,6 +57,11 @@ std::string run_result_status_for_action(ActionType action, bool success, bool d
 	}
 }
 
+std::string run_result_status_skipped(ActionType action) {
+	(void)action;
+	return "skipped";
+}
+
 std::string serialize_run_result_json(const RunResultJsonDocument& document) {
 	std::map<std::string, std::vector<const RunResultJsonItem*>> bySystem;
 	for (const RunResultJsonItem& item : document.items) {

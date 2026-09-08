@@ -150,6 +150,10 @@ std::string PlainDisplay::decorateFailureMarker(const std::string& text) const {
     return text;
 }
 
+std::string PlainDisplay::decorateSkippedMarker(const std::string& text) const {
+    return text;
+}
+
 std::string PlainDisplay::decorateMessage(const std::string& text) const {
     return text;
 }

@@ -30,6 +30,7 @@ protected:
 	std::string decorateStep(const std::string& step) const override;
 	std::string decorateSuccessMarker(const std::string& text) const override;
 	std::string decorateFailureMarker(const std::string& text) const override;
+	std::string decorateSkippedMarker(const std::string& text) const override;
 	std::string decorateMessage(const std::string& text) const override;
 
 private:

@@ -126,6 +126,25 @@ void PlainDisplay::onItemSuccess(const std::string& itemId) {
     out().flush();
 }
 
+void PlainDisplay::onItemSkipped(const std::string& itemId, const std::string& reason) {
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        DisplayItemStatus& status = itemMap[itemId];
+        if (status.id.empty()) {
+            status.id = itemId;
+            status.label = itemId;
+        }
+        status.step = reason.empty() ? "already installed" : reason;
+        status.state = DisplayItemState::SKIPPED;
+    }
+    out() << "  " << std::left << std::setw(LABEL_WIDTH) << itemId << "  " << decorateSkippedMarker("SKIPPED");
+    if (!reason.empty()) {
+        out() << "  " << decorateStep(reason);
+    }
+    out() << '\n';
+    out().flush();
+}
+
 void PlainDisplay::onItemFailure(const std::string& itemId, const std::string& reason) {
     bool alreadyFailed = false;
     {

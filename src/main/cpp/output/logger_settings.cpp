@@ -39,6 +39,7 @@ std::string inferred_category(const OutputEvent& event) {
         case OutputAction::DISPLAY_ITEM_PROGRESS:
         case OutputAction::DISPLAY_ITEM_STEP:
         case OutputAction::DISPLAY_ITEM_SUCCESS:
+        case OutputAction::DISPLAY_ITEM_SKIPPED:
         case OutputAction::DISPLAY_ITEM_FAILURE:
         case OutputAction::DISPLAY_MESSAGE:
         case OutputAction::DISPLAY_TABLE_HEADER:

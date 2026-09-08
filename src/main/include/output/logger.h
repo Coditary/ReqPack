@@ -61,6 +61,9 @@ enum class OutputAction {
 	/// context: source = itemId.
 	DISPLAY_ITEM_SUCCESS,
 
+	/// context: source = itemId, message = skip reason.
+	DISPLAY_ITEM_SKIPPED,
+
 	/// context: source = itemId, message = failure reason.
 	DISPLAY_ITEM_FAILURE,
 
@@ -227,6 +230,7 @@ public:
 	                        const DisplayProgressMetrics& metrics);
 	void displayItemStep   (const std::string& itemId, const std::string& step);
 	void displayItemSuccess(const std::string& itemId);
+	void displayItemSkipped(const std::string& itemId, const std::string& reason = "already installed");
 	void displayItemFailure(const std::string& itemId, const std::string& reason);
 	void displayItemFailure(const std::string& itemId, const DiagnosticMessage& diagnostic);
 	void displayDiagnostic(const DiagnosticMessage& diagnostic,

@@ -58,6 +58,10 @@ std::string ColorDisplay::decorateFailureMarker(const std::string& text) const {
 	return ansi_wrap(PlainDisplay::decorateFailureMarker(text), scheme_.failureMarker);
 }
 
+std::string ColorDisplay::decorateSkippedMarker(const std::string& text) const {
+	return ansi_wrap(PlainDisplay::decorateSkippedMarker(text), scheme_.step);
+}
+
 std::string ColorDisplay::decorateMessage(const std::string& text) const {
 	return ansi_wrap(PlainDisplay::decorateMessage(text), scheme_.message);
 }

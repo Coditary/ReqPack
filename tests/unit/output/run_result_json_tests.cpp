@@ -32,4 +32,5 @@ TEST_CASE("run result status mapping covers install remove update and dry-run", 
     CHECK(run_result_status_for_action(ActionType::UPDATE, true, false) == "updated");
     CHECK(run_result_status_for_action(ActionType::INSTALL, true, true) == "planned");
     CHECK(run_result_status_for_action(ActionType::INSTALL, false, false) == "failed");
+    CHECK(run_result_status_skipped(ActionType::INSTALL) == "skipped");
 }

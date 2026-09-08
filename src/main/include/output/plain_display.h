@@ -57,6 +57,7 @@ public:
 	void onItemStep(const std::string& itemId,
 	                const std::string& step) override;
 	void onItemSuccess(const std::string& itemId) override;
+	void onItemSkipped(const std::string& itemId, const std::string& reason) override;
 	void onItemFailure(const std::string& itemId,
 	                   const std::string& reason) override;
 
@@ -103,6 +104,9 @@ protected:
 
 	/// "[FAILED]" marker text (does NOT include the reason).
 	virtual std::string decorateFailureMarker(const std::string& text) const;
+
+	/// "SKIPPED" marker text.
+	virtual std::string decorateSkippedMarker(const std::string& text) const;
 
 	/// Generic informational message text.
 	virtual std::string decorateMessage(const std::string& text) const;
