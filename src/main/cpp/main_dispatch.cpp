@@ -5,6 +5,8 @@
 #include "main_self_update.h"
 #include "main_stdin.h"
 
+#include "core/common/types.h"
+
 #include "cli/cli.h"
 #include "core/common/build_info.h"
 #include "core/execution/orchestrator.h"
@@ -53,8 +55,29 @@ int run_info_command(const ReqPackConfig& config, Logger& logger) {
 
 }  // namespace
 
+namespace {
+
+void apply_request_security_policy(
+    ReqPackConfig& config,
+    const std::vector<Request>& requests,
+    const ReqPackConfigOverrides& configOverrides
+) {
+    if (configOverrides.securityEnabled.has_value()) {
+        return;
+    }
+
+    for (const Request& request : requests) {
+        if (request.action == ActionType::AUDIT) {
+            config.security.enabled = true;
+            return;
+        }
+    }
+}
+
+}  // namespace
+
 int dispatch_main_command(Cli& cli,
-                          const ReqPackConfig& config,
+                          ReqPackConfig& config,
                           const std::filesystem::path& configPath,
                           const ReqPackConfigOverrides& configOverrides,
                           Logger& logger,
@@ -213,6 +236,8 @@ int dispatch_main_command(Cli& cli,
         logger.flushSync();
         return 0;
     }
+
+    apply_request_security_policy(config, requests, configOverrides);
 
     Orchestrator orchestrator(requests, config);
     const int result = orchestrator.run();

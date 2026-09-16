@@ -54,6 +54,7 @@ jobs:
           cmake -S . -B "${COVERAGE_BUILD_DIR}" \
             -DCMAKE_BUILD_TYPE=Debug \
             -DREQPACK_ENABLE_COVERAGE=ON \
+            -DRQP_SECURITY_CORE_BUILD_TESTS=ON \
             -DREQPACK_GO_EXECUTABLE="$(command -v go)" \
             -DSOL2_INCLUDE_DIR="${SOL2_INCLUDE_DIR}"
 

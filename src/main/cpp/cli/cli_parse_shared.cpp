@@ -1,24 +1,13 @@
 #include "cli_parse_shared.h"
 
 #include "cli/cli.h"
+#include "core/common/action_tokens.h"
 #include "core/manifest/manifest_loader.h"
 
 #include <algorithm>
 #include <cctype>
 
 namespace {
-
-bool is_install_command_token(const std::string& normalizedCommand) {
-    return normalizedCommand == "install" || normalizedCommand == "i";
-}
-
-bool is_remove_command_token(const std::string& normalizedCommand) {
-    return normalizedCommand == "remove" || normalizedCommand == "rm";
-}
-
-bool is_update_command_token(const std::string& normalizedCommand) {
-    return normalizedCommand == "update" || normalizedCommand == "up";
-}
 
 bool matches_flag_name(const std::string& argument, const std::string& name) {
     return argument == name || argument.rfind(name + "=", 0) == 0;
@@ -33,58 +22,6 @@ std::string to_lower_copy(std::string value) {
         return static_cast<char>(std::tolower(c));
     });
     return value;
-}
-
-ActionType parse_action_token(const std::string& command) {
-    const std::string normalizedCommand = to_lower_copy(command);
-
-    if (is_install_command_token(normalizedCommand)) {
-        return ActionType::INSTALL;
-    }
-    if (is_remove_command_token(normalizedCommand)) {
-        return ActionType::REMOVE;
-    }
-    if (is_update_command_token(normalizedCommand)) {
-        return ActionType::UPDATE;
-    }
-    if (normalizedCommand == "search") {
-        return ActionType::SEARCH;
-    }
-    if (normalizedCommand == "list") {
-        return ActionType::LIST;
-    }
-    if (normalizedCommand == "info") {
-        return ActionType::INFO;
-    }
-    if (normalizedCommand == "ensure") {
-        return ActionType::ENSURE;
-    }
-    if (normalizedCommand == "sbom") {
-        return ActionType::SBOM;
-    }
-    if (normalizedCommand == "audit") {
-        return ActionType::AUDIT;
-    }
-    if (normalizedCommand == "outdated") {
-        return ActionType::OUTDATED;
-    }
-    if (normalizedCommand == "host") {
-        return ActionType::HOST;
-    }
-    if (normalizedCommand == "snapshot") {
-        return ActionType::SNAPSHOT;
-    }
-    if (normalizedCommand == "pack") {
-        return ActionType::PACK;
-    }
-    if (normalizedCommand == "serve") {
-        return ActionType::SERVE;
-    }
-    if (normalizedCommand == "remote") {
-        return ActionType::REMOTE;
-    }
-
-    return ActionType::UNKNOWN;
 }
 
 bool is_flag_argument(const std::string& argument) {
@@ -208,7 +145,7 @@ bool update_command_has_package_mode_flag(const std::vector<std::string>& argume
     bool updateSeen = false;
     for (const std::string& argument : arguments) {
         if (!updateSeen) {
-            if (is_update_command_token(to_lower_copy(argument))) {
+            if (parse_action_token(argument) == ActionType::UPDATE) {
                 updateSeen = true;
             }
             continue;
@@ -252,7 +189,7 @@ bool current_system_prefers_package_tokens(const std::string& currentSystem, Act
 }  // namespace cli_internal
 
 ActionType Cli::parse_action(const std::string& command) {
-    return cli_internal::parse_action_token(command);
+    return parse_action_token(command);
 }
 
 bool Cli::is_flag(const std::string& argument) {

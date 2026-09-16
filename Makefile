@@ -1,10 +1,10 @@
-.PHONY: all clean run build test test-unit test-smoke coverage-build test-coverage profile-build profile-tests system-tests system-tests-parallel
+.PHONY: all clean run build test test-unit test-smoke coverage-build test-coverage profile-build profile-tests profile-ground system-tests system-tests-parallel
 
 NPROC := $(shell command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 JOBS := $(shell expr $(NPROC) / 4)
 COVERAGE_BUILD_DIR := build/coverage
 PROFILE_BUILD_DIR := build/profile
-PROFILE_TEST_BINARIES := core_unit_tests exec_rules_unit_tests core_integration_tests
+PROFILE_TEST_BINARIES := reqpack_cli_unit_tests
 PROFILE_GPROF_RUNS := 5
 PYTHON := python3
 LOCAL_BUILD_CMAKE_ARGS := -DREQPACK_LINK_STATIC_LUA:BOOL=OFF -DCMAKE_EXE_LINKER_FLAGS:STRING=
@@ -28,7 +28,7 @@ test: all
 	@ctest --test-dir build --output-on-failure
 
 test-unit: all
-	@ctest --test-dir build --output-on-failure -R "^unit::"
+	@ctest --test-dir build --output-on-failure -R "^cli::unit::"
 
 test-smoke: all
 	@ctest --test-dir build --output-on-failure -R "^integration::"
@@ -40,17 +40,20 @@ system-tests-parallel:
 	@JOBS="$(LOCAL_SYSTEM_TEST_JOBS)" LOCAL_SYSTEM_TEST_BUILD_JOBS="$(LOCAL_SYSTEM_TEST_BUILD_JOBS)" bash scripts/run-all-local-system-tests-parallel.sh $(LOCAL_SYSTEM_TEST_SCENARIOS)
 
 coverage-build:
-	cmake -S . -B $(COVERAGE_BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug -DREQPACK_ENABLE_COVERAGE=ON
+	cmake -S . -B $(COVERAGE_BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug -DREQPACK_ENABLE_COVERAGE=ON -DRQP_SECURITY_CORE_BUILD_TESTS=ON
 	cmake --build $(COVERAGE_BUILD_DIR) -j$(JOBS)
 
 test-coverage: coverage-build
-	@ctest --test-dir $(COVERAGE_BUILD_DIR) --output-on-failure
-	@ctest --test-dir $(COVERAGE_BUILD_DIR) -T Coverage
-	@$(PYTHON) tests/coverage_summary.py $(COVERAGE_BUILD_DIR) .
+	@ctest --test-dir $(COVERAGE_BUILD_DIR) --output-on-failure -R '^cli::unit::'
+	@$(PYTHON) tests/coverage_summary.py $(COVERAGE_BUILD_DIR) . \
+		--badge-json .github/badges/coverage.json | tee coverage-summary.txt
 
 profile-build:
 	cmake -S . -B $(PROFILE_BUILD_DIR) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DREQPACK_ENABLE_PROFILING=ON
 	cmake --build $(PROFILE_BUILD_DIR) -j$(JOBS)
+
+profile-ground: profile-build
+	@bash scripts/profile-ground.sh
 
 profile-tests: profile-build
 	@cmake -E make_directory $(PROFILE_BUILD_DIR)/profile-data

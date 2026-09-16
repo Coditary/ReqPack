@@ -5,7 +5,7 @@ scenario_prepare() {
     write_plugin_bundle "${REGISTRY_SOURCE_DIR}" "quill" "$(base_quill_plugin)"
     write_base_fake_binaries
     create_test_config false true
-    rm -rf "${PLUGIN_DIR}/moss" "${PLUGIN_DIR}/quill"
+    rqp --config "${CONFIG_PATH}" install moss quill
 }
 
 scenario_command() {

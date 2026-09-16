@@ -46,7 +46,7 @@ rqp snapshot --output reqpack.lua
 | Use custom config | `rqp --config ~/.config/reqpack/dev.lua ...` |
 | Use custom registry or plugin dir | `rqp --registry ./registry --plugin-dir ./plugins ...` |
 | Override proxy target | `rqp -Dproxy.java.default=gradle install java ...` |
-| Strict security gate | `--abort-on-unsafe --severity-threshold high --fail-on-unresolved-version` |
+| Strict security gate | `install ... --audit --abort-on-unsafe --severity-threshold high --fail-on-unresolved-version` |
 | Write structured logs | `--verbose --log-level debug --structured-log-file ./reqpack.jsonl` |
 | Export audit file | `rqp audit . --format sarif --output audit.sarif` |
 | Export SBOM file | `rqp sbom . --format cyclonedx-json --output sbom.json` |
@@ -114,7 +114,7 @@ Each archive currently contains `rqp` binary and `SHA256SUMS` is published along
 curl -fsSL https://raw.githubusercontent.com/Coditary/ReqPack/main/install.sh | sh
 ```
 
-`install.sh` detects OS and architecture, downloads matching release binary, installs it to `~/.local/bin/rqp`, writes default self-update config if missing, then runs initial `rqp update --all` and `rqp host refresh`.
+`install.sh` detects OS and architecture, downloads matching release binary, installs it to `~/.local/bin/rqp`, writes default self-update config if missing, then runs `rqp update --all` to refresh already-installed plugin wrappers and `rqp host refresh`.
 
 If you prefer manual asset installation:
 
@@ -261,7 +261,7 @@ rqp update apt:curl npm:express
 Update behavior is worth knowing:
 
 - `rqp update` refreshes local registry first, then downloads ReqPack release binary for current host from configured release source.
-- `rqp update --all` refreshes all known plugin wrappers.
+- `rqp update --all` refreshes all installed plugin wrappers, ordered by plugin dependencies.
 - `rqp update <system>` without package names refreshes that plugin wrapper.
 - `rqp update <system> --all` updates all packages for that system.
 - `rqp update sys <tool>` updates package-manager binary itself through ReqPack wrapper layer.
@@ -286,7 +286,7 @@ Global runtime overrides accepted by CLI parser:
 
 - config and registry: `--config <path>`, `--registry <path>`, `--registry-path <path>`, `--plugin-dir <path>`, `--no-auto-load-plugins`, `--no-proxy-expansion`, `-Dproxy.<name>.default=<target>`
 - execution and interaction: `--dry-run`, `--jobs <n>`, `--jobs-max`, `--stop-on-first-failure`, `--no-transaction-db`, `--non-interactive`, `--archive-password <value>`
-- security and audit policy: `--prompt-on-unsafe`, `--abort-on-unsafe`, `--severity-threshold <low|medium|high|critical>`, `--score-threshold <0.0-10.0>`, `--osv-db <path>`, `--osv-feed <url-or-path>`, `--osv-refresh <manual|periodic|always>`, `--osv-refresh-interval <seconds>`, `--osv-overlay <path>`, `--ignore-vuln <id>`, `--allow-vuln <id>`, `--fail-on-unresolved-version`, `--prompt-on-unresolved-version`, `--strict-ecosystem-mapping`, `--include-withdrawn-in-report`, `--report`, `--report-format <none|json|cyclonedx>`, `--report-output <path>`
+- security and audit policy: `--audit`, `--no-security`, `--prompt-on-unsafe`, `--abort-on-unsafe`, `--severity-threshold <low|medium|high|critical>`, `--score-threshold <0.0-10.0>`, `--osv-db <path>`, `--osv-feed <url-or-path>`, `--osv-refresh <manual|periodic|always>`, `--osv-refresh-interval <seconds>`, `--osv-overlay <path>`, `--ignore-vuln <id>`, `--allow-vuln <id>`, `--fail-on-unresolved-version`, `--prompt-on-unresolved-version`, `--strict-ecosystem-mapping`, `--include-withdrawn-in-report`, `--report`, `--report-format <none|json|cyclonedx>`, `--report-output <path>`
 - logging: `--log-level <trace|debug|info|warn|error|critical>`, `--log-console`, `--no-log-console`, `--verbose`, `--log-pattern <value>`, `--log-file <path>`, `--structured-log-file <path>`, `--log-capture-display`, `--no-log-capture-display`, `--log-category <name>`, `--backtrace`
 - SBOM defaults and export behavior: `--sbom-format <table|json|cyclonedx-json>`, `--sbom-output <path>`, `--sbom-no-pretty`, `--sbom-no-dependency-edges`, `--sbom-skip-missing-packages`, `--sbom-fail-on-missing-package`
 
@@ -527,11 +527,14 @@ return {
     jobsMode = "fixed",
   },
   security = {
+    enabled = true,
     onUnsafe = "prompt",
     severityThreshold = "critical",
   },
   registry = {
     remoteUrl = "https://github.com/Coditary/rqp-registry.git",
+    refreshMode = "periodic",
+    refreshIntervalSeconds = 3600,
   },
   selfUpdate = {
     releaseApiBaseUrl = "https://api.github.com",
@@ -545,8 +548,9 @@ Useful config areas for daily use:
 
 - `interaction.interactive`
 - `execution.jobs` and `execution.jobsMode`
-- `security.onUnsafe`, `security.severityThreshold`, `security.scoreThreshold`
+- `security.enabled` (default: off; use `--audit` or `security.enabled = true` in config), `security.onUnsafe`, `security.severityThreshold`, `security.scoreThreshold`
 - `registry.remoteUrl`, `registry.pluginDirectory`, `registry.sources`
+- `registry.refreshMode` (`manual`, `periodic`, `always`) and `registry.refreshIntervalSeconds` (default: periodic, 3600s)
 - `selfUpdate.repoUrl`, `selfUpdate.releaseApiBaseUrl`, `selfUpdate.releaseTag`, `selfUpdate.linkPath`
 - `sbom.defaultFormat`, `sbom.defaultOutputPath`
 

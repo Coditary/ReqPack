@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/common/action_tokens.h"
 #include "core/common/types.h"
 #include "core/config/configuration.h"
 
@@ -13,7 +14,6 @@
 namespace cli_internal {
 
 std::string to_lower_copy(std::string value);
-ActionType parse_action_token(const std::string& command);
 bool is_flag_argument(const std::string& argument);
 bool is_help_flag_argument(const std::string& argument);
 

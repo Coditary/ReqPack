@@ -32,35 +32,12 @@ inline std::string escape_shell_arg(const std::string& value) {
     return escaped;
 }
 
-inline std::string run_command_capture(const std::string& command) {
-    FILE* pipe = popen(command.c_str(), "r");
-    if (pipe == nullptr) {
-        throw std::runtime_error("failed to run command: " + command);
-    }
-
-    std::string output;
-    char buffer[4096];
-    while (std::fgets(buffer, static_cast<int>(sizeof(buffer)), pipe) != nullptr) {
-        output += buffer;
-    }
-
-    const int status = pclose(pipe);
-    if (status == -1) {
-        throw std::runtime_error("failed to close command pipe: " + command);
-    }
-    return output;
-}
-
 inline std::filesystem::path repo_root() {
     return std::filesystem::path(REQPACK_TEST_REPO_ROOT);
 }
 
 inline std::filesystem::path build_root() {
     return std::filesystem::path(REQPACK_TEST_BUILD_DIR);
-}
-
-inline std::string hermetic_config_cli_arg() {
-    return " --config " + escape_shell_arg((repo_root() / "tests" / "fixtures" / "hermetic-config.lua").string());
 }
 
 inline void set_test_environment_value(const std::string& name, const std::optional<std::string>& value) {

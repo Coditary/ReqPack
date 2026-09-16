@@ -4,6 +4,7 @@
 
 #include "cli/cli.h"
 #include "core/config/configuration.h"
+#include "core/security/security_bridge.h"
 #include "core/plugins/plugin_test_runner.h"
 #include "output/display_factory.h"
 #include "output/logger.h"
@@ -90,6 +91,7 @@ int main(int argc, char* argv[]) {
 
     Logger& logger = Logger::instance();
     configure_logger_from_config(logger, config);
+    wire_reqpack_security_runtime();
     if (config.display.jsonOutput) {
         logger.setJsonOutputMode(true);
         logger.setConsoleOutput(false);

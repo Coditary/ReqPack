@@ -577,9 +577,18 @@ std::vector<Request> parse_arguments(const std::vector<std::string>& arguments, 
     }
 
     if (action == ActionType::UPDATE && requests.empty() && has_flag(global_flags, "all")) {
-        for (const std::string& plugin : discover_non_builtin_plugins(config)) {
-            Request request{.action = action, .system = plugin, .flags = global_flags};
+        const std::vector<std::string> installedPlugins = discover_installed_plugins(config);
+        if (!installedPlugins.empty()) {
+            for (const std::string& plugin : installedPlugins) {
+                Request request{.action = action, .system = plugin, .flags = global_flags};
+                request.flags.push_back("__reqpack-internal-plugin-refresh-all");
+                requests.push_back(std::move(request));
+            }
+        } else {
+            Request request{.action = action, .flags = global_flags};
+            request.flags.push_back("all");
             request.flags.push_back("__reqpack-internal-plugin-refresh-all");
+            request.flags.push_back("__reqpack-internal-update-all-expand");
             requests.push_back(std::move(request));
         }
     }

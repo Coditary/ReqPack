@@ -45,6 +45,11 @@ public:
         successes.push_back(itemId);
     }
 
+    void onItemSkipped(const std::string& itemId, const std::string& reason) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        skips.emplace_back(itemId, reason);
+    }
+
     void onItemFailure(const std::string& itemId, const std::string& reason) override {
         std::lock_guard<std::mutex> lock(mutex_);
         failures.emplace_back(itemId, reason);
@@ -63,6 +68,7 @@ public:
     std::vector<std::pair<std::string, DisplayProgressMetrics>> progresses;
     std::vector<std::pair<std::string, std::string>> steps;
     std::vector<std::string> successes;
+    std::vector<std::pair<std::string, std::string>> skips;
     std::vector<std::pair<std::string, std::string>> failures;
     std::vector<DisplayMessageRecord> messages;
 
@@ -151,6 +157,7 @@ TEST_CASE("logger preserves trailing empty table cells", "[unit][logger][display
         void onItemProgress(const std::string&, const DisplayProgressMetrics&) override {}
         void onItemStep(const std::string&, const std::string&) override {}
         void onItemSuccess(const std::string&) override {}
+        void onItemSkipped(const std::string&, const std::string&) override {}
         void onItemFailure(const std::string&, const std::string&) override {}
         void onMessage(const std::string&, const std::string&) override {}
         void onTableBegin(const std::vector<std::string>& headers) override {

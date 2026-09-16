@@ -5,7 +5,11 @@
 #include "core/plugins/plugin_bundle.h"
 #include "core/registry/registry_database_core.h"
 
+#include <algorithm>
 #include <filesystem>
+#include <map>
+#include <set>
+#include <vector>
 
 namespace {
 
@@ -44,6 +48,83 @@ void append_system_aliases(const ReqPackConfig& config, std::set<std::string>& s
     }
 }
 
+std::set<std::string> collect_installed_plugin_names(const ReqPackConfig& config) {
+    std::set<std::string> systems;
+    collect_plugin_bundle_systems(config.registry.pluginDirectory, systems);
+
+    std::set<std::string> filtered;
+    for (const std::string& name : systems) {
+        if (is_non_builtin_plugin_name(name)) {
+            filtered.insert(name);
+        }
+    }
+    return filtered;
+}
+
+std::vector<std::string> order_plugins_by_dependencies(const ReqPackConfig& config, const std::set<std::string>& plugins) {
+    if (plugins.empty()) {
+        return {};
+    }
+
+    std::map<std::string, int> inDegree;
+    std::map<std::string, std::set<std::string>> dependents;
+    for (const std::string& plugin : plugins) {
+        inDegree.emplace(plugin, 0);
+    }
+
+    for (const std::string& plugin : plugins) {
+        const std::optional<PluginBundleLayout> layout = plugin_bundle_find_installed(config, plugin);
+        if (!layout.has_value()) {
+            continue;
+        }
+
+        for (const Package& dependency : plugin_bundle_dependency_packages(layout.value())) {
+            const std::string dependencyPlugin = cli_internal::to_lower_copy(dependency.system);
+            if (!is_non_builtin_plugin_name(dependencyPlugin) || !plugins.contains(dependencyPlugin) || dependencyPlugin == plugin) {
+                continue;
+            }
+
+            if (!dependents[dependencyPlugin].contains(plugin)) {
+                dependents[dependencyPlugin].insert(plugin);
+                ++inDegree[plugin];
+            }
+        }
+    }
+
+    std::vector<std::string> ordered;
+    std::set<std::string> ready;
+    for (const auto& [plugin, degree] : inDegree) {
+        if (degree == 0) {
+            ready.insert(plugin);
+        }
+    }
+
+    while (!ready.empty()) {
+        const std::string next = *ready.begin();
+        ready.erase(next);
+        ordered.push_back(next);
+
+        for (const std::string& dependent : dependents[next]) {
+            if (--inDegree[dependent] == 0) {
+                ready.insert(dependent);
+            }
+        }
+    }
+
+    if (ordered.size() < plugins.size()) {
+        std::vector<std::string> remaining;
+        for (const std::string& plugin : plugins) {
+            if (std::find(ordered.begin(), ordered.end(), plugin) == ordered.end()) {
+                remaining.push_back(plugin);
+            }
+        }
+        std::sort(remaining.begin(), remaining.end());
+        ordered.insert(ordered.end(), remaining.begin(), remaining.end());
+    }
+
+    return ordered;
+}
+
 }  // namespace
 
 namespace cli_internal {
@@ -71,52 +152,8 @@ std::set<std::string> discover_primary_systems(const ReqPackConfig& config) {
     return systems;
 }
 
-std::set<std::string> discover_non_builtin_plugins(const ReqPackConfig& config) {
-    std::set<std::string> systems;
-    const RegistrySourceMap configuredSources = collect_explicit_registry_sources(config);
-
-    ReqPackConfig mainRegistryConfig = config;
-    mainRegistryConfig.registry.sources.clear();
-    mainRegistryConfig.downloader.pluginSources.clear();
-
-    RegistryDatabase registryDatabase(mainRegistryConfig);
-    const bool mainRegistryReady = registryDatabase.refreshMainRegistry();
-
-    for (const auto& [name, entry] : configuredSources) {
-        const std::string normalizedName = to_lower_copy(name);
-        if (!entry.alias && is_non_builtin_plugin_name(normalizedName)) {
-            systems.insert(normalizedName);
-        }
-    }
-
-    if (std::filesystem::exists(config.registry.pluginDirectory)) {
-        for (const auto& entry : std::filesystem::directory_iterator(config.registry.pluginDirectory)) {
-            if (!entry.is_directory()) {
-                continue;
-            }
-
-            const auto layout = plugin_bundle_read_directory(entry.path());
-            if (!layout.has_value()) {
-                continue;
-            }
-
-            const std::string name = to_lower_copy(layout->metadata.name);
-            if (is_non_builtin_plugin_name(name)) {
-                systems.insert(name);
-            }
-        }
-    }
-
-    if (systems.empty() && mainRegistryReady) {
-        for (const RegistryRecord& record : registryDatabase.getAllRecords()) {
-            const std::string name = to_lower_copy(record.name);
-            if (!record.alias && !registry_record_is_package_entry(record) && is_non_builtin_plugin_name(name)) {
-                systems.insert(name);
-            }
-        }
-    }
-
-    return systems;
+std::vector<std::string> discover_installed_plugins(const ReqPackConfig& config) {
+    return order_plugins_by_dependencies(config, collect_installed_plugin_names(config));
 }
 
 std::set<std::string> discover_systems(const ReqPackConfig& config) {
@@ -151,8 +188,8 @@ std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config)
     return cli_internal::discover_primary_systems(config);
 }
 
-std::set<std::string> Cli::discover_non_builtin_plugins(const ReqPackConfig& config) {
-    return cli_internal::discover_non_builtin_plugins(config);
+std::vector<std::string> Cli::discover_installed_plugins(const ReqPackConfig& config) {
+    return cli_internal::discover_installed_plugins(config);
 }
 
 std::set<std::string> Cli::discover_systems(const ReqPackConfig& config) {

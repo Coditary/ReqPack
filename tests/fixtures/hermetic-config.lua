@@ -1,5 +1,0 @@
-return {
-  logging = {
-    fileOutput = false,
-  },
-}

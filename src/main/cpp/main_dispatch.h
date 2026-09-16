@@ -10,7 +10,7 @@ class Logger;
 class IDisplay;
 
 int dispatch_main_command(Cli& cli,
-                          const ReqPackConfig& config,
+                          ReqPackConfig& config,
                           const std::filesystem::path& configPath,
                           const ReqPackConfigOverrides& configOverrides,
                           Logger& logger,

@@ -4,3 +4,4 @@ docs/
 rqp-plugins/
 
 build-check
+build-local/

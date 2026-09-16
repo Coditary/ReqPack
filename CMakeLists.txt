@@ -174,6 +174,45 @@ add_library(lmdb STATIC
 set_target_properties(lmdb PROPERTIES LINKER_LANGUAGE C)
 target_include_directories(lmdb PUBLIC ${lmdb_SOURCE_DIR}/libraries/liblmdb)
 
+set(REQPACK_SECURITY_CORE_REPO
+    "https://github.com/Coditary/reqpack-security-core.git"
+    CACHE STRING "Git repository for reqpack-security-core when not available locally"
+)
+set(REQPACK_SECURITY_CORE_TAG
+    "main"
+    CACHE STRING "Git tag, branch, or commit for reqpack-security-core FetchContent fallback"
+)
+set(REQPACK_SECURITY_CORE_DIR
+    ""
+    CACHE PATH "Optional local checkout of reqpack-security-core (skips FetchContent when valid)"
+)
+
+set(_reqpack_security_core_local "${CMAKE_CURRENT_SOURCE_DIR}/../reqpack-security-core")
+if(REQPACK_SECURITY_CORE_DIR AND EXISTS "${REQPACK_SECURITY_CORE_DIR}/CMakeLists.txt")
+    set(REQPACK_SECURITY_CORE_SOURCE_DIR "${REQPACK_SECURITY_CORE_DIR}")
+    message(STATUS "Using local reqpack-security-core: ${REQPACK_SECURITY_CORE_SOURCE_DIR}")
+elseif(EXISTS "${_reqpack_security_core_local}/CMakeLists.txt")
+    set(REQPACK_SECURITY_CORE_SOURCE_DIR "${_reqpack_security_core_local}")
+    message(STATUS "Using sibling reqpack-security-core: ${REQPACK_SECURITY_CORE_SOURCE_DIR}")
+else()
+    message(STATUS "Fetching reqpack-security-core from ${REQPACK_SECURITY_CORE_REPO} (${REQPACK_SECURITY_CORE_TAG})")
+    FetchContent_Declare(
+        reqpack_security_core
+        GIT_REPOSITORY ${REQPACK_SECURITY_CORE_REPO}
+        GIT_TAG ${REQPACK_SECURITY_CORE_TAG}
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(reqpack_security_core)
+    set(REQPACK_SECURITY_CORE_SOURCE_DIR "${reqpack_security_core_SOURCE_DIR}")
+endif()
+
+if(NOT TARGET reqpack_security_core)
+    add_subdirectory(
+        ${REQPACK_SECURITY_CORE_SOURCE_DIR}
+        ${CMAKE_BINARY_DIR}/reqpack-security-core-build
+    )
+endif()
+
 # libffi backs the vendored cffi-lua module (Lua FFI for non-LuaJIT environments).
 find_path(REQPACK_FFI_INCLUDE_DIR
     NAMES ffi.h
@@ -278,7 +317,84 @@ if(LUA_INCLUDE_DIR AND NOT LUA_INCLUDE_DIR STREQUAL "/usr/include")
     list(APPEND REQPACK_PRIVATE_INCLUDE_DIRS ${LUA_INCLUDE_DIR})
 endif()
 
-set(SOURCES
+set(REQPACK_CORE_REPO
+    "https://github.com/Coditary/ReqPack-Core.git"
+    CACHE STRING "Git repository for ReqPack-Core when not available locally"
+)
+set(REQPACK_CORE_TAG
+    "main"
+    CACHE STRING "Git tag, branch, or commit for ReqPack-Core FetchContent fallback"
+)
+set(REQPACK_CORE_DIR
+    ""
+    CACHE PATH "Optional local checkout of ReqPack-Core (skips FetchContent when valid)"
+)
+
+set(_reqpack_core_local "${CMAKE_CURRENT_SOURCE_DIR}/../ReqPack-Core")
+if(REQPACK_CORE_DIR AND EXISTS "${REQPACK_CORE_DIR}/CMakeLists.txt")
+    set(REQPACK_CORE_SOURCE_DIR "${REQPACK_CORE_DIR}")
+    message(STATUS "Using local ReqPack-Core: ${REQPACK_CORE_SOURCE_DIR}")
+elseif(EXISTS "${_reqpack_core_local}/CMakeLists.txt")
+    set(REQPACK_CORE_SOURCE_DIR "${_reqpack_core_local}")
+    message(STATUS "Using sibling ReqPack-Core: ${REQPACK_CORE_SOURCE_DIR}")
+else()
+    message(STATUS "Fetching ReqPack-Core from ${REQPACK_CORE_REPO} (${REQPACK_CORE_TAG})")
+    FetchContent_Declare(
+        reqpack_core
+        GIT_REPOSITORY ${REQPACK_CORE_REPO}
+        GIT_TAG ${REQPACK_CORE_TAG}
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(reqpack_core)
+    set(REQPACK_CORE_SOURCE_DIR "${reqpack_core_SOURCE_DIR}")
+endif()
+
+set(REQPACK_CLI_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH "ReqPack CLI repository path" FORCE)
+set(REQPACK_CORE_BUILD_TESTS OFF CACHE BOOL "Build ReqPack-Core tests from the CLI repo" FORCE)
+set(REQPACK_CORE_TEST_BUILD_DIR "${CMAKE_BINARY_DIR}" CACHE INTERNAL "Build dir used by core integration tests for the rqp binary")
+if(SOL2_INCLUDE_DIR)
+    set(SOL2_INCLUDE_DIR_OVERRIDE "${SOL2_INCLUDE_DIR}" CACHE INTERNAL "")
+endif()
+
+if(NOT TARGET reqpack_core)
+    add_subdirectory(
+        ${REQPACK_CORE_SOURCE_DIR}
+        ${CMAKE_BINARY_DIR}/ReqPack-Core-build
+    )
+endif()
+
+file(GLOB REQPACK_OUTPUT_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/output/*.cpp"
+)
+add_library(reqpack_output STATIC ${REQPACK_OUTPUT_SOURCES})
+target_include_directories(reqpack_output
+    PUBLIC
+        src/main/include
+        ${REQPACK_CORE_SOURCE_DIR}/src/main/include
+)
+target_link_libraries(reqpack_output PUBLIC
+    reqpack_security_core
+    ${REQPACK_SPDLOG_TARGET}
+    ${REQPACK_FMT_TARGET}
+)
+target_include_directories(reqpack_core PUBLIC src/main/include)
+target_link_libraries(reqpack_core PUBLIC reqpack_output)
+
+file(GLOB REQPACK_CLI_LIB_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/cli/*.cpp"
+)
+add_library(reqpack_cli STATIC ${REQPACK_CLI_LIB_SOURCES})
+target_include_directories(reqpack_cli
+    PUBLIC src/main/include
+    PRIVATE src/main/cpp/cli
+)
+target_link_libraries(reqpack_cli PUBLIC
+    reqpack_core
+    reqpack_output
+    CLI11::CLI11
+)
+
+set(REQPACK_CLI_SOURCES
     src/main/cpp/main.cpp
     src/main/cpp/main_arg_parsing.cpp
     src/main/cpp/main_diagnostics.cpp
@@ -287,564 +403,46 @@ set(SOURCES
     src/main/cpp/main_self_update_support.cpp
     src/main/cpp/main_self_update_release.cpp
     src/main/cpp/main_stdin.cpp
-    src/main/cpp/cli/cli.cpp
-    src/main/cpp/cli/cli_help_text.cpp
-    src/main/cpp/cli/cli_parse_core.cpp
-    src/main/cpp/cli/cli_parse_shared.cpp
-    src/main/cpp/cli/cli_system_discovery.cpp
-    src/main/cpp/output/logger.cpp
-    src/main/cpp/output/logger_processing.cpp
-    src/main/cpp/output/logger_settings.cpp
-    src/main/cpp/output/logger_emit.cpp
-    src/main/cpp/output/logger_core.cpp
-    src/main/cpp/output/command_output.cpp
-    src/main/cpp/output/command_output_projection.cpp
-    src/main/cpp/output/command_output_render.cpp
-    src/main/cpp/output/run_result_json.cpp
-    src/main/cpp/output/ansi_color.cpp
-    src/main/cpp/output/plain_display.cpp
-    src/main/cpp/output/plain_display_session.cpp
-    src/main/cpp/output/plain_display_table.cpp
-    src/main/cpp/output/color_display.cpp
-    src/main/cpp/output/display_factory.cpp
-    src/main/cpp/plugins/exec_rules.cpp
-    src/main/cpp/plugins/exec_rules_core.cpp
-    src/main/cpp/plugins/lua_bridge.cpp
-    src/main/cpp/plugins/lua_bridge_bindings.cpp
-    src/main/cpp/plugins/lua_bridge_execution_policy.cpp
-    src/main/cpp/plugins/lua_bridge_host_runtime.cpp
-    src/main/cpp/plugins/lua_bridge_host_runtime_execution.cpp
-    src/main/cpp/plugins/lua_bridge_host_runtime_events.cpp
-    src/main/cpp/plugins/lua_bridge_plugin_api.cpp
-    src/main/cpp/plugins/lua_bridge_runtime.cpp
-    src/main/cpp/plugins/lua_bridge_value_mapper.cpp
-    src/main/cpp/plugins/rqp_plugin.cpp
-    src/main/cpp/plugins/rqp_plugin_query.cpp
-    src/main/cpp/plugins/rqp_plugin_install.cpp
-    src/main/cpp/plugins/rqp_plugin_repository.cpp
-    src/main/cpp/plugins/rqp_plugin_hooks.cpp
-    src/main/cpp/plugins/rqp_plugin_state.cpp
-    src/main/cpp/plugins/rqp_plugin_pack.cpp
-    src/main/cpp/core/archive/archive_resolver.cpp
-    src/main/cpp/core/archive/archive_resolver_process.cpp
-    src/main/cpp/core/archive/archive_resolver_extract.cpp
-    src/main/cpp/core/common/network_environment.cpp
-    src/main/cpp/core/common/process_runner.cpp
-    src/main/cpp/core/common/pipe_helpers.cpp
-    src/main/cpp/core/common/version_compare.cpp
-    src/main/cpp/core/config/configuration.cpp
-    src/main/cpp/core/config/configuration_cli_overrides.cpp
-    src/main/cpp/core/config/configuration_loader.cpp
-    src/main/cpp/core/config/configuration_lua_values.cpp
-    src/main/cpp/core/config/configuration_paths.cpp
-    src/main/cpp/core/config/configuration_registry_sources.cpp
-    src/main/cpp/core/download/downloader.cpp
-    src/main/cpp/core/download/downloader_plugin.cpp
-    src/main/cpp/core/download/downloader_plugin_materialize.cpp
-    src/main/cpp/core/download/downloader_transfer.cpp
-    src/main/cpp/core/download/downloader_transfer_progress.cpp
-    src/main/cpp/core/download/downloader_core.cpp
-    src/main/cpp/core/execution/executor.cpp
-    src/main/cpp/core/execution/executor_dispatch.cpp
-    src/main/cpp/core/execution/executor_history_sync.cpp
-    src/main/cpp/core/execution/executor_parallel.cpp
-    src/main/cpp/core/execution/executor_query_ops.cpp
-    src/main/cpp/core/execution/executor_run.cpp
-    src/main/cpp/core/execution/executor_task_scheduler.cpp
-    src/main/cpp/core/execution/executor_task_graph.cpp
-    src/main/cpp/core/execution/executor_transaction_state.cpp
-    src/main/cpp/core/execution/executor_transactional_dispatch.cpp
-    src/main/cpp/core/execution/executor_transaction_recovery.cpp
-    src/main/cpp/core/execution/executor_update.cpp
-    src/main/cpp/core/execution/orchestrator.cpp
-    src/main/cpp/core/execution/orchestrator_analysis.cpp
-    src/main/cpp/core/execution/orchestrator_pack.cpp
-    src/main/cpp/core/execution/orchestrator_plugin_flows.cpp
-    src/main/cpp/core/execution/orchestrator_query.cpp
-    src/main/cpp/core/execution/orchestrator_request_prep.cpp
-    src/main/cpp/core/export/audit_exporter.cpp
-    src/main/cpp/core/export/audit_exporter_table.cpp
-    src/main/cpp/core/export/audit_exporter_structured.cpp
-    src/main/cpp/core/export/audit_exporter_write.cpp
-    src/main/cpp/core/export/sbom_exporter.cpp
-    src/main/cpp/core/export/sbom_exporter_table.cpp
-    src/main/cpp/core/export/sbom_exporter_structured.cpp
-    src/main/cpp/core/export/sbom_exporter_write.cpp
-    src/main/cpp/core/export/snapshot_exporter.cpp
-    src/main/cpp/core/export/snapshot_exporter_render.cpp
-    src/main/cpp/core/export/snapshot_exporter_write.cpp
-    src/main/cpp/core/history/history_manager.cpp
-    src/main/cpp/core/history/history_manager_entry_codec.cpp
-    src/main/cpp/core/history/history_manager_log.cpp
-    src/main/cpp/core/history/history_manager_store.cpp
-    src/main/cpp/core/host/host_info.cpp
-    src/main/cpp/core/host/host_info_codec.cpp
-    src/main/cpp/core/host/host_info_probe.cpp
-    src/main/cpp/core/luaenv/lua_env_ffi.cpp
-    src/main/cpp/core/manifest/manifest_loader.cpp
-    src/main/cpp/core/packages/rq_package.cpp
-    src/main/cpp/core/packages/rq_package_metadata.cpp
-    src/main/cpp/core/packages/rq_package_payload.cpp
-    src/main/cpp/core/packages/rq_package_reader.cpp
-    src/main/cpp/core/packages/rq_package_build.cpp
-    src/main/cpp/core/packages/rq_repository.cpp
-    src/main/cpp/core/packages/rq_repository_parse.cpp
-    src/main/cpp/core/packages/rq_repository_resolve.cpp
-    src/main/cpp/core/planning/planner.cpp
-    src/main/cpp/core/planning/planner_request_setup.cpp
-    src/main/cpp/core/planning/planner_dependency_policy.cpp
-    src/main/cpp/core/planning/planner_graph.cpp
-    src/main/cpp/core/planning/planner_core.cpp
-    src/main/cpp/core/plugins/plugin_bundle.cpp
-    src/main/cpp/core/planning/request_resolution.cpp
-    src/main/cpp/core/plugins/plugin_test_runner.cpp
-    src/main/cpp/core/plugins/plugin_test_runner_cli.cpp
-    src/main/cpp/core/plugins/plugin_test_runner_case.cpp
-    src/main/cpp/core/plugins/plugin_test_runner_report.cpp
-    src/main/cpp/core/registry/registry.cpp
-    src/main/cpp/core/registry/registry_trust.cpp
-    src/main/cpp/core/registry/registry_materialize.cpp
-    src/main/cpp/core/registry/registry_runtime.cpp
-    src/main/cpp/core/registry/registry_query.cpp
-    src/main/cpp/core/registry/registry_database.cpp
-    src/main/cpp/core/registry/registry_database_git.cpp
-    src/main/cpp/core/registry/registry_database_main_registry.cpp
-    src/main/cpp/core/registry/registry_database_payload.cpp
-    src/main/cpp/core/registry/registry_database_storage.cpp
-    src/main/cpp/core/registry/registry_database_sync.cpp
-    src/main/cpp/core/registry/registry_database_core.cpp
-    src/main/cpp/core/registry/registry_json_parser.cpp
-    src/main/cpp/core/remote/remote_client.cpp
-    src/main/cpp/core/remote/remote_profiles.cpp
-    src/main/cpp/core/remote/serve_remote.cpp
-    src/main/cpp/core/remote/serve_remote_auth.cpp
-    src/main/cpp/core/remote/serve_remote_command.cpp
-    src/main/cpp/core/remote/serve_remote_protocol.cpp
-    src/main/cpp/core/remote/serve_remote_session.cpp
-    src/main/cpp/core/remote/serve_remote_socket.cpp
-    src/main/cpp/core/remote/serve_remote_upload.cpp
-    src/main/cpp/core/security/gh_advisory_vulnerability_sync_service.cpp
-    src/main/cpp/core/security/osv_core.cpp
-    src/main/cpp/core/security/snyk_vulnerability_sync_service.cpp
-    src/main/cpp/core/security/trivy_vulnerability_sync_service.cpp
-    src/main/cpp/core/security/security_gateway_service.cpp
-    src/main/cpp/core/security/validator.cpp
-    src/main/cpp/core/security/validator_prepare.cpp
-    src/main/cpp/core/security/validator_prompt.cpp
-    src/main/cpp/core/security/validator_core.cpp
-    src/main/cpp/core/security/vulnerability_database.cpp
-    src/main/cpp/core/security/vulnerability_matcher.cpp
-    src/main/cpp/core/security/vulnerability_sync_service.cpp
-    src/main/cpp/core/state/rqp_state_store.cpp
-    src/main/cpp/core/state/rqp_state_store_load.cpp
-    src/main/cpp/core/state/transaction_database.cpp
-    src/main/cpp/core/state/transaction_database_storage.cpp
-    src/main/cpp/core/state/transaction_database_read.cpp
-    src/main/cpp/core/state/transaction_database_write.cpp
-    src/main/cpp/core/state/transaction_database_core.cpp
 )
 
-add_executable(ReqPack ${SOURCES})
+add_executable(ReqPack ${REQPACK_CLI_SOURCES})
 set_target_properties(ReqPack PROPERTIES OUTPUT_NAME rqp)
 
-add_executable(exec_rules_unit_tests
+add_executable(reqpack_cli_unit_tests
     tests/cpp/test_main.cpp
-    tests/unit/plugins/exec_rules/parse_tests.cpp
-    tests/unit/plugins/exec_rules/evaluation_tests.cpp
-    tests/unit/plugins/exec_rules/normalize_tests.cpp
-    src/main/cpp/plugins/exec_rules_core.cpp
-)
-
-add_executable(exec_rules_integration_tests
-    tests/cpp/test_main.cpp
-    tests/integration/plugins/exec_rules/smoke_tests.cpp
-    src/main/cpp/plugins/exec_rules_core.cpp
-)
-
-set(REQPACK_ORCHESTRATOR_INTEGRATION_TEST_SOURCES)
-if(NOT WIN32)
-    list(APPEND REQPACK_ORCHESTRATOR_INTEGRATION_TEST_SOURCES
-        tests/integration/core/execution/orchestrator_service_tests.cpp
-    )
-endif()
-
-add_executable(core_integration_tests
-    tests/cpp/test_main.cpp
-    tests/integration/core/execution/executor_service_tests.cpp
-    ${REQPACK_ORCHESTRATOR_INTEGRATION_TEST_SOURCES}
-    tests/integration/core/plugins/plugin_test_runner_service_tests.cpp
-    tests/integration/core/planning/planner_service_tests.cpp
-    tests/integration/core/registry/registry_service_tests.cpp
-    tests/integration/plugins/lua_bridge/service_tests.cpp
-    src/main/cpp/core/execution/executor.cpp
-    src/main/cpp/core/execution/executor_dispatch.cpp
-    src/main/cpp/core/execution/executor_history_sync.cpp
-    src/main/cpp/core/execution/executor_parallel.cpp
-    src/main/cpp/core/execution/executor_query_ops.cpp
-    src/main/cpp/core/execution/executor_run.cpp
-    src/main/cpp/core/execution/executor_task_scheduler.cpp
-    src/main/cpp/core/execution/executor_task_graph.cpp
-    src/main/cpp/core/execution/executor_transaction_state.cpp
-    src/main/cpp/core/execution/executor_transactional_dispatch.cpp
-    src/main/cpp/core/execution/executor_transaction_recovery.cpp
-    src/main/cpp/core/execution/executor_update.cpp
-    src/main/cpp/core/host/host_info.cpp
-    src/main/cpp/core/host/host_info_codec.cpp
-    src/main/cpp/core/host/host_info_probe.cpp
-    src/main/cpp/core/security/gh_advisory_vulnerability_sync_service.cpp
-    src/main/cpp/core/security/osv_core.cpp
-    src/main/cpp/core/security/snyk_vulnerability_sync_service.cpp
-    src/main/cpp/core/security/trivy_vulnerability_sync_service.cpp
-    src/main/cpp/core/planning/planner.cpp
-    src/main/cpp/core/planning/planner_request_setup.cpp
-    src/main/cpp/core/planning/planner_dependency_policy.cpp
-    src/main/cpp/core/planning/planner_graph.cpp
-    src/main/cpp/core/planning/planner_core.cpp
-    src/main/cpp/core/plugins/plugin_bundle.cpp
-    src/main/cpp/core/planning/request_resolution.cpp
-    src/main/cpp/core/security/security_gateway_service.cpp
-    src/main/cpp/core/export/audit_exporter.cpp
-    src/main/cpp/core/export/audit_exporter_table.cpp
-    src/main/cpp/core/export/audit_exporter_structured.cpp
-    src/main/cpp/core/export/audit_exporter_write.cpp
-    src/main/cpp/core/export/sbom_exporter.cpp
-    src/main/cpp/core/export/sbom_exporter_table.cpp
-    src/main/cpp/core/export/sbom_exporter_structured.cpp
-    src/main/cpp/core/export/sbom_exporter_write.cpp
-    src/main/cpp/core/export/snapshot_exporter.cpp
-    src/main/cpp/core/export/snapshot_exporter_render.cpp
-    src/main/cpp/core/export/snapshot_exporter_write.cpp
-    src/main/cpp/output/logger.cpp
-    src/main/cpp/output/logger_processing.cpp
-    src/main/cpp/output/logger_settings.cpp
-    src/main/cpp/output/logger_emit.cpp
-    src/main/cpp/output/logger_core.cpp
-    src/main/cpp/output/command_output.cpp
-    src/main/cpp/output/command_output_projection.cpp
-    src/main/cpp/output/command_output_render.cpp
-    src/main/cpp/output/run_result_json.cpp
-    src/main/cpp/output/ansi_color.cpp
-    src/main/cpp/output/plain_display.cpp
-    src/main/cpp/output/plain_display_session.cpp
-    src/main/cpp/output/plain_display_table.cpp
-    src/main/cpp/output/color_display.cpp
-    src/main/cpp/output/display_factory.cpp
-    src/main/cpp/plugins/exec_rules.cpp
-    src/main/cpp/plugins/exec_rules_core.cpp
-    src/main/cpp/plugins/lua_bridge.cpp
-    src/main/cpp/plugins/lua_bridge_bindings.cpp
-    src/main/cpp/plugins/lua_bridge_execution_policy.cpp
-    src/main/cpp/plugins/lua_bridge_host_runtime.cpp
-    src/main/cpp/plugins/lua_bridge_host_runtime_execution.cpp
-    src/main/cpp/plugins/lua_bridge_host_runtime_events.cpp
-    src/main/cpp/plugins/lua_bridge_plugin_api.cpp
-    src/main/cpp/plugins/lua_bridge_runtime.cpp
-    src/main/cpp/plugins/lua_bridge_value_mapper.cpp
-    src/main/cpp/plugins/rqp_plugin.cpp
-    src/main/cpp/plugins/rqp_plugin_query.cpp
-    src/main/cpp/plugins/rqp_plugin_install.cpp
-    src/main/cpp/plugins/rqp_plugin_repository.cpp
-    src/main/cpp/plugins/rqp_plugin_hooks.cpp
-    src/main/cpp/plugins/rqp_plugin_state.cpp
-    src/main/cpp/plugins/rqp_plugin_pack.cpp
-    src/main/cpp/core/archive/archive_resolver.cpp
-    src/main/cpp/core/archive/archive_resolver_process.cpp
-    src/main/cpp/core/archive/archive_resolver_extract.cpp
-    src/main/cpp/core/common/version_compare.cpp
-    src/main/cpp/core/common/pipe_helpers.cpp
-    src/main/cpp/core/config/configuration.cpp
-    src/main/cpp/core/config/configuration_cli_overrides.cpp
-    src/main/cpp/core/config/configuration_loader.cpp
-    src/main/cpp/core/config/configuration_lua_values.cpp
-    src/main/cpp/core/config/configuration_paths.cpp
-    src/main/cpp/core/config/configuration_registry_sources.cpp
-    src/main/cpp/core/download/downloader.cpp
-    src/main/cpp/core/download/downloader_plugin.cpp
-    src/main/cpp/core/download/downloader_plugin_materialize.cpp
-    src/main/cpp/core/download/downloader_transfer.cpp
-    src/main/cpp/core/download/downloader_transfer_progress.cpp
-    src/main/cpp/core/download/downloader_core.cpp
-    src/main/cpp/core/history/history_manager.cpp
-    src/main/cpp/core/history/history_manager_entry_codec.cpp
-    src/main/cpp/core/history/history_manager_log.cpp
-    src/main/cpp/core/history/history_manager_store.cpp
-    src/main/cpp/core/common/network_environment.cpp
-    src/main/cpp/core/common/process_runner.cpp
-    src/main/cpp/core/luaenv/lua_env_ffi.cpp
-    src/main/cpp/core/manifest/manifest_loader.cpp
-    src/main/cpp/core/packages/rq_package.cpp
-    src/main/cpp/core/packages/rq_package_metadata.cpp
-    src/main/cpp/core/packages/rq_package_payload.cpp
-    src/main/cpp/core/packages/rq_package_reader.cpp
-    src/main/cpp/core/packages/rq_package_build.cpp
-    src/main/cpp/core/packages/rq_repository.cpp
-    src/main/cpp/core/packages/rq_repository_parse.cpp
-    src/main/cpp/core/packages/rq_repository_resolve.cpp
-    src/main/cpp/core/plugins/plugin_test_runner.cpp
-    src/main/cpp/core/plugins/plugin_test_runner_cli.cpp
-    src/main/cpp/core/plugins/plugin_test_runner_case.cpp
-    src/main/cpp/core/plugins/plugin_test_runner_report.cpp
-    src/main/cpp/core/registry/registry.cpp
-    src/main/cpp/core/registry/registry_trust.cpp
-    src/main/cpp/core/registry/registry_materialize.cpp
-    src/main/cpp/core/registry/registry_runtime.cpp
-    src/main/cpp/core/registry/registry_query.cpp
-    src/main/cpp/core/registry/registry_database.cpp
-    src/main/cpp/core/registry/registry_database_git.cpp
-    src/main/cpp/core/registry/registry_database_main_registry.cpp
-    src/main/cpp/core/registry/registry_database_payload.cpp
-    src/main/cpp/core/registry/registry_database_storage.cpp
-    src/main/cpp/core/registry/registry_database_sync.cpp
-    src/main/cpp/core/registry/registry_database_core.cpp
-    src/main/cpp/core/registry/registry_json_parser.cpp
-    src/main/cpp/cli/cli.cpp
-    src/main/cpp/cli/cli_help_text.cpp
-    src/main/cpp/cli/cli_parse_core.cpp
-    src/main/cpp/cli/cli_parse_shared.cpp
-    src/main/cpp/cli/cli_system_discovery.cpp
-    src/main/cpp/core/execution/orchestrator.cpp
-    src/main/cpp/core/execution/orchestrator_analysis.cpp
-    src/main/cpp/core/execution/orchestrator_pack.cpp
-    src/main/cpp/core/execution/orchestrator_plugin_flows.cpp
-    src/main/cpp/core/execution/orchestrator_query.cpp
-    src/main/cpp/core/execution/orchestrator_request_prep.cpp
-    src/main/cpp/core/remote/remote_profiles.cpp
-    src/main/cpp/core/remote/serve_remote.cpp
-    src/main/cpp/core/remote/serve_remote_auth.cpp
-    src/main/cpp/core/remote/serve_remote_command.cpp
-    src/main/cpp/core/remote/serve_remote_upload.cpp
-    src/main/cpp/core/remote/serve_remote_protocol.cpp
-    src/main/cpp/core/remote/serve_remote_session.cpp
-    src/main/cpp/core/remote/serve_remote_socket.cpp
-    src/main/cpp/core/security/vulnerability_database.cpp
-    src/main/cpp/core/security/vulnerability_matcher.cpp
-    src/main/cpp/core/security/vulnerability_sync_service.cpp
-    src/main/cpp/core/security/validator.cpp
-    src/main/cpp/core/security/validator_prepare.cpp
-    src/main/cpp/core/security/validator_prompt.cpp
-    src/main/cpp/core/security/validator_core.cpp
-    src/main/cpp/core/state/rqp_state_store.cpp
-    src/main/cpp/core/state/rqp_state_store_load.cpp
-    src/main/cpp/core/state/transaction_database.cpp
-    src/main/cpp/core/state/transaction_database_storage.cpp
-    src/main/cpp/core/state/transaction_database_read.cpp
-    src/main/cpp/core/state/transaction_database_write.cpp
-    src/main/cpp/core/state/transaction_database_core.cpp
-)
-
-add_dependencies(core_integration_tests ReqPack)
-add_dependencies(ReqPack reqpack_trivy_helper)
-add_dependencies(core_integration_tests reqpack_trivy_helper)
-
-add_executable(core_unit_tests
-    tests/cpp/test_main.cpp
-    tests/unit/core/common/version_compare_tests.cpp
-    tests/unit/core/common/network_environment_tests.cpp
-    tests/unit/core/config/configuration_cli_tests.cpp
-    tests/unit/core/config/configuration_parse_tests.cpp
-    tests/unit/core/download/downloader_tests.cpp
-    tests/unit/core/export/audit_exporter_tests.cpp
-    tests/unit/core/export/sbom_exporter_tests.cpp
-    tests/unit/core/history/history_manager_tests.cpp
-    tests/unit/core/luaenv/lua_env_ffi_tests.cpp
-    tests/unit/core/host/host_info_tests.cpp
-    tests/unit/core/manifest/manifest_loader_tests.cpp
-    tests/unit/core/packages/rq_package_tests.cpp
-    tests/unit/core/packages/rq_repository_tests.cpp
-    tests/unit/core/planning/planner_core_tests.cpp
-    tests/unit/core/registry/registry_database_tests.cpp
-    tests/unit/core/registry/registry_json_parser_tests.cpp
-    tests/unit/core/security/gh_advisory_vulnerability_sync_service_tests.cpp
-    tests/unit/core/security/osv_core_tests.cpp
-    tests/unit/core/security/snyk_vulnerability_sync_service_tests.cpp
-    tests/unit/core/security/trivy_vulnerability_sync_service_tests.cpp
-    tests/unit/core/security/security_gateway_service_tests.cpp
-    tests/unit/core/security/validator_policy_tests.cpp
-    tests/unit/core/security/validator_validate_tests.cpp
-    tests/unit/core/security/vulnerability_database_tests.cpp
-    tests/unit/core/state/rqp_state_store_tests.cpp
-    tests/unit/core/state/transaction_database_serialization_tests.cpp
     tests/unit/output/logger/format_tests.cpp
     tests/unit/output/run_result_json_tests.cpp
-    src/main/cpp/core/common/version_compare.cpp
-    src/main/cpp/core/common/pipe_helpers.cpp
-    src/main/cpp/core/config/configuration.cpp
-    src/main/cpp/core/config/configuration_cli_overrides.cpp
-    src/main/cpp/core/config/configuration_loader.cpp
-    src/main/cpp/core/config/configuration_lua_values.cpp
-    src/main/cpp/core/config/configuration_paths.cpp
-    src/main/cpp/core/config/configuration_registry_sources.cpp
-    src/main/cpp/core/host/host_info.cpp
-    src/main/cpp/core/host/host_info_codec.cpp
-    src/main/cpp/core/host/host_info_probe.cpp
-    src/main/cpp/cli/cli.cpp
-    src/main/cpp/cli/cli_help_text.cpp
-    src/main/cpp/cli/cli_parse_core.cpp
-    src/main/cpp/cli/cli_parse_shared.cpp
-    src/main/cpp/cli/cli_system_discovery.cpp
-    src/main/cpp/core/archive/archive_resolver.cpp
-    src/main/cpp/core/archive/archive_resolver_process.cpp
-    src/main/cpp/core/archive/archive_resolver_extract.cpp
-    src/main/cpp/core/luaenv/lua_env_ffi.cpp
-    src/main/cpp/core/manifest/manifest_loader.cpp
-    src/main/cpp/core/download/downloader.cpp
-    src/main/cpp/core/download/downloader_plugin.cpp
-    src/main/cpp/core/download/downloader_plugin_materialize.cpp
-    src/main/cpp/core/download/downloader_transfer.cpp
-    src/main/cpp/core/download/downloader_transfer_progress.cpp
-    src/main/cpp/core/download/downloader_core.cpp
-    src/main/cpp/core/export/audit_exporter.cpp
-    src/main/cpp/core/export/audit_exporter_table.cpp
-    src/main/cpp/core/export/audit_exporter_structured.cpp
-    src/main/cpp/core/export/audit_exporter_write.cpp
-    src/main/cpp/core/export/sbom_exporter.cpp
-    src/main/cpp/core/export/sbom_exporter_table.cpp
-    src/main/cpp/core/export/sbom_exporter_structured.cpp
-    src/main/cpp/core/export/sbom_exporter_write.cpp
-    src/main/cpp/core/export/snapshot_exporter.cpp
-    src/main/cpp/core/export/snapshot_exporter_render.cpp
-    src/main/cpp/core/export/snapshot_exporter_write.cpp
-    src/main/cpp/core/history/history_manager.cpp
-    src/main/cpp/core/history/history_manager_entry_codec.cpp
-    src/main/cpp/core/history/history_manager_log.cpp
-    src/main/cpp/core/history/history_manager_store.cpp
-    src/main/cpp/core/common/network_environment.cpp
-    src/main/cpp/core/common/process_runner.cpp
-    src/main/cpp/core/packages/rq_package.cpp
-    src/main/cpp/core/packages/rq_package_metadata.cpp
-    src/main/cpp/core/packages/rq_package_payload.cpp
-    src/main/cpp/core/packages/rq_package_reader.cpp
-    src/main/cpp/core/packages/rq_package_build.cpp
-    src/main/cpp/core/packages/rq_repository.cpp
-    src/main/cpp/core/packages/rq_repository_parse.cpp
-    src/main/cpp/core/packages/rq_repository_resolve.cpp
-    src/main/cpp/core/planning/planner_core.cpp
-    src/main/cpp/core/plugins/plugin_bundle.cpp
-    src/main/cpp/core/registry/registry_database.cpp
-    src/main/cpp/core/registry/registry_database_git.cpp
-    src/main/cpp/core/registry/registry_database_main_registry.cpp
-    src/main/cpp/core/registry/registry_database_payload.cpp
-    src/main/cpp/core/registry/registry_database_storage.cpp
-    src/main/cpp/core/registry/registry_database_sync.cpp
-    src/main/cpp/core/registry/registry_database_core.cpp
-    src/main/cpp/core/registry/registry_json_parser.cpp
-    src/main/cpp/core/remote/remote_profiles.cpp
-    src/main/cpp/core/security/gh_advisory_vulnerability_sync_service.cpp
-    src/main/cpp/core/security/osv_core.cpp
-    src/main/cpp/core/security/snyk_vulnerability_sync_service.cpp
-    src/main/cpp/core/security/trivy_vulnerability_sync_service.cpp
-    src/main/cpp/core/security/security_gateway_service.cpp
-    src/main/cpp/core/security/validator.cpp
-    src/main/cpp/core/security/validator_prepare.cpp
-    src/main/cpp/core/security/validator_prompt.cpp
-    src/main/cpp/core/security/validator_core.cpp
-    src/main/cpp/core/security/vulnerability_database.cpp
-    src/main/cpp/core/security/vulnerability_matcher.cpp
-    src/main/cpp/core/security/vulnerability_sync_service.cpp
-    src/main/cpp/core/state/rqp_state_store.cpp
-    src/main/cpp/core/state/rqp_state_store_load.cpp
-    src/main/cpp/core/state/transaction_database.cpp
-    src/main/cpp/core/state/transaction_database_storage.cpp
-    src/main/cpp/core/state/transaction_database_read.cpp
-    src/main/cpp/core/state/transaction_database_write.cpp
-    src/main/cpp/core/state/transaction_database_core.cpp
-    src/main/cpp/output/ansi_color.cpp
-    src/main/cpp/output/logger.cpp
-    src/main/cpp/output/logger_processing.cpp
-    src/main/cpp/output/logger_settings.cpp
-    src/main/cpp/output/logger_emit.cpp
-    src/main/cpp/output/logger_core.cpp
-    src/main/cpp/output/command_output.cpp
-    src/main/cpp/output/command_output_projection.cpp
-    src/main/cpp/output/command_output_render.cpp
-    src/main/cpp/output/run_result_json.cpp
-    src/main/cpp/output/plain_display.cpp
-    src/main/cpp/output/plain_display_session.cpp
-    src/main/cpp/output/plain_display_table.cpp
-    src/main/cpp/output/color_display.cpp
-    src/main/cpp/output/command_output.cpp
 )
 
-add_dependencies(core_unit_tests reqpack_trivy_helper)
+target_include_directories(reqpack_cli_unit_tests PRIVATE
+    ${REQPACK_PRIVATE_INCLUDE_DIRS}
+    tests/cpp
+)
 
 add_custom_target(reqpack_test_targets
-    DEPENDS
-        core_unit_tests
-        core_integration_tests
-        exec_rules_unit_tests
-        exec_rules_integration_tests
+    DEPENDS reqpack_cli_unit_tests
 )
 
-foreach(reqpack_target IN ITEMS
-    ReqPack
-    exec_rules_unit_tests
-    exec_rules_integration_tests
-    core_unit_tests
-    core_integration_tests
-)
+add_dependencies(ReqPack reqpack_trivy_helper)
+
+foreach(reqpack_target IN ITEMS ReqPack reqpack_cli_unit_tests reqpack_output reqpack_cli)
     reqpack_apply_instrumentation(${reqpack_target})
 endforeach()
 
-target_include_directories(ReqPack PRIVATE 
-    ${REQPACK_PRIVATE_INCLUDE_DIRS}
-)
+target_include_directories(ReqPack PRIVATE ${REQPACK_PRIVATE_INCLUDE_DIRS})
+target_include_directories(reqpack_cli_unit_tests PRIVATE ${REQPACK_PRIVATE_INCLUDE_DIRS})
 
-target_include_directories(exec_rules_unit_tests PRIVATE
-    ${REQPACK_PRIVATE_INCLUDE_DIRS}
-    tests/cpp
-)
-
-target_include_directories(exec_rules_integration_tests PRIVATE
-    ${REQPACK_PRIVATE_INCLUDE_DIRS}
-    tests/cpp
-)
-
-target_include_directories(core_unit_tests PRIVATE
-    ${REQPACK_PRIVATE_INCLUDE_DIRS}
-    tests/cpp
-)
-
-target_include_directories(core_integration_tests PRIVATE
-    ${REQPACK_PRIVATE_INCLUDE_DIRS}
-    tests/cpp
-)
-
-target_link_libraries(ReqPack PRIVATE 
-	CLI11::CLI11
-	CURL::libcurl
-	lmdb
-	lua_cffi
-	OpenSSL::Crypto
-	${REQPACK_PLATFORM_LIBS}
-	${REQPACK_ZSTD_LIBRARY}
-	${REQPACK_LUA_LINK_LIBRARIES}
-	Boost::boost
-	${REQPACK_SPDLOG_TARGET}
-	${REQPACK_FMT_TARGET}
-)
-
-target_link_libraries(exec_rules_unit_tests PRIVATE
-    Catch2::Catch2
-    ${REQPACK_LUA_LINK_LIBRARIES}
-    ${REQPACK_SPDLOG_TARGET}
-    ${REQPACK_FMT_TARGET}
-)
-
-target_link_libraries(exec_rules_integration_tests PRIVATE
-    Catch2::Catch2
-    ${REQPACK_LUA_LINK_LIBRARIES}
-    ${REQPACK_SPDLOG_TARGET}
-    ${REQPACK_FMT_TARGET}
-)
-
-target_link_libraries(core_unit_tests PRIVATE
-    Catch2::Catch2
+target_link_libraries(ReqPack PRIVATE
+    reqpack_cli
+    reqpack_core
+    reqpack_output
+    reqpack_security_core
     CLI11::CLI11
     CURL::libcurl
     lmdb
     lua_cffi
     OpenSSL::Crypto
-	${REQPACK_PLATFORM_LIBS}
+    ${REQPACK_PLATFORM_LIBS}
     ${REQPACK_ZSTD_LIBRARY}
     ${REQPACK_LUA_LINK_LIBRARIES}
     Boost::boost
@@ -852,16 +450,12 @@ target_link_libraries(core_unit_tests PRIVATE
     ${REQPACK_FMT_TARGET}
 )
 
-target_link_libraries(core_integration_tests PRIVATE
+target_link_libraries(reqpack_cli_unit_tests PRIVATE
     Catch2::Catch2
-    CURL::libcurl
-    lmdb
-    lua_cffi
-    OpenSSL::Crypto
-	${REQPACK_PLATFORM_LIBS}
-    ${REQPACK_ZSTD_LIBRARY}
-    ${REQPACK_LUA_LINK_LIBRARIES}
-    Boost::boost
+    reqpack_cli
+    reqpack_core
+    reqpack_output
+    CLI11::CLI11
     ${REQPACK_SPDLOG_TARGET}
     ${REQPACK_FMT_TARGET}
 )
@@ -869,38 +463,16 @@ target_link_libraries(core_integration_tests PRIVATE
 target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)
 target_compile_definitions(ReqPack PRIVATE REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}")
 target_compile_definitions(ReqPack PRIVATE REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}")
-target_compile_definitions(exec_rules_unit_tests PRIVATE
+target_compile_definitions(reqpack_cli_unit_tests PRIVATE
     SOL_ALL_SAFETIES_ON=1
     REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
     REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
-)
-target_compile_definitions(exec_rules_integration_tests PRIVATE
-    SOL_ALL_SAFETIES_ON=1
-    REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
-    REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
-)
-target_compile_definitions(core_unit_tests PRIVATE
-    SOL_ALL_SAFETIES_ON=1
-    REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
-    REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
-    REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}"
-    REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}"
-)
-target_compile_definitions(core_integration_tests PRIVATE
-    SOL_ALL_SAFETIES_ON=1
-    REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
-    REQPACK_TEST_BUILD_DIR="${CMAKE_BINARY_DIR}"
-    REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}"
-    REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}"
 )
 
-foreach(_reqpack_target IN ITEMS ReqPack exec_rules_unit_tests exec_rules_integration_tests core_unit_tests core_integration_tests)
+foreach(_reqpack_target IN ITEMS ReqPack reqpack_cli_unit_tests)
     reqpack_apply_windows_compile_options(${_reqpack_target})
 endforeach()
 
 include(CTest)
 include(${catch2_SOURCE_DIR}/contrib/Catch.cmake)
-catch_discover_tests(exec_rules_unit_tests TEST_PREFIX "unit::")
-catch_discover_tests(exec_rules_integration_tests TEST_PREFIX "integration::")
-catch_discover_tests(core_unit_tests TEST_PREFIX "unit::")
-catch_discover_tests(core_integration_tests TEST_PREFIX "integration::")
+catch_discover_tests(reqpack_cli_unit_tests TEST_PREFIX "cli::unit::")
