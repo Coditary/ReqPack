@@ -419,8 +419,13 @@ target_include_directories(reqpack_cli_unit_tests PRIVATE
     tests/cpp
 )
 
+set(_reqpack_test_target_deps reqpack_cli_unit_tests)
+if(RQP_SECURITY_CORE_BUILD_TESTS AND TARGET security_core_unit_tests)
+    list(APPEND _reqpack_test_target_deps security_core_unit_tests)
+endif()
+
 add_custom_target(reqpack_test_targets
-    DEPENDS reqpack_cli_unit_tests
+    DEPENDS ${_reqpack_test_target_deps}
 )
 
 add_dependencies(ReqPack reqpack_trivy_helper)

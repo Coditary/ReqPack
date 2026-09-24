@@ -62,7 +62,7 @@ jobs:
         run: cmake --build "${COVERAGE_BUILD_DIR}" --target ReqPack reqpack_test_targets
 
       - name: Run tests
-        run: ctest --test-dir "${COVERAGE_BUILD_DIR}" --output-on-failure
+        run: bash .github/scripts/run-ctest.sh "${COVERAGE_BUILD_DIR}"
 
       - name: Generate CTest coverage report
         run: ctest --test-dir "${COVERAGE_BUILD_DIR}" -T Coverage
