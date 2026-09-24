@@ -39,9 +39,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl gcovr git pkg-config python3 \
+            build-essential ca-certificates cmake curl git pkg-config python3 python3-pip \
             libboost-dev libcli11-dev libcurl4-openssl-dev libfmt-dev \
             libffi-dev liblua5.4-dev libspdlog-dev libssl-dev libzstd-dev
+
+      - name: Install gcovr
+        run: python3 -m pip install gcovr==8.6
 
       - name: Install sol2 headers
         run: |

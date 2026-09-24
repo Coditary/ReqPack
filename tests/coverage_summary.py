@@ -63,12 +63,30 @@ def normalize_gcovr_filename(source_dir: Path, filename: str) -> str | None:
     marker = "/reqpack/src/main/cpp/"
     if marker in normalized:
         return "src/main/cpp/" + normalized.split(marker, 1)[1]
-    marker = "/reqpack-security-core/src/"
-    if marker in normalized:
-        return "../reqpack-security-core/src/" + normalized.split(marker, 1)[1]
+    for marker in (
+        "/reqpack-security-core/src/",
+        "/reqpack_security_core-src/src/",
+        "_deps/reqpack_security_core-src/src/",
+    ):
+        if marker in normalized:
+            return "../reqpack-security-core/src/" + normalized.split(marker, 1)[1]
     if normalized.startswith("../reqpack-security-core/src/"):
         return normalized
     return None
+
+
+def coverage_object_directories(build_dir: Path) -> list[Path]:
+    directories = [build_dir]
+    for relative in (
+        "reqpack-security-core-build",
+        "_deps/reqpack_security_core-build",
+        "ReqPack-Core-build",
+        "_deps/reqpack_core-build",
+    ):
+        candidate = build_dir / relative
+        if candidate.is_dir():
+            directories.append(candidate)
+    return directories
 
 
 def is_tracked(relative_path: str, source_dir: Path) -> bool:
@@ -78,20 +96,14 @@ def is_tracked(relative_path: str, source_dir: Path) -> bool:
 
 
 def run_gcovr_summary(build_dir: Path, source_dir: Path, exclude_suffixes: tuple[str, ...]) -> tuple[float, int, int, list[tuple[float, int, int, str]]]:
-    object_directories = [build_dir]
-    security_build = build_dir / "reqpack-security-core-build"
-    if security_build.is_dir():
-        object_directories.append(security_build)
-    core_build = build_dir / "ReqPack-Core-build"
-    if core_build.is_dir():
-        object_directories.append(core_build)
+    object_directories = coverage_object_directories(build_dir)
 
     command = [
         "gcovr",
         "-r",
         str(source_dir),
         "--gcov-ignore-parse-errors",
-        "negative_hits.warn",
+        "all",
         "--json-summary-pretty",
     ]
     for object_directory in object_directories:
