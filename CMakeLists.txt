@@ -5,7 +5,7 @@ enable_testing()
 
 set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
 
-set(REQPACK_RELEASE_ID "v1.2.14" CACHE STRING "Build/release identity shown by rqp version output")
+set(REQPACK_RELEASE_ID "v1.3.0" CACHE STRING "Build/release identity shown by rqp version output")
 
 option(REQPACK_ENABLE_COVERAGE "Build ReqPack targets with coverage instrumentation" OFF)
 option(REQPACK_ENABLE_PROFILING "Build ReqPack targets with profiling instrumentation" OFF)
