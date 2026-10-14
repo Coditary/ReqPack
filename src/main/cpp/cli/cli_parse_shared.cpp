@@ -3,6 +3,7 @@
 #include "cli/cli.h"
 #include "core/common/action_tokens.h"
 #include "core/manifest/manifest_loader.h"
+#include "core/manifest/manifest_path_resolver.h"
 
 #include <algorithm>
 #include <cctype>
@@ -69,32 +70,7 @@ bool supports_manifest_path(ActionType action) {
 }
 
 std::optional<std::filesystem::path> resolve_manifest_path_argument(const std::string& argument) {
-    if (argument.empty()) {
-        return std::nullopt;
-    }
-
-    const bool explicitPath = argument[0] == '.' || argument[0] == '/';
-    const bool bareManifestFilename = std::filesystem::path(argument).filename() == MANIFEST_FILENAME;
-    if (!explicitPath && !bareManifestFilename) {
-        return std::nullopt;
-    }
-
-    std::error_code fsError;
-    const std::filesystem::path candidatePath = std::filesystem::absolute(std::filesystem::path(argument), fsError);
-    if (fsError) {
-        return std::nullopt;
-    }
-
-    if (std::filesystem::is_directory(candidatePath, fsError) && !fsError) {
-        return candidatePath / MANIFEST_FILENAME;
-    }
-
-    fsError.clear();
-    if (std::filesystem::is_regular_file(candidatePath, fsError) && !fsError && candidatePath.filename() == MANIFEST_FILENAME) {
-        return candidatePath;
-    }
-
-    return std::nullopt;
+    return resolve_manifest_path(argument);
 }
 
 std::optional<AuditOutputFormat> infer_audit_output_format_from_path(const std::string& path) {
@@ -176,6 +152,8 @@ bool current_system_prefers_package_tokens(const std::string& currentSystem, Act
         case ActionType::REMOVE:
         case ActionType::UPDATE:
         case ActionType::SEARCH:
+        case ActionType::LIST:
+        case ActionType::OUTDATED:
         case ActionType::INFO:
         case ActionType::SBOM:
         case ActionType::AUDIT:

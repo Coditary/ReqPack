@@ -287,7 +287,8 @@ std::string command_help_text(ActionType action) {
                 "  rqp search dnf python3 --type doc --type devel\n";
         case ActionType::LIST:
             return
-                "Usage: rqp list [<system>|<dir-path>] [options]\n"
+                "Usage: rqp list [<system> [<package>...]] [<dir-path>] [options]\n"
+                "       rqp list <system>:<package> [options]\n"
                 "\n"
                 "List installed packages for a package manager.\n"
                 "If no system is specified, all known primary systems are queried.\n"
@@ -295,6 +296,7 @@ std::string command_help_text(ActionType action) {
                 "\n"
                 "Arguments:\n"
                 "  <system>                Package manager to list packages for (optional)\n"
+                "  <package>               Optional package name filter (repeatable)\n"
                 "  <dir-path>              Directory containing a reqpack.lua manifest\n"
                 "\n"
                 "Options:\n"
@@ -311,7 +313,9 @@ std::string command_help_text(ActionType action) {
                 "  rqp list .\n"
                 "  rqp list ./project\n"
                 "  rqp list dnf --arch x86_64\n"
-                "  rqp list dnf --type doc --type devel\n";
+                "  rqp list dnf --type doc --type devel\n"
+                "  rqp list rqp wuji-ai\n"
+                "  rqp list rqp:wuji-ai\n";
         case ActionType::INFO:
             return
                 "Usage: rqp info [<system> [<package>]] [options]\n"
