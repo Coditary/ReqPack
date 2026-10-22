@@ -1,20 +1,21 @@
 #pragma once
 
 #include "core/config/configuration.h"
-#include "output/plain_display.h"
+#include "output/live_display.h"
 
 #include <string>
+#include <string_view>
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ColorDisplay — PlainDisplay with ANSI color applied to each semantic role.
+// ColorDisplay — LiveDisplay with ANSI color applied to each semantic role.
 //
-// Inherits all formatting logic from PlainDisplay.  Overrides every decorate*
+// Inherits all formatting logic from LiveDisplay / PlainDisplay.  Overrides every decorate*
 // hook to wrap the text with the corresponding ANSI spec from the scheme.
 //
 // DisplayColorScheme is defined in core/config/configuration.h so it can be loaded
 // from the Lua config and passed straight through to this class.
 // ─────────────────────────────────────────────────────────────────────────────
-class ColorDisplay : public PlainDisplay {
+class ColorDisplay : public LiveDisplay {
 public:
 	explicit ColorDisplay(DisplayColorScheme scheme = {}) noexcept
 	    : scheme_(std::move(scheme)) {}
@@ -32,6 +33,14 @@ protected:
 	std::string decorateFailureMarker(const std::string& text) const override;
 	std::string decorateSkippedMarker(const std::string& text) const override;
 	std::string decorateMessage(const std::string& text) const override;
+	std::string decorateListNameCell(const std::string& text) const override;
+	std::string decorateListVersionCell(const std::string& text) const override;
+	std::string decorateListTypeCell(const std::string& text) const override;
+	std::string decorateListPlatformCell(const std::string& text) const override;
+	std::string decorateListDescriptionCell(const std::string& text) const override;
+	std::string applySearchHighlight(const std::string& text) const override;
+	std::string decorateSpinnerFrame(std::string_view frame) const override;
+	std::string format_session_summary(bool success, int succeeded, int skipped, int failed) const override;
 
 private:
 	DisplayColorScheme scheme_;

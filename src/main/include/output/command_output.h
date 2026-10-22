@@ -49,6 +49,7 @@ struct CommandOutput {
 	DisplayMode mode{DisplayMode::IDLE};
 	std::vector<std::string> sessionItems{};
 	std::vector<CommandOutputBlock> blocks{};
+	PackageTableDisplayContext packageTable{};
 	bool success{true};
 	int succeeded{0};
 	int skipped{0};
@@ -70,7 +71,8 @@ std::vector<CommandOutputField> package_info_to_fields(const PackageInfo& info);
 std::vector<std::vector<std::string>> package_list_infos_to_rows(const std::vector<PackageInfo>& items,
 	                                                           bool includeSystem);
 std::vector<std::vector<std::string>> package_search_infos_to_rows(const std::vector<PackageInfo>& items,
-	                                                             bool includeSystem);
+	                                                             bool includeSystem,
+	                                                             bool showPlatform = true);
 std::vector<std::vector<std::string>> package_outdated_infos_to_rows(const std::vector<PackageInfo>& items,
 	                                                               bool includeSystem);
 

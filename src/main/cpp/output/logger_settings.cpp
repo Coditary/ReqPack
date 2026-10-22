@@ -42,6 +42,7 @@ std::string inferred_category(const OutputEvent& event) {
         case OutputAction::DISPLAY_ITEM_SKIPPED:
         case OutputAction::DISPLAY_ITEM_FAILURE:
         case OutputAction::DISPLAY_MESSAGE:
+        case OutputAction::DISPLAY_UNINDENTED_TEXT:
         case OutputAction::DISPLAY_TABLE_HEADER:
         case OutputAction::DISPLAY_TABLE_ROW:
         case OutputAction::DISPLAY_TABLE_END:

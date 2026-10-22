@@ -1,4 +1,5 @@
 #include "output/command_output.h"
+#include "output/package_table_format.h"
 
 namespace {
 
@@ -20,6 +21,10 @@ void append_list_field(
 }
 
 std::string package_row_description(const PackageInfo& item) {
+    const std::string cleaned = package_table_clean_description(item);
+    if (!cleaned.empty()) {
+        return cleaned;
+    }
     if (!item.summary.empty()) {
         return item.summary;
     }
@@ -70,41 +75,19 @@ std::vector<CommandOutputField> package_info_to_fields(const PackageInfo& info) 
 }
 
 std::vector<std::vector<std::string>> package_list_infos_to_rows(const std::vector<PackageInfo>& items, bool includeSystem) {
-    std::vector<std::vector<std::string>> rows;
-    rows.reserve(items.size());
-    for (const auto& item : items) {
-        std::vector<std::string> row;
-        if (includeSystem) {
-            row.push_back(item.system);
-        }
-        row.push_back(item.name);
-        row.push_back(item.version);
-        row.push_back(item.packageType);
-        row.push_back(item.architecture);
-        row.push_back(item.targetSystems);
-        row.push_back(package_row_description(item));
-        rows.push_back(std::move(row));
-    }
-    return rows;
+    const std::vector<PreparedListRow> prepared = prepare_list_table_rows(items, includeSystem);
+    return prepared_list_rows_to_table_cells(prepared, includeSystem);
 }
 
-std::vector<std::vector<std::string>> package_search_infos_to_rows(const std::vector<PackageInfo>& items, bool includeSystem) {
-    std::vector<std::vector<std::string>> rows;
-    rows.reserve(items.size());
-    for (const auto& item : items) {
-        std::vector<std::string> row;
-        if (includeSystem) {
-            row.push_back(item.system);
-        }
-        row.push_back(item.name);
-        row.push_back(item.version);
-        row.push_back(item.packageType);
-        row.push_back(item.architecture);
-        row.push_back(item.targetSystems);
-        row.push_back(package_row_description(item));
-        rows.push_back(std::move(row));
-    }
-    return rows;
+std::vector<std::vector<std::string>> package_search_infos_to_rows(const std::vector<PackageInfo>& items,
+                                                                   const bool includeSystem,
+                                                                   const bool showPlatform) {
+    const PackageSearchTableOptions options {
+        .includeSystem = includeSystem,
+        .showPlatform = showPlatform,
+    };
+    const std::vector<PreparedSearchRow> prepared = prepare_search_table_rows(items, includeSystem);
+    return prepared_search_rows_to_table_cells(prepared, options);
 }
 
 std::vector<std::vector<std::string>> package_outdated_infos_to_rows(const std::vector<PackageInfo>& items, bool includeSystem) {
@@ -115,12 +98,11 @@ std::vector<std::vector<std::string>> package_outdated_infos_to_rows(const std::
         if (includeSystem) {
             row.push_back(item.system);
         }
-        row.push_back(item.name);
+        row.push_back(package_table_display_name(item.name));
         row.push_back(item.version);
         row.push_back(item.latestVersion);
-        row.push_back(item.packageType);
-        row.push_back(item.architecture);
-        row.push_back(item.targetSystems);
+        row.push_back(package_table_type_badge(item.packageType));
+        row.push_back(package_table_platform_label(item));
         row.push_back(package_row_description(item));
         rows.push_back(std::move(row));
     }

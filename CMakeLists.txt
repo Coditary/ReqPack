@@ -48,6 +48,13 @@ FetchContent_Declare(
     GIT_TAG v2.13.10
 )
 
+FetchContent_Declare(
+    indicators
+    GIT_REPOSITORY https://github.com/p-ranav/indicators.git
+    GIT_TAG v2.3
+)
+FetchContent_MakeAvailable(indicators)
+
 find_package(Lua REQUIRED)
 find_package(CLI11 REQUIRED)
 find_package(CURL REQUIRED)
@@ -365,6 +372,7 @@ endif()
 
 file(GLOB REQPACK_OUTPUT_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/output/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/output/terminal/*.cpp"
 )
 add_library(reqpack_output STATIC ${REQPACK_OUTPUT_SOURCES})
 target_include_directories(reqpack_output
@@ -374,6 +382,7 @@ target_include_directories(reqpack_output
 )
 target_link_libraries(reqpack_output PUBLIC
     reqpack_security_core
+    indicators::indicators
     ${REQPACK_SPDLOG_TARGET}
     ${REQPACK_FMT_TARGET}
 )
@@ -399,6 +408,7 @@ set(REQPACK_CLI_SOURCES
     src/main/cpp/main_arg_parsing.cpp
     src/main/cpp/main_diagnostics.cpp
     src/main/cpp/main_dispatch.cpp
+    src/main/cpp/main_security_status.cpp
     src/main/cpp/main_self_update.cpp
     src/main/cpp/main_self_update_support.cpp
     src/main/cpp/main_self_update_release.cpp
@@ -411,6 +421,9 @@ set_target_properties(ReqPack PROPERTIES OUTPUT_NAME rqp)
 add_executable(reqpack_cli_unit_tests
     tests/cpp/test_main.cpp
     tests/unit/output/logger/format_tests.cpp
+    tests/unit/output/package_table_format_tests.cpp
+    tests/unit/output/package_info_format_tests.cpp
+    tests/unit/output/terminal/terminal_ui_tests.cpp
     tests/unit/output/run_result_json_tests.cpp
 )
 

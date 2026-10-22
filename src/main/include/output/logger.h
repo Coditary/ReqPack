@@ -70,6 +70,9 @@ enum class OutputAction {
 	/// context: message = plain display line, source = optional source label.
 	DISPLAY_MESSAGE,
 
+	/// context: message = full-width text without default indent.
+	DISPLAY_UNINDENTED_TEXT,
+
 	// ── Display table output ─────────────────────────────────────────────────
 	/// context: payload = pipe-delimited column headers.
 	DISPLAY_TABLE_HEADER,
@@ -217,11 +220,17 @@ public:
 	// ── Display session helpers ───────────────────────────────────────────────
 
 	/// Signal start of a top-level command.
+	void setPackageTableContext(const PackageTableDisplayContext& context);
+
 	void displaySessionBegin(DisplayMode                    mode,
 	                          const std::vector<std::string>& items);
 
 	/// Signal end of a top-level command.
 	void displaySessionEnd(bool success, int succeeded, int skipped, int failed);
+
+	/// Hide in-place progress before sudo / PTY prompts write to the terminal.
+	void displayProgressSuspend();
+	void displayProgressResume();
 
 	// ── Display item helpers ──────────────────────────────────────────────────
 
@@ -242,4 +251,5 @@ public:
 	void displayTableHeader(const std::vector<std::string>& headers);
 	void displayTableRow   (const std::vector<std::string>& cells);
 	void displayTableEnd   ();
+	void displayUnindentedText(const std::string& text);
 };

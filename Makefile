@@ -1,7 +1,17 @@
-.PHONY: all clean run build test test-unit test-smoke coverage-build test-coverage profile-build profile-tests profile-ground system-tests system-tests-parallel
+.PHONY: all clean run build build-rqp test test-unit test-smoke coverage-build test-coverage profile-build profile-tests profile-ground system-tests system-tests-parallel help install install-dev uninstall
 
 NPROC := $(shell command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 JOBS := $(shell expr $(NPROC) / 4)
+BUILD_DIR := build
+RQP_BIN := $(BUILD_DIR)/rqp
+
+# Local beta install (same layout as Taiji): copy into ~/.local/opt/beta-bin and ~/.local/bin
+INSTALL_DIR := $(HOME)/.local/opt/beta-bin
+INSTALL_BIN_DIR := $(HOME)/.local/bin
+INSTALL_RQP := $(INSTALL_DIR)/rqp
+INSTALL_RQP_BIN := $(INSTALL_BIN_DIR)/rqp
+# Dev entrypoint; kept when self-update owns ~/.local/bin/rqp (symlink to release bundle).
+INSTALL_RQP_BETA := $(INSTALL_BIN_DIR)/rqp-beta
 COVERAGE_BUILD_DIR := build/coverage
 PROFILE_BUILD_DIR := build/profile
 PROFILE_TEST_BINARIES := reqpack_cli_unit_tests
@@ -12,17 +22,63 @@ LOCAL_SYSTEM_TEST_JOBS ?= $(JOBS)
 LOCAL_SYSTEM_TEST_BUILD_JOBS ?=
 
 all: build
-	cmake --build build -j$(JOBS)
+	cmake --build $(BUILD_DIR) -j$(JOBS)
 
 build:
-	cmake -S . -B build $(LOCAL_BUILD_CMAKE_ARGS)
+	cmake -S . -B $(BUILD_DIR) $(LOCAL_BUILD_CMAKE_ARGS)
 
-run: all
+build-rqp: build
+	cmake --build $(BUILD_DIR) -j$(JOBS) --target ReqPack
+
+help:
+	@echo "ReqPack (rqp)"
+	@echo ""
+	@echo "  make build        Configure CMake (build/)"
+	@echo "  make build-rqp    Build only the rqp binary"
+	@echo "  make install      Build rqp → ~/.local/opt/beta-bin/rqp and ~/.local/bin/rqp-beta"
+	@echo "  make install      (overwrites ~/.local/bin/rqp only if not self-update symlink)"
+	@echo "  make install-dev  Always install ~/.local/bin/rqp from build (overrides self-update link)"
+	@echo "  make uninstall    Remove beta install (rqp-beta + opt/beta-bin; not release symlink)"
+	@echo "  make run          Run ./build/rqp (pass ARGS='...')"
+	@echo "  make test         Run ctest"
+	@echo "  make clean        Remove build/"
+
+install: build-rqp
+	@test -f "$(RQP_BIN)" || { echo "Missing $(RQP_BIN); build failed?" >&2; exit 1; }
+	mkdir -p "$(INSTALL_DIR)" "$(INSTALL_BIN_DIR)"
+	install -m 755 "$(RQP_BIN)" "$(INSTALL_RQP)"
+	ln -sf "$(INSTALL_RQP)" "$(INSTALL_RQP_BETA)"
+	@if [ -L "$(INSTALL_RQP_BIN)" ] && readlink "$(INSTALL_RQP_BIN)" | grep -q 'reqpack/self/bin'; then \
+		echo "Self-update owns $(INSTALL_RQP_BIN) → $$(readlink $(INSTALL_RQP_BIN))"; \
+		echo "Use: rqp-beta   or   PATH=$(INSTALL_DIR):$$PATH rqp"; \
+	else \
+		install -m 755 "$(RQP_BIN)" "$(INSTALL_RQP_BIN)"; \
+		echo "Installed $(INSTALL_RQP_BIN)"; \
+	fi
+	@echo "Installed $(INSTALL_RQP)"
+	@echo "Installed $(INSTALL_RQP_BETA) → $(INSTALL_RQP)"
+
+install-dev: build-rqp
+	@test -f "$(RQP_BIN)" || { echo "Missing $(RQP_BIN); build failed?" >&2; exit 1; }
+	mkdir -p "$(INSTALL_DIR)" "$(INSTALL_BIN_DIR)"
+	install -m 755 "$(RQP_BIN)" "$(INSTALL_RQP)"
+	ln -sf "$(INSTALL_RQP)" "$(INSTALL_RQP_BETA)"
+	rm -f "$(INSTALL_RQP_BIN)"
+	install -m 755 "$(RQP_BIN)" "$(INSTALL_RQP_BIN)"
+	@echo "Installed dev override $(INSTALL_RQP_BIN) (self-update symlink removed)"
+
+uninstall:
+	rm -f "$(INSTALL_RQP)" "$(INSTALL_RQP_BETA)"
+	@if [ -f "$(INSTALL_RQP_BIN)" ] && [ ! -L "$(INSTALL_RQP_BIN)" ]; then rm -f "$(INSTALL_RQP_BIN)"; fi
+	@rmdir "$(INSTALL_DIR)" 2>/dev/null || true
+	@echo "Removed beta install ($(INSTALL_DIR), $(INSTALL_RQP_BETA)); left self-update symlink at $(INSTALL_RQP_BIN) if present"
+
+run: build-rqp
 	@echo
 	@echo "---------------------- Running ReqPack ----------------------"
 	@echo
 	@echo
-	@./build/ReqPack ${ARGS}
+	@$(RQP_BIN) ${ARGS}
 
 test: all
 	@ctest --test-dir build --output-on-failure
@@ -81,4 +137,4 @@ profile-tests: profile-build
 	fi
 
 clean:
-	rm -rf build
+	rm -rf $(BUILD_DIR)

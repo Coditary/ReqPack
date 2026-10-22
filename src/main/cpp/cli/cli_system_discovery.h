@@ -12,4 +12,6 @@ std::set<std::string> discover_primary_systems(const ReqPackConfig& config);
 std::vector<std::string> discover_installed_plugins(const ReqPackConfig& config);
 std::set<std::string> discover_systems(const ReqPackConfig& config);
 
+std::string resolve_default_search_system(const ReqPackConfig& config);
+
 }  // namespace cli_internal

@@ -32,19 +32,7 @@ void render_field_value_block(Logger& logger, const std::vector<CommandOutputFie
 }
 
 void render_raw_text_block(Logger& logger, const std::string& rawText) {
-    std::istringstream stream(rawText);
-    std::string line;
-    bool emitted = false;
-    while (std::getline(stream, line)) {
-        emitted = true;
-        logger.emit(OutputAction::DISPLAY_MESSAGE, OutputContext{.message = line});
-    }
-    if (!rawText.empty() && rawText.back() == '\n') {
-        return;
-    }
-    if (!emitted && !rawText.empty()) {
-        logger.emit(OutputAction::DISPLAY_MESSAGE, OutputContext{.message = rawText});
-    }
+    logger.displayUnindentedText(rawText);
 }
 
 void render_block(Logger& logger, const CommandOutputBlock& block) {
@@ -119,11 +107,13 @@ std::unique_ptr<IDisplay> make_plain_stream_display(std::ostream& stream) {
 
 void render_command_output(const CommandOutput& output) {
     Logger& logger = Logger::instance();
+    logger.setPackageTableContext(output.packageTable);
     logger.displaySessionBegin(output.mode, output.sessionItems);
     for (const auto& block : output.blocks) {
         render_block(logger, block);
     }
     logger.displaySessionEnd(output.success, output.succeeded, output.skipped, output.failed);
+    logger.flushSync();
 }
 
 std::string render_command_output_text(const CommandOutput& output) {
@@ -133,6 +123,7 @@ std::string render_command_output_text(const CommandOutput& output) {
 
     std::ostringstream stream;
     PlainStreamDisplay display(stream);
+    display.setPackageTableContext(output.packageTable);
     display.onSessionBegin(output.mode, output.sessionItems);
     for (const auto& block : output.blocks) {
         render_text_block(stream, display, block);

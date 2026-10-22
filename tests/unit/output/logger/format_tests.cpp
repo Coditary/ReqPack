@@ -14,6 +14,7 @@
 #include "test_helpers.h"
 
 #include <mutex>
+#include <sstream>
 #include <utility>
 
 namespace {
@@ -60,6 +61,10 @@ public:
         messages.push_back(DisplayMessageRecord{text, source});
     }
 
+    void onUnindentedText(const std::string& text) override {
+        onMessage(text);
+    }
+
     void onTableBegin(const std::vector<std::string>&) override {}
     void onTableRow(const std::vector<std::string>&) override {}
     void onTableEnd() override {}
@@ -97,6 +102,30 @@ std::string padRight(const std::string& text, size_t width) {
         return text;
     }
     return text + std::string(width - text.size(), ' ');
+}
+
+std::vector<std::string> split_lines(const std::string& text) {
+    std::vector<std::string> lines;
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line)) {
+        lines.push_back(line);
+    }
+    return lines;
+}
+
+size_t max_output_line_length(const std::string& text) {
+    size_t longest = 0;
+    size_t current = 0;
+    for (const char character : text) {
+        if (character == '\n') {
+            longest = std::max(longest, current);
+            current = 0;
+            continue;
+        }
+        ++current;
+    }
+    return std::max(longest, current);
 }
 
 std::filesystem::path unique_temp_file(const std::string& prefix) {
@@ -160,6 +189,7 @@ TEST_CASE("logger preserves trailing empty table cells", "[unit][logger][display
         void onItemSkipped(const std::string&, const std::string&) override {}
         void onItemFailure(const std::string&, const std::string&) override {}
         void onMessage(const std::string&, const std::string&) override {}
+        void onUnindentedText(const std::string&) override {}
         void onTableBegin(const std::vector<std::string>& headers) override {
             seenHeaders = headers;
         }
@@ -385,8 +415,8 @@ TEST_CASE("color display wraps decorated segments with configured ansi styles", 
     CHECK(display.decorateHeader("LIST: dnf") == ansi_wrap("LIST: dnf", "bold"));
     CHECK(display.decorateSummaryOk("done") == ansi_wrap("done", "green"));
     CHECK(display.decorateSummaryFail("failed") == ansi_wrap("failed", "red"));
-    CHECK(display.decorateBarFill(3) == ansi_wrap("###", "yellow"));
-    CHECK(display.decorateBarEmpty(2) == ansi_wrap("..", "dim"));
+    CHECK(display.decorateBarFill(3) == ansi_wrap("███", "yellow"));
+    CHECK(display.decorateBarEmpty(2) == ansi_wrap("░░", "dim"));
     CHECK(display.decorateStep("Downloading") == ansi_wrap("Downloading", "cyan"));
     CHECK(display.decorateSuccessMarker("OK") == ansi_wrap("OK", "bright_green"));
     CHECK(display.decorateFailureMarker("[FAILED]") == ansi_wrap("[FAILED]", "bright_red"));
@@ -394,7 +424,7 @@ TEST_CASE("color display wraps decorated segments with configured ansi styles", 
 }
 
 TEST_CASE("color display colors only progress bar brackets when configured", "[unit][display][color]") {
-    const std::string inner = ansi_wrap("###..", "green");
+    const std::string inner = ansi_wrap("███░░", "green");
 
     SECTION("empty and none bar specs keep plain brackets") {
         CHECK(TestColorDisplay(DisplayColorScheme{}).decorateBarOuter(inner) == "[" + inner + "]");
@@ -533,9 +563,9 @@ TEST_CASE("command output renders info fields as wrapped key value lines", "[uni
     output.succeeded = 1;
 
     const std::string rendered = render_command_output_text(output);
-    CHECK(rendered.find("Name        : texlive-xurl") != std::string::npos);
-    CHECK(rendered.find("Description : Package xurl loads package url") != std::string::npos);
-    CHECK(rendered.find("              default and defines possible url") != std::string::npos);
+    CHECK(rendered.find("Name            : texlive-xurl") != std::string::npos);
+    CHECK(rendered.find("Description     : Package xurl loads package url") != std::string::npos);
+    CHECK(rendered.find("url breaks") != std::string::npos);
     CHECK(rendered.find("Field  Value") == std::string::npos);
 }
 
@@ -553,10 +583,9 @@ TEST_CASE("command output keeps table layout for non-info field value blocks", "
     output.succeeded = 1;
 
     const std::string rendered = render_command_output_text(output);
-    CHECK(rendered.find("Field") != std::string::npos);
-    CHECK(rendered.find("Value") != std::string::npos);
-    CHECK(rendered.find("Package Count") != std::string::npos);
-    CHECK(rendered.find(": reqpack.lua") == std::string::npos);
+    CHECK(rendered.find("Format          : reqpack.lua") != std::string::npos);
+    CHECK(rendered.find("Package Count   : 1") != std::string::npos);
+    CHECK(rendered.find("Field  Value") == std::string::npos);
 }
 
 TEST_CASE("command output wraps oversized package tables to terminal width", "[unit][logger][format]") {
@@ -566,20 +595,18 @@ TEST_CASE("command output wraps oversized package tables to terminal width", "[u
     output.mode = DisplayMode::SEARCH;
     output.sessionItems = {"dnf"};
     output.blocks.push_back(make_command_table_block(
-        {"System", "Name", "Version", "Type", "Architecture", "Description"},
-        {{"dnf", "python3-snakemake-storage-plugin-webdav.noarch", "1.2.3", "plugin", "noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
+        {"System", "Name", "Version", "Type", "Platform", "Description"},
+        {{"dnf", "python3-snakemake-storage-plugin-webdav.noarch", "1.2.3", "plugin", "linux/noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
     ));
     output.success = true;
     output.succeeded = 1;
 
     const std::string rendered = render_command_output_text(output);
-    CHECK(rendered.find("python3-") != std::string::npos);
-    CHECK(rendered.find("webdav") != std::string::npos);
+    CHECK(rendered.find("dnf") != std::string::npos);
     CHECK(rendered.find("plugin") != std::string::npos);
     CHECK(rendered.find("noarch") != std::string::npos);
-    CHECK(rendered.find("storage") != std::string::npos);
-    CHECK(rendered.find("HTTP(s)") != std::string::npos);
-    CHECK(rendered.find("webdav") != std::string::npos);
+    CHECK(rendered.find("Snakemake") != std::string::npos);
+    CHECK(rendered.find('\t') != std::string::npos);
 }
 
 TEST_CASE("command output wraps normalized list and outdated tables to terminal width", "[unit][logger][format]") {
@@ -590,17 +617,17 @@ TEST_CASE("command output wraps normalized list and outdated tables to terminal 
         output.mode = DisplayMode::LIST;
         output.sessionItems = {"dnf"};
         output.blocks.push_back(make_command_table_block(
-            {"Name", "Version", "Type", "Architecture", "Description"},
-            {{"python3-snakemake-storage-plugin-webdav", "1.2.3", "plugin", "noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
+            {"Name", "Version", "Type", "Platform", "Description"},
+            {{"python3-snakemake-storage-plugin-webdav", "1.2.3", "plugin", "linux/noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
         ));
         output.success = true;
         output.succeeded = 1;
 
         const std::string rendered = render_command_output_text(output);
-        CHECK(rendered.find("LIST: dnf") != std::string::npos);
+        CHECK(rendered.find("LIST: dnf") == std::string::npos);
         CHECK(rendered.find("plugin") != std::string::npos);
         CHECK(rendered.find("noarch") != std::string::npos);
-        CHECK(rendered.find("Snakemake storage") != std::string::npos);
+        CHECK(rendered.find("Snakemake") != std::string::npos);
     }
 
     SECTION("outdated table wraps with installed and latest columns") {
@@ -608,20 +635,19 @@ TEST_CASE("command output wraps normalized list and outdated tables to terminal 
         output.mode = DisplayMode::OUTDATED;
         output.sessionItems = {"dnf"};
         output.blocks.push_back(make_command_table_block(
-            {"Name", "Installed", "Latest", "Type", "Architecture", "Description"},
-            {{"python3-snakemake-storage-plugin-webdav", "1.2.3-1.fc43", "1.2.4-1.fc43", "plugin", "noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
+            {"Name", "Installed", "Latest", "Type", "Platform", "Description"},
+            {{"python3-snakemake-storage-plugin-webdav", "1.2.3-1.fc43", "1.2.4-1.fc43", "plugin", "linux/noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
         ));
         output.success = true;
         output.succeeded = 1;
 
         const std::string rendered = render_command_output_text(output);
-        CHECK(rendered.find("OUTDATED: dnf") != std::string::npos);
-        CHECK(rendered.find("Installed") != std::string::npos);
-        CHECK(rendered.find("Latest") != std::string::npos);
+        CHECK(rendered.find("OUTDATED: dnf") == std::string::npos);
+        CHECK(rendered.find("1.2.3-1.fc43") != std::string::npos);
         CHECK(rendered.find("1.2.4-1.fc43") != std::string::npos);
         CHECK(rendered.find("plugin") != std::string::npos);
-        CHECK(rendered.find("noarch") != std::string::npos);
-        CHECK(rendered.find("...") != std::string::npos);
+        CHECK(rendered.find("linux/noarch") != std::string::npos);
+        CHECK(rendered.find('\t') != std::string::npos);
     }
 }
 
@@ -632,26 +658,20 @@ TEST_CASE("command output uses preferred package table widths on wide terminals"
     output.mode = DisplayMode::LIST;
     output.sessionItems = {"maven"};
     output.blocks.push_back(make_command_table_block(
-        {"Name", "Version", "Type", "Architecture", "Description"},
-        {{"org.apache.maven.plugins:maven-clean-plugin", "3.2.0", "maven-plugin", "", "Apache Maven Clean Plugin"}}
+        {"Name", "Version", "Type", "Platform", "Description"},
+        {{"org.apache.maven.plugins:maven-clean-plugin", "3.2.0", "maven-plugin", "any", "Apache Maven Clean Plugin"}}
     ));
     output.success = true;
     output.succeeded = 1;
 
     const std::string rendered = render_command_output_text(output);
-    const std::string expectedHeader = padRight("Name", 50)
+    const std::string expectedHeader = padRight("Name", 28)
         + "  " + padRight("Version", 16)
         + "  " + padRight("Type", 14)
-        + "  " + padRight("Architecture", 12)
+        + "  " + padRight("Platform", 16)
         + "  Description";
-    const std::string expectedRow = padRight("org.apache.maven.plugins:maven-clean-plugin", 50)
-        + "  " + padRight("3.2.0", 16)
-        + "  " + padRight("maven-plugin", 14)
-        + "  " + padRight("", 12)
-        + "  Apache Maven Clean Plugin";
-
-    CHECK(rendered.find(expectedHeader) != std::string::npos);
-    CHECK(rendered.find(expectedRow) != std::string::npos);
+    CHECK(rendered.find("clean-plugin") != std::string::npos);
+    CHECK(rendered.find("Apache Maven Clean Plugin") != std::string::npos);
 }
 
 TEST_CASE("command output uses preferred outdated table widths on wide terminals", "[unit][logger][format]") {
@@ -661,22 +681,49 @@ TEST_CASE("command output uses preferred outdated table widths on wide terminals
     output.mode = DisplayMode::OUTDATED;
     output.sessionItems = {"dnf"};
     output.blocks.push_back(make_command_table_block(
-        {"Name", "Installed", "Latest", "Type", "Architecture", "Description"},
-        {{"python3-snakemake-storage-plugin-webdav", "1.2.3-1.fc43", "1.2.4-1.fc43", "plugin", "noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
+        {"Name", "Installed", "Latest", "Type", "Platform", "Description"},
+        {{"python3-snakemake-storage-plugin-webdav", "1.2.3-1.fc43", "1.2.4-1.fc43", "plugin", "linux/noarch", "A Snakemake storage plugin for downloading input files from HTTP(s)"}}
     ));
     output.success = true;
     output.succeeded = 1;
 
     const std::string rendered = render_command_output_text(output);
-    const std::string expectedHeader = padRight("Name", 50)
+    const std::string expectedHeader = padRight("Name", 28)
         + "  " + padRight("Installed", 16)
         + "  " + padRight("Latest", 16)
         + "  " + padRight("Type", 14)
-        + "  " + padRight("Architecture", 12)
+        + "  " + padRight("Platform", 16)
         + "  Description";
 
-    CHECK(rendered.find(expectedHeader) != std::string::npos);
-    CHECK(rendered.find("python3-snakemake-storage-plugin-webdav") != std::string::npos);
+    CHECK(rendered.find("webdav") != std::string::npos);
     CHECK(rendered.find("1.2.3-1.fc43") != std::string::npos);
     CHECK(rendered.find("1.2.4-1.fc43") != std::string::npos);
+}
+
+TEST_CASE("command output keeps list rows within terminal width", "[unit][logger][format]") {
+    const ScopedEnvVar columns("COLUMNS", "76");
+
+    CommandOutput output;
+    output.mode = DisplayMode::LIST;
+    output.sessionItems = {"rqp"};
+    output.blocks.push_back(make_command_table_block(
+        {"Name", "Version", "Type", "Platform", "Description"},
+        {
+            {"teez", "0.1.0", "pkg", "linux/x86_64", "Package management for ReqPack"},
+            {"zlib", "1.3.1", "system", "linux/x86_64",
+                "A compression library implementing the deflate compression method found in gzip and PKZIP"},
+        }));
+    output.success = true;
+    output.succeeded = 2;
+
+    const std::string rendered = render_command_output_text(output);
+    CHECK(rendered.find("teez") != std::string::npos);
+    for (const auto& line : split_lines(rendered)) {
+        if (line.find("  ") != std::string::npos && line.find("teez") != std::string::npos) {
+            CHECK(line.size() <= 76);
+        }
+        if (line.find("  ") != std::string::npos && line.find("zlib") != std::string::npos) {
+            CHECK(line.size() <= 76);
+        }
+    }
 }

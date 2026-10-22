@@ -31,6 +31,7 @@ bool is_display_action(OutputAction action) {
         case OutputAction::DISPLAY_ITEM_SKIPPED:
         case OutputAction::DISPLAY_ITEM_FAILURE:
         case OutputAction::DISPLAY_MESSAGE:
+        case OutputAction::DISPLAY_UNINDENTED_TEXT:
         case OutputAction::DISPLAY_TABLE_HEADER:
         case OutputAction::DISPLAY_TABLE_ROW:
         case OutputAction::DISPLAY_TABLE_END:
@@ -186,6 +187,9 @@ void Logger::routeToDisplay(const OutputEvent& event) {
         case OutputAction::DISPLAY_MESSAGE:
             emit_message_lines(activeDisplay, context.message, context.source);
             break;
+        case OutputAction::DISPLAY_UNINDENTED_TEXT:
+            activeDisplay->onUnindentedText(context.message);
+            break;
         case OutputAction::DISPLAY_TABLE_HEADER:
             activeDisplay->onTableBegin(split_pipe(context.payload));
             break;
@@ -270,6 +274,7 @@ void Logger::processEvent(const OutputEvent& event) {
         case OutputAction::DISPLAY_ITEM_SKIPPED:
         case OutputAction::DISPLAY_ITEM_FAILURE:
         case OutputAction::DISPLAY_MESSAGE:
+        case OutputAction::DISPLAY_UNINDENTED_TEXT:
         case OutputAction::DISPLAY_TABLE_HEADER:
         case OutputAction::DISPLAY_TABLE_ROW:
         case OutputAction::DISPLAY_TABLE_END:

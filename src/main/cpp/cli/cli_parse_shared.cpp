@@ -95,6 +95,21 @@ bool consume_package_result_filter_flag(
     }
 
     const std::string& argument = arguments[index];
+    if (action == ActionType::SEARCH) {
+        if (argument == "-i" || argument == "--interactive") {
+            flags.push_back("interactive");
+            return true;
+        }
+        if (argument == "--installed") {
+            flags.push_back("installed");
+            return true;
+        }
+        if (argument == "--all-arch" || argument == "-v" || argument == "--verbose") {
+            flags.push_back("all-arch");
+            return true;
+        }
+    }
+
     const char* key = nullptr;
     if (argument == "--arch") {
         key = "arch";

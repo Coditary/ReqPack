@@ -15,7 +15,7 @@
 //   unique_ptr — ensure the display outlives the Logger worker thread.
 //
 // Supported renderers:
-//   DisplayRenderer::PLAIN  → PlainDisplay  (default; no ANSI codes)
-//   DisplayRenderer::COLOR  → ColorDisplay  (ANSI colors from DisplayColorScheme)
+//   DisplayRenderer::PLAIN  → LiveDisplay   (TTY: in-place UI; else PlainDisplay)
+//   DisplayRenderer::COLOR  → ColorDisplay  (live UI + ANSI colors from DisplayColorScheme)
 // ─────────────────────────────────────────────────────────────────────────────
 std::unique_ptr<IDisplay> create_display(const DisplayConfig& config);

@@ -25,6 +25,8 @@
 #include <string>
 #include <vector>
 
+int run_security_status(const ReqPackConfig& config, Logger& logger);
+
 namespace {
 
 int run_host_refresh(Logger& logger) {
@@ -174,6 +176,11 @@ int dispatch_main_command(Cli& cli,
     if (is_host_refresh_command(rawArguments)) {
         const int result = run_host_refresh(logger);
         logger.flushSync();
+        return result;
+    }
+
+    if (is_security_status_command(rawArguments)) {
+        const int result = run_security_status(config, logger);
         return result;
     }
 

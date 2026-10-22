@@ -3,14 +3,60 @@
 #include "plain_display_internal.h"
 
 #include <iomanip>
+#include <optional>
+
+void PlainDisplay::setSessionContext(const DisplayMode mode, const std::vector<std::string>& items) {
+	std::lock_guard<std::mutex> lock(mtx);
+	currentMode = mode;
+	itemMap.clear();
+	for (const auto& id : items) {
+		itemMap[id] = DisplayItemStatus{.id = id, .label = id};
+	}
+}
+
+void PlainDisplay::trackItemBegin(const std::string& itemId, const std::string& label) {
+	std::lock_guard<std::mutex> lock(mtx);
+	itemMap[itemId] = DisplayItemStatus{
+	    .id = itemId,
+	    .label = label,
+	    .metrics = DisplayProgressMetrics{.percent = 0},
+	    .step = "starting",
+	    .state = DisplayItemState::RUNNING,
+	};
+}
+
+DisplayProgressMetrics PlainDisplay::trackItemStep(const std::string& itemId, const std::string& step) {
+	std::lock_guard<std::mutex> lock(mtx);
+	DisplayItemStatus& status = itemMap[itemId];
+	if (status.id.empty()) {
+		status.id = itemId;
+		status.label = itemId;
+	}
+	status.step = step;
+	status.state = DisplayItemState::RUNNING;
+	return status.metrics;
+}
+
+bool PlainDisplay::tryMarkItemSuccess(const std::string& itemId) {
+	std::lock_guard<std::mutex> lock(mtx);
+	auto it = itemMap.find(itemId);
+	if (it != itemMap.end() && it->second.state == DisplayItemState::SUCCESS) {
+		return false;
+	}
+	if (it != itemMap.end()) {
+		it->second.state = DisplayItemState::SUCCESS;
+		it->second.step = "done";
+	}
+	return true;
+}
 
 void PlainDisplay::onSessionBegin(DisplayMode mode, const std::vector<std::string>& items) {
-    std::lock_guard<std::mutex> lock(mtx);
-    currentMode = mode;
-    itemMap.clear();
-    for (const auto& id : items) {
-        itemMap[id] = DisplayItemStatus{.id = id, .label = id};
+    setSessionContext(mode, items);
+    if (mode == DisplayMode::LIST || mode == DisplayMode::SEARCH || mode == DisplayMode::OUTDATED
+        || mode == DisplayMode::INFO) {
+        return;
     }
+    std::lock_guard<std::mutex> lock(mtx);
 
     std::string header = modeLabel(mode);
     if (!items.empty()) {
@@ -26,39 +72,25 @@ void PlainDisplay::onSessionBegin(DisplayMode mode, const std::vector<std::strin
 void PlainDisplay::onSessionEnd(bool success, int succeeded, int skipped, int failed) {
     std::lock_guard<std::mutex> lock(mtx);
 
+    const std::optional<std::string> summary =
+        plain_display_internal::session_summary_text(currentMode, success, succeeded, skipped, failed);
+    if (!summary.has_value()) {
+        return;
+    }
+
     printRule();
-    const std::string label = modeLabel(currentMode);
-    if (succeeded > 0 || skipped > 0 || failed > 0) {
-        const std::string summary = label + " done:  " + std::to_string(succeeded) + " ok,  "
-            + std::to_string(skipped) + " skipped,  " + std::to_string(failed) + " failed";
-        if (failed > 0) {
-            out() << "  " << decorateSummaryFail(summary) << '\n';
-        } else {
-            out() << "  " << decorateSummaryOk(summary) << '\n';
-        }
+    const bool failStyle = failed > 0 || !success;
+    if (failStyle) {
+        out() << "  " << decorateSummaryFail(*summary) << '\n';
     } else {
-        const std::string summary = label + (success ? " done" : " failed");
-        if (success) {
-            out() << "  " << decorateSummaryOk(summary) << '\n';
-        } else {
-            out() << "  " << decorateSummaryFail(summary) << '\n';
-        }
+        out() << "  " << decorateSummaryOk(*summary) << '\n';
     }
     printRule();
     out().flush();
 }
 
 void PlainDisplay::onItemBegin(const std::string& itemId, const std::string& label) {
-    {
-        std::lock_guard<std::mutex> lock(mtx);
-        itemMap[itemId] = DisplayItemStatus{
-            .id = itemId,
-            .label = label,
-            .metrics = DisplayProgressMetrics{.percent = 0},
-            .step = "starting",
-            .state = DisplayItemState::RUNNING,
-        };
-    }
+    trackItemBegin(itemId, label);
     out() << formatItemLine(itemId, DisplayProgressMetrics{.percent = 0}, "starting") << '\n';
     out().flush();
 }
@@ -171,6 +203,14 @@ void PlainDisplay::onMessage(const std::string& text, const std::string& source)
         out() << "  [" << source << "]  " << decorateMessage(text) << '\n';
     } else {
         out() << "  " << decorateMessage(text) << '\n';
+    }
+    out().flush();
+}
+
+void PlainDisplay::onUnindentedText(const std::string& text) {
+    out() << text;
+    if (!text.empty() && text.back() != '\n') {
+        out() << '\n';
     }
     out().flush();
 }

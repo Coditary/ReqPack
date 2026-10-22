@@ -49,6 +49,10 @@ struct DisplayItemStatus {
 	DisplayItemState state{DisplayItemState::PENDING};
 };
 
+struct PackageTableDisplayContext {
+	std::vector<std::string> highlightTerms{};
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // IDisplay — abstract CLI renderer.
 //
@@ -74,6 +78,8 @@ public:
 	/// @param items    Ordered list of item IDs that will be processed.
 	virtual void onSessionBegin(DisplayMode mode,
 	                            const std::vector<std::string>& items) = 0;
+
+	virtual void setPackageTableContext(const PackageTableDisplayContext& context) {}
 
 	/// Called once when the command finishes (success or partial/full failure).
 	/// @param success    True when every item succeeded.
@@ -116,6 +122,9 @@ public:
 	virtual void onMessage(const std::string& text,
 	                       const std::string& source = {}) = 0;
 
+	/// Full-width output without the default message indent (structured CLI views).
+	virtual void onUnindentedText(const std::string& text) = 0;
+
 	// ── Table output (LIST / SEARCH / INFO) ───────────────────────────────────
 
 	/// Start a table; defines column headers and count.
@@ -130,4 +139,10 @@ public:
 	// ── Housekeeping ──────────────────────────────────────────────────────────
 
 	virtual void flush() = 0;
+
+	/// Clear in-place progress before external TTY output (e.g. sudo password prompt).
+	virtual void onProgressSuspend() {}
+
+	/// Resume in-place progress after external TTY output completes.
+	virtual void onProgressResume() {}
 };

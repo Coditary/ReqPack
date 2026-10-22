@@ -182,6 +182,18 @@ std::set<std::string> discover_systems(const ReqPackConfig& config) {
     return systems;
 }
 
+std::string resolve_default_search_system(const ReqPackConfig& config) {
+    const std::string normalized = to_lower_copy(config.rqp.defaultSearchSystem);
+    if (normalized.empty()) {
+        return {};
+    }
+    const std::set<std::string> systems = discover_systems(config);
+    if (!systems.contains(normalized)) {
+        return {};
+    }
+    return normalized;
+}
+
 }  // namespace cli_internal
 
 std::set<std::string> Cli::discover_primary_systems(const ReqPackConfig& config) {

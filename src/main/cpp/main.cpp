@@ -11,6 +11,7 @@
 
 #include <curl/curl.h>
 
+#include <clocale>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -42,6 +43,7 @@ void configure_logger_from_config(Logger& logger, const ReqPackConfig& config) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    (void)std::setlocale(LC_ALL, "");
     std::vector<std::string> rawArguments;
     rawArguments.reserve(static_cast<std::size_t>(argc > 1 ? argc - 1 : 0));
     for (int i = 1; i < argc; ++i) {

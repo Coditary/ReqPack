@@ -63,10 +63,13 @@ public:
 
 	void onMessage(const std::string& text,
 	               const std::string& source = {}) override;
+	void onUnindentedText(const std::string& text) override;
 
 	void onTableBegin(const std::vector<std::string>& headers) override;
 	void onTableRow(const std::vector<std::string>& cells) override;
 	void onTableEnd() override;
+
+	void setPackageTableContext(const PackageTableDisplayContext& context) override;
 
 	void flush() override;
 
@@ -111,24 +114,29 @@ protected:
 	/// Generic informational message text.
 	virtual std::string decorateMessage(const std::string& text) const;
 
-private:
-	// ── State ─────────────────────────────────────────────────────────────────
+	virtual std::string decorateListNameCell(const std::string& text) const;
+	virtual std::string decorateListVersionCell(const std::string& text) const;
+	virtual std::string decorateListTypeCell(const std::string& text) const;
+	virtual std::string decorateListPlatformCell(const std::string& text) const;
+	virtual std::string decorateListDescriptionCell(const std::string& text) const;
 
+	virtual std::string applySearchHighlight(const std::string& text) const;
+
+protected:
 	DisplayMode                                        currentMode{DisplayMode::IDLE};
 	std::unordered_map<std::string, DisplayItemStatus> itemMap;
 	std::vector<std::string>                           tableHeaders;
 	std::vector<std::vector<std::string>>              tableRows;
 	std::vector<size_t>                                colWidths;
 	bool                                               fieldValueTable{false};
+	PackageTableDisplayContext                         packageTableContext{};
 	mutable std::mutex                                 mtx;
 
+private:
 	// ── Private helpers ───────────────────────────────────────────────────────
 
 	/// Renders the full `[##....] 50%` progress bar string.
 	std::string renderBar(int percent) const;
-
-	/// Returns the label string for a mode enum value.
-	static std::string modeLabel(DisplayMode mode);
 
 	/// Prints one separator rule to stdout (uses decorateRule).
 	void printRule() const;
@@ -140,6 +148,15 @@ private:
 
 	std::vector<std::string> wrapText(const std::string& text, size_t width) const;
 	bool isPackageSummaryTable() const;
+	bool isPlatformPackageTable() const;
 	void renderFieldValueTable() const;
 	void renderWrappedPackageTable() const;
+	void renderPlatformPackageTable() const;
+
+protected:
+	static std::string modeLabel(DisplayMode mode);
+	void setSessionContext(DisplayMode mode, const std::vector<std::string>& items);
+	void trackItemBegin(const std::string& itemId, const std::string& label);
+	DisplayProgressMetrics trackItemStep(const std::string& itemId, const std::string& step);
+	bool tryMarkItemSuccess(const std::string& itemId);
 };

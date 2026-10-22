@@ -187,9 +187,17 @@ std::vector<Request> parse_arguments(const std::vector<std::string>& arguments, 
         }
     }
 
+    bool implicitSearch = false;
     if (action == ActionType::UNKNOWN) {
-        state.lastParseFailed = true;
-        return requests;
+        if (cli_internal::resolve_default_search_system(config).empty()) {
+            state.lastParseFailed = true;
+            return requests;
+        }
+        action = ActionType::SEARCH;
+        actionIndex = requestArguments.size();
+        implicitSearch = true;
+    } else if (action == ActionType::SEARCH && actionIndex >= requestArguments.size()) {
+        implicitSearch = true;
     }
 
     if (std::any_of(requestArguments.begin(), requestArguments.end(), [](const std::string& argument) {
@@ -326,6 +334,10 @@ std::vector<Request> parse_arguments(const std::vector<std::string>& arguments, 
             auditOutputPath = requestArguments[++index];
             return true;
         }
+        if (action == ActionType::AUDIT && (argument == "--doctor" || argument == "--fail-on-findings")) {
+            flags.push_back(argument.substr(2));
+            return true;
+        }
         if (action == ActionType::SNAPSHOT && argument == "--output") {
             if (index + 1 >= requestArguments.size()) {
                 state.lastParseFailed = true;
@@ -457,9 +469,22 @@ std::vector<Request> parse_arguments(const std::vector<std::string>& arguments, 
         return requests[it->second];
     };
 
-    for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
+    const std::size_t positionalStart = implicitSearch ? 0 : actionIndex + 1;
+    for (std::size_t i = positionalStart; i < requestArguments.size(); ++i) {
         const std::string& argument = requestArguments[i];
         const std::string normalizedArgument = to_lower_copy(argument);
+
+        if (!implicitSearch && i == actionIndex) {
+            continue;
+        }
+
+        if (action == ActionType::SEARCH) {
+            std::size_t flagIndex = i;
+            if (consume_package_result_filter_flag(action, requestArguments, flagIndex, global_flags)) {
+                i = flagIndex;
+                continue;
+            }
+        }
 
         if (is_flag_argument(argument)) {
             if (!consume_request_flag(i, global_flags)) {
@@ -475,6 +500,13 @@ std::vector<Request> parse_arguments(const std::vector<std::string>& arguments, 
         }
 
         if (action == ActionType::SEARCH && currentSystem.empty()) {
+            const std::string defaultSystem = cli_internal::resolve_default_search_system(config);
+            if (!defaultSystem.empty()) {
+                Request& request = ensure_request(defaultSystem);
+                currentSystem = defaultSystem;
+                request.packages.push_back(argument);
+                continue;
+            }
             Logger::instance().diagnostic(unknown_search_system_diagnostic(argument));
             state.lastParseFailed = true;
             return {};

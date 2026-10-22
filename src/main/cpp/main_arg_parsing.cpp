@@ -337,6 +337,14 @@ bool is_host_refresh_command(const std::vector<std::string>& arguments) {
     return to_lower_copy(filtered[0]) == "host" && to_lower_copy(filtered[1]) == "refresh";
 }
 
+bool is_security_status_command(const std::vector<std::string>& arguments) {
+    const std::vector<std::string> filtered = strip_config_arguments(arguments);
+    if (filtered.size() != 2) {
+        return false;
+    }
+    return to_lower_copy(filtered[0]) == "security" && to_lower_copy(filtered[1]) == "status";
+}
+
 bool is_version_command(const std::vector<std::string>& arguments) {
     const std::vector<std::string> filtered = strip_config_arguments(arguments);
     if (filtered.size() != 1) {

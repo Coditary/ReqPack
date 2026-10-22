@@ -93,6 +93,13 @@ void Logger::diagnostic(const DiagnosticMessage& diagnostic, bool mirrorToDispla
     (void)emitDiagnostic(diagnostic, mirrorToDisplay);
 }
 
+void Logger::setPackageTableContext(const PackageTableDisplayContext& context) {
+    IDisplay* activeDisplay = display.load(std::memory_order_acquire);
+    if (activeDisplay != nullptr) {
+        activeDisplay->setPackageTableContext(context);
+    }
+}
+
 void Logger::displaySessionBegin(DisplayMode mode, const std::vector<std::string>& items) {
     emit(OutputAction::DISPLAY_SESSION_BEGIN,
         OutputContext{
@@ -107,6 +114,21 @@ void Logger::displaySessionEnd(bool success, int succeeded, int skipped, int fai
             .statusCode = success ? 0 : 1,
             .payload = std::to_string(succeeded) + ":" + std::to_string(skipped) + ":" + std::to_string(failed),
         });
+}
+
+void Logger::displayProgressSuspend() {
+    flushSync();
+    IDisplay* activeDisplay = display.load(std::memory_order_acquire);
+    if (activeDisplay != nullptr) {
+        activeDisplay->onProgressSuspend();
+    }
+}
+
+void Logger::displayProgressResume() {
+    IDisplay* activeDisplay = display.load(std::memory_order_acquire);
+    if (activeDisplay != nullptr) {
+        activeDisplay->onProgressResume();
+    }
 }
 
 void Logger::displayItemBegin(const std::string& itemId, const std::string& label) {
@@ -168,4 +190,8 @@ void Logger::displayTableRow(const std::vector<std::string>& cells) {
 
 void Logger::displayTableEnd() {
     emit(OutputAction::DISPLAY_TABLE_END);
+}
+
+void Logger::displayUnindentedText(const std::string& text) {
+    emit(OutputAction::DISPLAY_UNINDENTED_TEXT, OutputContext{.message = text});
 }

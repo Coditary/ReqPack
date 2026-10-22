@@ -603,6 +603,9 @@ Bundled or checked-in plugin examples in this repository:
 
 ```bash
 make build
+make install      # beta: ~/.local/opt/beta-bin/rqp + ~/.local/bin/rqp-beta
+make install-dev  # also replace ~/.local/bin/rqp (after self-update use rqp-beta instead)
+make uninstall
 make test
 make test-unit
 make test-smoke

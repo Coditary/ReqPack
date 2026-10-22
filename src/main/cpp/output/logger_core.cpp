@@ -34,6 +34,7 @@ std::string action_to_event_name(OutputAction action) {
 			case OutputAction::DISPLAY_ITEM_SKIPPED: return "item_skipped";
 			case OutputAction::DISPLAY_ITEM_FAILURE: return "item_failure";
 		case OutputAction::DISPLAY_MESSAGE: return "display_message";
+		case OutputAction::DISPLAY_UNINDENTED_TEXT: return "display_unindented_text";
 		case OutputAction::DISPLAY_TABLE_HEADER: return "table_header";
 		case OutputAction::DISPLAY_TABLE_ROW: return "table_row";
 		case OutputAction::DISPLAY_TABLE_END: return "table_end";
@@ -206,6 +207,8 @@ std::string logger_render_output_event(const OutputEvent& event) {
 			return "[display:item_failure] " + event.context.source + " " + event.context.message;
 		case OutputAction::DISPLAY_MESSAGE:
 			return "[display:message] " + event.context.message;
+		case OutputAction::DISPLAY_UNINDENTED_TEXT:
+			return "[display:unindented] " + event.context.message;
 		case OutputAction::DISPLAY_TABLE_HEADER:
 			return "[display:table_header] " + event.context.payload;
 		case OutputAction::DISPLAY_TABLE_ROW:
