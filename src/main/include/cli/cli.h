@@ -39,6 +39,7 @@ public:
 private:
     std::unique_ptr<CLI::App> app;
     ActionType pendingHelpAction_ = ActionType::UNKNOWN;
+    std::string pendingHelpDedicatedCommand_;
     bool lastParseFailed_ = false;
     std::string lastParseError_;
 

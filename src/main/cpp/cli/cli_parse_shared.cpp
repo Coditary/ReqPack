@@ -26,7 +26,14 @@ std::string to_lower_copy(std::string value) {
 }
 
 bool is_flag_argument(const std::string& argument) {
-    return argument.rfind("--", 0) == 0 && argument.size() > 2;
+    if (argument.rfind("--", 0) == 0 && argument.size() > 2) {
+        return true;
+    }
+    if (argument.size() == 2 && argument[0] == '-' &&
+        std::isalpha(static_cast<unsigned char>(argument[1])) != 0) {
+        return true;
+    }
+    return false;
 }
 
 bool is_help_flag_argument(const std::string& argument) {
@@ -65,8 +72,9 @@ bool is_url(const std::string& value) {
 }
 
 bool supports_manifest_path(ActionType action) {
-    return action == ActionType::INSTALL || action == ActionType::REMOVE || action == ActionType::UPDATE || action == ActionType::AUDIT ||
-           action == ActionType::LIST || action == ActionType::OUTDATED;
+    return action == ActionType::INSTALL || action == ActionType::REMOVE || action == ActionType::UPDATE ||
+           action == ActionType::AUDIT || action == ActionType::LIST || action == ActionType::OUTDATED ||
+           action == ActionType::INFO || action == ActionType::SBOM;
 }
 
 std::optional<std::filesystem::path> resolve_manifest_path_argument(const std::string& argument) {
@@ -104,7 +112,7 @@ bool consume_package_result_filter_flag(
             flags.push_back("installed");
             return true;
         }
-        if (argument == "--all-arch" || argument == "-v" || argument == "--verbose") {
+        if (argument == "--all-arch" || argument == "--show-arch") {
             flags.push_back("all-arch");
             return true;
         }

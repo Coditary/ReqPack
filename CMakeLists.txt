@@ -64,6 +64,9 @@ find_library(REQPACK_ZSTD_LIBRARY NAMES zstd REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ResolveCompletion.cmake)
+resolve_completion()
+
 if(NOT REQPACK_GO_EXECUTABLE)
     unset(REQPACK_GO_EXECUTABLE CACHE)
     find_program(REQPACK_GO_EXECUTABLE NAMES go go.exe
@@ -357,7 +360,7 @@ else()
 endif()
 
 set(REQPACK_CLI_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH "ReqPack CLI repository path" FORCE)
-set(REQPACK_CORE_BUILD_TESTS OFF CACHE BOOL "Build ReqPack-Core tests from the CLI repo" FORCE)
+set(REQPACK_CORE_BUILD_TESTS OFF CACHE BOOL "Build ReqPack-Core tests from the CLI repo")
 set(REQPACK_CORE_TEST_BUILD_DIR "${CMAKE_BINARY_DIR}" CACHE INTERNAL "Build dir used by core integration tests for the rqp binary")
 if(SOL2_INCLUDE_DIR)
     set(SOL2_INCLUDE_DIR_OVERRIDE "${SOL2_INCLUDE_DIR}" CACHE INTERNAL "")
@@ -392,16 +395,23 @@ target_link_libraries(reqpack_core PUBLIC reqpack_output)
 file(GLOB REQPACK_CLI_LIB_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/cli/*.cpp"
 )
-add_library(reqpack_cli STATIC ${REQPACK_CLI_LIB_SOURCES})
-target_include_directories(reqpack_cli
-    PUBLIC src/main/include
-    PRIVATE src/main/cpp/cli
-)
-target_link_libraries(reqpack_cli PUBLIC
-    reqpack_core
-    reqpack_output
-    CLI11::CLI11
-)
+if(NOT TARGET reqpack_cli)
+    add_library(reqpack_cli STATIC ${REQPACK_CLI_LIB_SOURCES})
+    target_include_directories(reqpack_cli
+        PUBLIC src/main/include
+        PRIVATE src/main/cpp/cli
+    )
+    target_link_libraries(reqpack_cli PUBLIC
+        reqpack_core
+        reqpack_output
+        CLI11::CLI11
+        coditary::completion
+    )
+endif()
+
+if(TARGET reqpack_cli)
+    target_link_libraries(reqpack_cli PUBLIC coditary::completion)
+endif()
 
 set(REQPACK_CLI_SOURCES
     src/main/cpp/main.cpp
@@ -413,6 +423,7 @@ set(REQPACK_CLI_SOURCES
     src/main/cpp/main_self_update_support.cpp
     src/main/cpp/main_self_update_release.cpp
     src/main/cpp/main_stdin.cpp
+    src/main/cpp/main_completion.cpp
 )
 
 add_executable(ReqPack ${REQPACK_CLI_SOURCES})
@@ -420,6 +431,7 @@ set_target_properties(ReqPack PROPERTIES OUTPUT_NAME rqp)
 
 add_executable(reqpack_cli_unit_tests
     tests/cpp/test_main.cpp
+    tests/unit/cli/cli_command_completion_tests.cpp
     tests/unit/output/logger/format_tests.cpp
     tests/unit/output/package_table_format_tests.cpp
     tests/unit/output/package_info_format_tests.cpp
@@ -455,6 +467,7 @@ target_link_libraries(ReqPack PRIVATE
     reqpack_core
     reqpack_output
     reqpack_security_core
+    coditary::completion
     CLI11::CLI11
     CURL::libcurl
     lmdb
@@ -474,6 +487,7 @@ target_link_libraries(reqpack_cli_unit_tests PRIVATE
     reqpack_core
     reqpack_output
     CLI11::CLI11
+    coditary::completion
     ${REQPACK_SPDLOG_TARGET}
     ${REQPACK_FMT_TARGET}
 )
@@ -481,6 +495,9 @@ target_link_libraries(reqpack_cli_unit_tests PRIVATE
 target_compile_definitions(ReqPack PRIVATE SOL_ALL_SAFETIES_ON=1)
 target_compile_definitions(ReqPack PRIVATE REQPACK_RELEASE_ID="${REQPACK_RELEASE_ID}")
 target_compile_definitions(ReqPack PRIVATE REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}")
+target_compile_definitions(ReqPack PRIVATE
+    REQPACK_COMPLETIONS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scripts/completions"
+)
 target_compile_definitions(reqpack_cli_unit_tests PRIVATE
     SOL_ALL_SAFETIES_ON=1
     REQPACK_TEST_REPO_ROOT="${CMAKE_SOURCE_DIR}"
@@ -494,3 +511,15 @@ endforeach()
 include(CTest)
 include(${catch2_SOURCE_DIR}/contrib/Catch.cmake)
 catch_discover_tests(reqpack_cli_unit_tests TEST_PREFIX "cli::unit::")
+
+if(UNIX AND NOT WIN32 AND NOT APPLE)
+    add_test(
+        NAME live::container::quick
+        COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/run-live-system-tests.sh" --quick
+    )
+    set_tests_properties(live::container::quick PROPERTIES
+        LABELS "container-live"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        SKIP_RETURN_CODE 77
+    )
+endif()

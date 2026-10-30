@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+_system_container_lib="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/../../lib" && pwd)/container_runtime.sh"
+# shellcheck source=../../lib/container_runtime.sh
+source "${_system_container_lib}"
+
 : "${SYSTEM_TEST_ROOT:?missing SYSTEM_TEST_ROOT}"
 : "${SYSTEM_TEST_SCENARIO:?missing SYSTEM_TEST_SCENARIO}"
 : "${SYSTEM_TEST_NAME:?missing SYSTEM_TEST_NAME}"

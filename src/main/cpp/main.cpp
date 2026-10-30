@@ -1,8 +1,8 @@
+#include "main_completion.h"
 #include "main_dispatch.h"
 
-#include "main_diagnostics.h"
-
 #include "cli/cli.h"
+#include "main_diagnostics.h"
 #include "core/config/configuration.h"
 #include "core/security/security_bridge.h"
 #include "core/plugins/plugin_test_runner.h"
@@ -44,6 +44,11 @@ void configure_logger_from_config(Logger& logger, const ReqPackConfig& config) {
 
 int main(int argc, char* argv[]) {
     (void)std::setlocale(LC_ALL, "");
+
+    if (const std::optional<int> completionExit = try_handle_completion_cli(argc, argv)) {
+        return completionExit.value();
+    }
+
     std::vector<std::string> rawArguments;
     rawArguments.reserve(static_cast<std::size_t>(argc > 1 ? argc - 1 : 0));
     for (int i = 1; i < argc; ++i) {

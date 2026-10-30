@@ -337,6 +337,42 @@ jobs:
             "${{ github.workspace }}" \
             "${{ matrix.target }}"
 
+  live-container-tests:
+    name: live-container-quick
+    needs:
+      - build-artifacts
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout reqpack
+        uses: actions/checkout@v4
+
+      - name: Checkout reqpack-plugins
+        uses: actions/checkout@v4
+        with:
+          repository: Coditary/reqpack-plugins
+          path: reqpack-plugins
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends podman
+
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: release-bundle-x86_64-linux
+          path: release-artifacts
+
+      - name: Run live container smoke
+        env:
+          REQPACK_PLUGINS_ROOT: ${{ github.workspace }}/reqpack-plugins
+        run: |
+          bash scripts/run-live-system-tests.sh \
+            --bundle "release-artifacts/rqp-${{ github.sha }}-x86_64-linux.tar.gz" \
+            debian-dpkg debian-dpkg-local debian-dpkg-plugin-live
+
   system-tests-macos:
     name: system-macos-${{ matrix.target }}
     needs:

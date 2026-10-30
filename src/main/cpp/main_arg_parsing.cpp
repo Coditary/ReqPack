@@ -303,7 +303,26 @@ std::vector<std::string> inherited_stream_arguments(const std::vector<std::strin
 
 bool is_self_update_command(const std::vector<std::string>& arguments) {
     const std::vector<std::string> filtered = strip_config_arguments(arguments);
-    if (filtered.empty() || Cli::parse_action(filtered.front()) != ActionType::UPDATE) {
+    if (filtered.empty()) {
+        return false;
+    }
+
+    const std::string command = to_lower_copy(filtered.front());
+    if (command == "self-update") {
+        for (std::size_t i = 1; i < filtered.size(); ++i) {
+            const std::string& argument = filtered[i];
+            if (argument == "--help" || argument == "-h") {
+                return false;
+            }
+            if (argument.rfind("--", 0) == 0) {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    if (Cli::parse_action(filtered.front()) != ActionType::UPDATE) {
         return false;
     }
 
@@ -312,12 +331,12 @@ bool is_self_update_command(const std::vector<std::string>& arguments) {
         if (argument == "--help" || argument == "-h") {
             return false;
         }
-        if (argument == "--all") {
+        if (argument == "--all" || argument == "--plugins") {
             return false;
         }
-        if (argument == "--stdin" || argument == "--dry-run" || argument == "--prompt-on-unsafe" ||
+        if (argument == "--stdin" || argument == "--dry-run" || argument == "-n" || argument == "--prompt-on-unsafe" ||
             argument == "--abort-on-unsafe" || argument == "--severity-threshold" ||
-            argument == "--score-threshold" || argument == "--jobs" || argument == "--jobs-max" ||
+            argument == "--score-threshold" || argument == "--jobs" || argument == "-j" || argument == "--jobs-max" ||
             argument == "--stop-on-first-failure") {
             return false;
         }
@@ -327,6 +346,15 @@ bool is_self_update_command(const std::vector<std::string>& arguments) {
         return false;
     }
     return true;
+}
+
+bool is_legacy_self_update_via_update_command(const std::vector<std::string>& arguments) {
+    const std::vector<std::string> filtered = strip_config_arguments(arguments);
+    if (filtered.empty()) {
+        return false;
+    }
+    const ActionType action = Cli::parse_action(filtered.front());
+    return action == ActionType::UPDATE && is_self_update_command(arguments);
 }
 
 bool is_host_refresh_command(const std::vector<std::string>& arguments) {
@@ -342,7 +370,11 @@ bool is_security_status_command(const std::vector<std::string>& arguments) {
     if (filtered.size() != 2) {
         return false;
     }
-    return to_lower_copy(filtered[0]) == "security" && to_lower_copy(filtered[1]) == "status";
+    if (to_lower_copy(filtered[0]) != "security") {
+        return false;
+    }
+    const std::string subcommand = to_lower_copy(filtered[1]);
+    return subcommand == "status" || subcommand == "doctor";
 }
 
 bool is_version_command(const std::vector<std::string>& arguments) {
@@ -350,8 +382,9 @@ bool is_version_command(const std::vector<std::string>& arguments) {
     if (filtered.size() != 1) {
         return false;
     }
-    const std::string command = to_lower_copy(filtered.front());
-    return command == "version" || command == "--version";
+    const std::string& token = filtered.front();
+    const std::string command = to_lower_copy(token);
+    return command == "version" || command == "--version" || token == "-V";
 }
 
 bool is_info_command(const std::vector<std::string>& arguments) {

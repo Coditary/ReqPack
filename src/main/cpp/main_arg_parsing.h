@@ -19,6 +19,7 @@ bool parse_remote_client_invocation(const std::vector<std::string>& arguments,
 bool is_action_stdin_command(const std::vector<std::string>& arguments, const std::string& action);
 std::vector<std::string> inherited_stream_arguments(const std::vector<std::string>& arguments);
 bool is_self_update_command(const std::vector<std::string>& arguments);
+bool is_legacy_self_update_via_update_command(const std::vector<std::string>& arguments);
 bool is_host_refresh_command(const std::vector<std::string>& arguments);
 bool is_security_status_command(const std::vector<std::string>& arguments);
 bool is_version_command(const std::vector<std::string>& arguments);

@@ -11,6 +11,7 @@ namespace cli_internal {
 struct HelpScanResult {
     bool hasHelp{false};
     ActionType action{ActionType::UNKNOWN};
+    std::string dedicatedCommand;
 };
 
 std::string_view program_name();
@@ -20,6 +21,8 @@ std::string_view verbose_description();
 
 HelpScanResult scan_help_arguments(const std::vector<std::string>& arguments);
 std::string general_help_text();
+std::string extended_help_text();
+std::string dedicated_command_help_text(const std::string& command);
 std::string command_help_text(ActionType action);
 
 }  // namespace cli_internal

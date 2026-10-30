@@ -12,6 +12,10 @@ container_control_dir="/test-control"
 container_runtime_root="/test-runtime-root"
 container_shared_rw_root="/test-shared"
 
+# shellcheck source=tests/system/lib/container_runtime.sh
+source "${repo_root}/tests/system/lib/container_runtime.sh"
+container_require_engine
+
 validate_run_id() {
     local value="$1"
     [[ "${value}" =~ ^[A-Za-z0-9._-]+$ ]]
@@ -131,7 +135,7 @@ mkdir -p "${image_context_dir}"
 cp "${repo_root}/tests/system/local/Containerfile" "${image_context_dir}/Containerfile"
 cp "${bundle_path}" "${image_context_dir}/rqp.tar.gz"
 
-podman build -t "${image_tag}" "${image_context_dir}" >/dev/null
+container_build -t "${image_tag}" "${image_context_dir}" >/dev/null
 
 container_runner_command="tmpdir=\"\$(mktemp -d)\" && cp \"${container_control_dir}/run-scenario.sh\" \"\${tmpdir}/run-scenario.sh\" && cp \"${container_control_dir}/scenario.sh\" \"\${tmpdir}/scenario.sh\" && bash \"\${tmpdir}/run-scenario.sh\" \"${container_repo_root}\" \"\${tmpdir}/scenario.sh\" \"${container_output_dir}\""
 
@@ -150,7 +154,7 @@ run_single_container_scenario() {
     cp "${repo_root}/tests/system/local/run-scenario.sh" "${output_dir}/run-scenario.sh"
 
     set +e
-    podman run --rm \
+    container_run \
         --network=none \
         -v "${repo_root}:${container_repo_root}:ro${label_suffix}" \
         -v "${output_dir}:${container_output_dir}:rw${label_suffix}" \
@@ -187,13 +191,13 @@ run_remote_multi_container_scenario() {
     cp "${scenario}" "${control_dir}/scenario.sh"
     cp "${repo_root}/tests/system/local/run-scenario.sh" "${control_dir}/run-scenario.sh"
 
-    if ! podman network create "${network_name}" >/dev/null; then
+    if ! container_network_create "${network_name}" >/dev/null; then
         printf 'failed to create test network: %s\n' "${network_name}" >&2
         return 1
     fi
     network_created="true"
 
-    if ! podman run -d \
+    if ! container_run_detached \
         --name "${server_container_name}" \
         --hostname server \
         --network "${network_name}" \
@@ -213,7 +217,7 @@ run_remote_multi_container_scenario() {
         "${image_tag}" \
         bash -lc "${container_runner_command}" >/dev/null; then
         if [ "${network_created}" = "true" ]; then
-            podman network rm "${network_name}" >/dev/null 2>&1 || true
+            container_network_rm "${network_name}" >/dev/null 2>&1 || true
         fi
         printf 'failed to start server container: %s\n' "${server_container_name}" >&2
         return 1
@@ -221,7 +225,7 @@ run_remote_multi_container_scenario() {
     server_started="true"
 
     set +e
-    podman run --rm \
+    container_run \
         --name "${client_container_name}" \
         --hostname client \
         --network "${network_name}" \
@@ -247,7 +251,7 @@ run_remote_multi_container_scenario() {
 
     if [ "${server_started}" = "true" ]; then
         set +e
-        timeout 15s podman wait "${server_container_name}" > "${server_output_dir}/container-exit.txt"
+        timeout 15s container_wait "${server_container_name}" > "${server_output_dir}/container-exit.txt"
         local wait_status=$?
         set -e
 
@@ -258,19 +262,19 @@ run_remote_multi_container_scenario() {
             server_status="timeout"
             printf 'server container did not exit within timeout\n' > "${server_output_dir}/runner-error.txt"
             set +e
-            podman stop -t 1 "${server_container_name}" >/dev/null 2>&1
-            podman wait "${server_container_name}" >/dev/null 2>&1
+            container_stop -t 1 "${server_container_name}" >/dev/null 2>&1
+            container_wait "${server_container_name}" >/dev/null 2>&1
             set -e
         fi
 
         set +e
-        podman logs "${server_container_name}" > "${server_output_dir}/container.log" 2>&1
-        podman rm -f "${server_container_name}" >/dev/null 2>&1
+        container_logs "${server_container_name}" > "${server_output_dir}/container.log" 2>&1
+        "${CONTAINER_BIN}" rm -f "${server_container_name}" >/dev/null 2>&1
         set -e
     fi
 
     if [ "${network_created}" = "true" ]; then
-        podman network rm "${network_name}" >/dev/null 2>&1 || true
+        container_network_rm "${network_name}" >/dev/null 2>&1 || true
     fi
 
     if [ "${timed_out}" = "false" ] && [ "${client_status}" -eq 0 ] && [ "${server_status}" = "0" ]; then

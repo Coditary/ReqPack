@@ -10,6 +10,10 @@ bundle_archive="$1"
 repo_root="$2"
 target="$3"
 
+# shellcheck source=../../tests/system/lib/container_runtime.sh
+source "${repo_root}/tests/system/lib/container_runtime.sh"
+container_require_engine
+
 [ -f "$bundle_archive" ] || {
     echo "release bundle missing: $bundle_archive" >&2
     exit 1
@@ -36,18 +40,13 @@ cp -R "$repo_root/tests/system/fixtures/demo-plugin/." "$plugin_dir/"
 
 config_path="$("${repo_root}/.github/scripts/create-system-test-config.sh" "$workspace_dir" "$workspace_dir/plugins")"
 
-volume_suffix=""
-if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
-    volume_suffix=":Z"
-fi
+container_build -t "$image_tag" "$context_dir"
 
-podman build -t "$image_tag" "$context_dir"
+container_run "$image_tag" --help >/dev/null
+container_run "$image_tag" version >/dev/null
 
-podman run --rm "$image_tag" --help >/dev/null
-podman run --rm "$image_tag" version >/dev/null
-
-podman run --rm \
-    -v "$workspace_dir:/workspace${volume_suffix}" \
+container_run \
+    -v "$(container_volume_rw "$workspace_dir" /workspace)" \
     "$image_tag" \
     --config /workspace/config.lua \
     test-plugin \

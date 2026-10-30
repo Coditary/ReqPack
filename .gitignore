@@ -5,3 +5,4 @@ rqp-plugins/
 
 build-check
 build-local/
+tests/system/live/fixtures/.build/

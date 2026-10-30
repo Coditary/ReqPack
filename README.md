@@ -76,8 +76,7 @@ ReqPack core currently targets:
 - Git for Git-backed plugin refresh.
 
 Self-update note:
-`rqp update` without package-manager arguments downloads matching release binary from configured release source.
-Release-binary users no longer need local build toolchain for self-update.
+`rqp self-update` downloads the matching release binary. Bare `rqp update` without arguments still works but prints a deprecation hint.
 
 ## Source Layout
 
@@ -207,11 +206,13 @@ ctest --test-dir build --output-on-failure
 | --- | --- | --- |
 | `install` | Install packages, local targets, or manifest contents | `rqp install apt curl git` |
 | `remove` | Remove packages | `rqp remove npm express` |
-| `update` | Self-update, refresh plugin wrappers, or update packages | `rqp update --all` |
-| `search` | Search available packages | `rqp search apt curl` |
-| `list` | List installed packages | `rqp list dnf` |
+| `update` | Update packages or manifests; wrapper refresh via `plugin` / `--plugins` | `rqp update apt` |
+| `self-update` | Update rqp release binary (preferred over bare `rqp update`) | `rqp self-update` |
+| `plugin` | Wrapper update, ensure, test, info | `rqp plugin update --all` |
+| `search` | Search available packages | `rqp s apt curl` |
+| `list` | List installed packages | `rqp ls dnf` |
 | `info` | Show package metadata | `rqp info brew jq` |
-| `outdated` | Show packages with newer versions | `rqp outdated` |
+| `outdated` | Show packages with newer versions | `rqp out dnf` |
 | `ensure` | Ensure plugin requirements are installed | `rqp ensure apt brew` |
 | `audit` | Audit packages or manifests for vulnerabilities | `rqp audit .` |
 | `sbom` | Export SBOM for installed packages | `rqp sbom --format cyclonedx-json --output sbom.json` |
@@ -250,21 +251,23 @@ printf 'install dnf curl\ninstall npm express\n' | rqp install --stdin
 rqp remove apt curl
 rqp remove apt:curl npm:lodash
 
-rqp update
-rqp update --all
-rqp update pip
-rqp update pip --all
+rqp self-update
+rqp update apt
+rqp update apt -a
+rqp plugin update pip
+rqp plugin update --all
+rqp update --plugins pip
 rqp update sys pip
 rqp update apt:curl npm:express
 ```
 
-Update behavior is worth knowing:
+Update behavior:
 
-- `rqp update` refreshes local registry first, then downloads ReqPack release binary for current host from configured release source.
-- `rqp update --all` refreshes all installed plugin wrappers, ordered by plugin dependencies.
-- `rqp update <system>` without package names refreshes that plugin wrapper.
-- `rqp update <system> --all` updates all packages for that system.
-- `rqp update sys <tool>` updates package-manager binary itself through ReqPack wrapper layer.
+- `rqp self-update` (or legacy `rqp update` with no args) downloads the configured release binary.
+- `rqp update <system>` updates **all packages** for that system (same as `-a` / `--all`).
+- `rqp plugin update <system>` or `rqp update --plugins <system>` refreshes the Git-backed plugin wrapper.
+- `rqp plugin update --all` or `rqp update --all` refreshes all installed plugin wrappers.
+- `rqp update sys <tool>` updates the package-manager binary through the sys layer.
 
 ### Search, List, Info, Outdated
 
@@ -338,6 +341,8 @@ rqp install .
 ### Plugin Testing
 
 `test-plugin` runs hermetic plugin conformance cases against one Lua plugin without touching a real package manager.
+
+Use `--live` (preset `.reqpack-test/live/`) inside a distro container to exercise real package-manager commands without `fakeExec` mocks.
 
 ```bash
 rqp test-plugin --plugin ./plugins/demo --case ./cases/install.lua
@@ -622,6 +627,7 @@ ReqPack now has dedicated artifact-level system tests in addition to CTest-based
 
 - Linux system tests package `rqp`, build temporary runtime image in Podman, then run end-to-end fixture checks.
 - macOS system tests package `rqp`, extract bundle, then run same fixture flow natively.
+- Live container tests (`make system-tests-live`) run real package-manager lifecycles inside distro images with plugins from `reqpack-plugins` (see `tests/system/live/README.md`).
 
 Local examples:
 

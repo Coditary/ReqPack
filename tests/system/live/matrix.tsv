@@ -1,0 +1,13 @@
+# id|image|system|plugin_relpath|package|verify_cmd|mode|enabled
+debian-dpkg|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|tree|command -v tree|repo|1
+debian-dpkg-local|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|debian/reqpack-live-fixture_1.0_all.deb:reqpack-live-fixture|command -v rqplive-fixture|local|1
+debian-dpkg-plugin-live|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/plugin-live.json|plugin-live|1
+fedora-rpm|reqpack-live-test:fedora-43|rpm|r/rpm|tree|command -v tree|repo|1
+fedora-rpm-local|reqpack-live-test:fedora-43|rpm|r/rpm|rpm/reqpack-live-fixture-1.0-1.noarch.rpm:reqpack-live-fixture|rpm -q reqpack-live-fixture|local|1
+fedora-rpm-plugin-live|reqpack-live-test:fedora-43|rpm|r/rpm|-|test -f /workspace/reports/plugin-live.json|plugin-live|1
+arch-pacman|reqpack-live-test:archlinux|pacman|p/pacman|tree|command -v tree|repo|1
+arch-pacman-local|reqpack-live-test:archlinux|pacman|p/pacman|arch/reqpack-live-fixture-1.0-1-any.pkg.tar.zst:reqpack-live-fixture|pacman -Q reqpack-live-fixture|local|1
+arch-pacman-plugin-live|reqpack-live-test:archlinux|pacman|p/pacman|-|test -f /workspace/reports/plugin-live.json|plugin-live|1
+node-npm|reqpack-live-test:node-22-bookworm|npm|n/npm|is-odd|npm list -g is-odd --depth=0|repo|1
+node-npm-local|reqpack-live-test:node-22-bookworm|npm|n/npm|npm/reqpack-live-fixture-1.0.0.tgz:reqpack-live-fixture|npm list -g reqpack-live-fixture --depth=0|local|1
+node-npm-plugin-live|reqpack-live-test:node-22-bookworm|npm|n/npm|-|test -f /workspace/reports/plugin-live.json|plugin-live|1

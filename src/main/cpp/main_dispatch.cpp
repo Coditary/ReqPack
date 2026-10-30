@@ -168,6 +168,10 @@ int dispatch_main_command(Cli& cli,
     }
 
     if (is_self_update_command(rawArguments)) {
+        if (is_legacy_self_update_via_update_command(rawArguments)) {
+            logger.logStdout(
+                "Note: Running self-update. Prefer `rqp self-update` or `rqp update --all` for packages.");
+        }
         const int result = run_self_update(config, logger);
         logger.flushSync();
         return result;

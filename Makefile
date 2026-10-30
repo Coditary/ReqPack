@@ -1,4 +1,4 @@
-.PHONY: all clean run build build-rqp test test-unit test-smoke coverage-build test-coverage profile-build profile-tests profile-ground system-tests system-tests-parallel help install install-dev uninstall
+.PHONY: all clean run build build-rqp test test-unit test-smoke coverage-build test-coverage profile-build profile-tests profile-ground system-tests system-tests-parallel system-tests-live system-tests-live-parallel help install install-dev uninstall
 
 NPROC := $(shell command -v nproc >/dev/null 2>&1 && nproc || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 JOBS := $(shell expr $(NPROC) / 4)
@@ -41,6 +41,7 @@ help:
 	@echo "  make uninstall    Remove beta install (rqp-beta + opt/beta-bin; not release symlink)"
 	@echo "  make run          Run ./build/rqp (pass ARGS='...')"
 	@echo "  make test         Run ctest"
+	@echo "  make system-tests-live  Run live distro container plugin lifecycle tests"
 	@echo "  make clean        Remove build/"
 
 install: build-rqp
@@ -94,6 +95,18 @@ system-tests:
 
 system-tests-parallel:
 	@JOBS="$(LOCAL_SYSTEM_TEST_JOBS)" LOCAL_SYSTEM_TEST_BUILD_JOBS="$(LOCAL_SYSTEM_TEST_BUILD_JOBS)" bash scripts/run-all-local-system-tests-parallel.sh $(LOCAL_SYSTEM_TEST_SCENARIOS)
+
+system-tests-live:
+	@bash scripts/run-live-system-tests.sh $(LOCAL_LIVE_TEST_SCENARIOS)
+
+system-tests-live-parallel:
+	@LIVE_SYSTEM_TEST_JOBS="$(LOCAL_LIVE_TEST_JOBS)" bash scripts/run-live-system-tests-parallel.sh $(LOCAL_LIVE_TEST_SCENARIOS)
+
+system-tests-live-quick:
+	@bash scripts/run-live-system-tests.sh --quick
+
+test-container-live: system-tests-live-quick
+	@:
 
 coverage-build:
 	cmake -S . -B $(COVERAGE_BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug -DREQPACK_ENABLE_COVERAGE=ON -DRQP_SECURITY_CORE_BUILD_TESTS=ON
