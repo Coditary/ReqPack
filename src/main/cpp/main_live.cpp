@@ -270,6 +270,9 @@ std::filesystem::path image_context_for_tag(const std::filesystem::path& liveRoo
     if (suffix == "nix") {
         return liveRoot / "images/nix";
     }
+    if (suffix == "nix-bootstrap") {
+        return liveRoot / "images/nix-bootstrap";
+    }
     throw std::runtime_error("unknown live image tag: " + tag);
 }
 
@@ -379,6 +382,7 @@ bool ensure_live_images(const LiveRunOptions& options, Logger& logger, const Con
         "reqpack-live-test:archlinux",
         "reqpack-live-test:node-22-bookworm",
         "reqpack-live-test:nix",
+        "reqpack-live-test:nix-bootstrap",
     };
     for (const std::string& tag : tags) {
         const std::filesystem::path context = image_context_for_tag(liveRoot, tag);

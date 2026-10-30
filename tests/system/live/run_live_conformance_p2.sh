@@ -89,10 +89,6 @@ conf_info_has_not_found_signal() {
         grep -Eiq 'not found|no package|unknown package|missing package|no results'
 }
 
-conf_nix_hello_resolvable() {
-    nix build --no-link --print-out-paths "nixpkgs#${PKG_REMOTE_VALID}" >/dev/null 2>&1 ||
-        nix build --no-link --print-out-paths "nixpkgs#hello" >/dev/null 2>&1
-}
 
 conf_run_phase2() {
     conf_log "phase 2 SYSTEM=${SYSTEM} remote=${PKG_REMOTE_VALID}"
@@ -114,8 +110,6 @@ conf_run_phase2() {
             conf_record P2.1-search-valid fail "remote package name not in results"
         fi
     elif grep -Fq "${PKG_REMOTE_VALID}" <<<"$(conf_combined_from_paths "${p21_json}" "${p21_err}")"; then
-        conf_record P2.1-search-valid pass ""
-    elif [ "${SYSTEM}" = "nix" ] && conf_nix_hello_resolvable; then
         conf_record P2.1-search-valid pass ""
     else
         conf_record P2.1-search-valid fail "minItems < 1 or missing ${PKG_REMOTE_VALID}"
@@ -165,9 +159,7 @@ conf_run_phase2() {
 
     # P2.5 — info valid package (text capture; JSON often empty for info)
     conf_invoke_text P2.5-info-valid info "${SYSTEM}:${PKG_REMOTE_VALID}"
-    if [ "${SYSTEM}" = "nix" ] && conf_nix_hello_resolvable; then
-        conf_record P2.5-info-valid pass ""
-    elif [ "${CONF_LAST_EXIT}" -ne 0 ] && ! conf_json_path_has_ok_true "${CONF_LAST_JSON}"; then
+    if [ "${CONF_LAST_EXIT}" -ne 0 ] && ! conf_json_path_has_ok_true "${CONF_LAST_JSON}"; then
         conf_record P2.5-info-valid fail "exit ${CONF_LAST_EXIT}"
     elif conf_output_has_lua_stacktrace "$(conf_combined_from_paths "${CONF_LAST_JSON}" "${CONF_LAST_STDERR}")"; then
         conf_record P2.5-info-valid fail "lua stacktrace"

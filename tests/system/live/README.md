@@ -34,6 +34,9 @@ ctest --test-dir build -L container-live --output-on-failure
 Edit `matrix.tsv` to add rows (`id|image|system|plugin_relpath|package|verify_cmd|enabled`).
 
 Cached base images are defined under `images/*/Containerfile` (index sync at image build time).
+
+**Nix:** `images/nix` preinstalls the distro `nix` package (fast conformance on an already-working PM). **`images/nix-bootstrap`** has **no** `nix` package — rows `*-bootstrap-*` exercise plugin bootstrap via `context.net.download` and must pass `P1.5`/`P1.6` and real `rqp search` (no `conf_nix_hello_resolvable` bypass).
+
 Publish to GHCR: `LIVE_IMAGE_PUSH=1 bash scripts/publish-live-test-images.sh` (see workflow `publish-live-test-images.yml`).
 
 Rebuild all offline artifacts (Podman/Docker required for pacman; debian/rpm/npm fall back to containers if host tools are missing):

@@ -20,7 +20,9 @@ node-npm|reqpack-live-test:node-22-bookworm|npm|n/npm|is-odd|npm list -g is-odd 
 node-npm-local|reqpack-live-test:node-22-bookworm|npm|n/npm|npm/reqpack-live-fixture-1.0.0.tgz:reqpack-live-fixture|npm list -g reqpack-live-fixture --depth=0|local|1
 node-npm-plugin-live|reqpack-live-test:node-22-bookworm|npm|n/npm|-|test -f /workspace/reports/plugin-live.json|plugin-live|1
 nix-nix-plugin-live|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/plugin-live.json|plugin-live|0|
+nix-nix-plugin-live-bootstrap|reqpack-live-test:nix-bootstrap|nix|n/nix|-|test -f /workspace/reports/plugin-live.json|plugin-live|1|
 nix-nix-conformance-p2|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p2.env
+nix-nix-conformance-bootstrap-p2|reqpack-live-test:nix-bootstrap|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-bootstrap-p2.env
 nix-nix-conformance-p3|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p3.env
 nix-nix-conformance-p4|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p4.env
 nix-nix-conformance-p5|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p5.env

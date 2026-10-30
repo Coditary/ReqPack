@@ -1,0 +1,13 @@
+# Fedora base for plugin-driven Nix bootstrap (no preinstalled nix package).
+FROM fedora:44
+
+RUN dnf install -y \
+        bash \
+        ca-certificates \
+        curl \
+        jq \
+        xz \
+        git \
+    && dnf -y makecache
+
+WORKDIR /workspace

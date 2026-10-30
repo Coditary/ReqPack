@@ -76,7 +76,7 @@ conf_run_phase1() {
 
     conf_dpkg_apt_update
 
-    if [ "${SYSTEM}" = "nix" ]; then
+    if [ "${SYSTEM}" = "nix" ] && [ "${NIX_CONFORMANCE_SKIP_PREWARM:-0}" != "1" ]; then
         set +e
         nix flake metadata nixpkgs \
             >"${CONFORMANCE_REPORT_DIR}/P1.0-nix-flake.stdout" \
@@ -144,6 +144,24 @@ conf_run_phase1() {
         conf_record P1.3-ensure fail "ensure failed"
     else
         conf_record P1.3-ensure pass ""
+    fi
+
+    if [ "${SYSTEM}" = "nix" ] && [ "${NIX_CONFORMANCE_REQUIRES_PLUGIN_BOOTSTRAP:-0}" = "1" ]; then
+        if ! command -v nix >/dev/null 2>&1 &&
+            ! test -x "${HOME}/.nix-profile/bin/nix" &&
+            ! test -x "/nix/var/nix/profiles/default/bin/nix"; then
+            conf_record P1.5-nix-cli fail "nix missing after ensure (plugin bootstrap did not install Nix)"
+        else
+            conf_record P1.5-nix-cli pass ""
+        fi
+        conf_invoke_text P1.6-rqp-search search "${SYSTEM}" hello
+        if [ "${CONF_LAST_EXIT}" -ne 0 ]; then
+            conf_record P1.6-rqp-search fail "search exit ${CONF_LAST_EXIT}"
+        elif grep -Fq "hello" <<<"$(conf_combined_output)"; then
+            conf_record P1.6-rqp-search pass ""
+        else
+            conf_record P1.6-rqp-search fail "rqp search nix hello returned no hello results"
+        fi
     fi
 
     # P1.4 — unknown system must fail with readable error
