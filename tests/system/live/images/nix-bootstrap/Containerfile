@@ -8,6 +8,13 @@ RUN dnf install -y \
         jq \
         xz \
         git \
-    && dnf -y makecache
+        shadow-utils \
+    && dnf -y makecache \
+    && groupadd -r nixbld \
+    && for i in $(seq 1 32); do useradd -r -g nixbld -G nixbld -d /var/empty -s /sbin/nologin "nixbld$i"; done \
+    && mkdir -m 0755 /nix \
+    && chown 1000:1000 /nix
 
+RUN mkdir -p /workspace && chown 1000:1000 /workspace
+USER 1000:1000
 WORKDIR /workspace
