@@ -1,7 +1,15 @@
-# id|image|system|plugin_relpath|package|verify_cmd|mode|enabled
-debian-dpkg|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|tree|command -v tree|repo|1
-debian-dpkg-local|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|debian/reqpack-live-fixture_1.0_all.deb:reqpack-live-fixture|command -v rqplive-fixture|local|1
-debian-dpkg-plugin-live|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/plugin-live.json|plugin-live|1
+# id|image|system|plugin_relpath|package|verify_cmd|mode|enabled|profile_env
+debian-dpkg|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|tree|command -v tree|repo|1|
+debian-dpkg-local|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|debian/reqpack-live-fixture_1.0_all.deb:reqpack-live-fixture|command -v rqplive-fixture|local|1|
+debian-dpkg-plugin-live|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/plugin-live.json|plugin-live|0|
+debian-dpkg-conformance|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/conformance.json|conformance|1|dpkg.env
+debian-dpkg-conformance-all|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/conformance.json|conformance|1|dpkg-all.env
+debian-dpkg-conformance-p2|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/conformance.json|conformance|1|dpkg-p2.env
+debian-dpkg-conformance-p3|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/conformance.json|conformance|1|dpkg-p3.env
+debian-dpkg-conformance-p4|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/conformance.json|conformance|1|dpkg-p4.env
+debian-dpkg-conformance-p5|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/conformance.json|conformance|1|dpkg-p5.env
+debian-dpkg-conformance-p6|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/conformance.json|conformance|1|dpkg-p6.env
+debian-dpkg-conformance-p7|reqpack-live-test:debian-bookworm|dpkg|d/dpkg|-|test -f /workspace/reports/conformance.json|conformance|1|dpkg-p7.env
 fedora-rpm|reqpack-live-test:fedora-43|rpm|r/rpm|tree|command -v tree|repo|1
 fedora-rpm-local|reqpack-live-test:fedora-43|rpm|r/rpm|rpm/reqpack-live-fixture-1.0-1.noarch.rpm:reqpack-live-fixture|rpm -q reqpack-live-fixture|local|1
 fedora-rpm-plugin-live|reqpack-live-test:fedora-43|rpm|r/rpm|-|test -f /workspace/reports/plugin-live.json|plugin-live|1
@@ -11,3 +19,11 @@ arch-pacman-plugin-live|reqpack-live-test:archlinux|pacman|p/pacman|-|test -f /w
 node-npm|reqpack-live-test:node-22-bookworm|npm|n/npm|is-odd|npm list -g is-odd --depth=0|repo|1
 node-npm-local|reqpack-live-test:node-22-bookworm|npm|n/npm|npm/reqpack-live-fixture-1.0.0.tgz:reqpack-live-fixture|npm list -g reqpack-live-fixture --depth=0|local|1
 node-npm-plugin-live|reqpack-live-test:node-22-bookworm|npm|n/npm|-|test -f /workspace/reports/plugin-live.json|plugin-live|1
+nix-nix-plugin-live|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/plugin-live.json|plugin-live|0|
+nix-nix-conformance-p2|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p2.env
+nix-nix-conformance-p3|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p3.env
+nix-nix-conformance-p4|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p4.env
+nix-nix-conformance-p5|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p5.env
+nix-nix-conformance-p6|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p6.env
+nix-nix-conformance-p7|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-p7.env
+nix-nix-conformance-all|reqpack-live-test:nix|nix|n/nix|-|test -f /workspace/reports/conformance.json|conformance|1|nix-all.env

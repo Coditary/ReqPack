@@ -1,5 +1,6 @@
 #include "main_completion.h"
 #include "main_dispatch.h"
+#include "main_live.h"
 
 #include "cli/cli.h"
 #include "main_diagnostics.h"
@@ -59,6 +60,15 @@ int main(int argc, char* argv[]) {
     if (earlyPluginTest.matched && earlyPluginTest.helpRequested) {
         print_plugin_test_help(std::cout);
         return 0;
+    }
+
+    if (is_live_command(rawArguments)) {
+        for (const std::string& argument : rawArguments) {
+            if (argument == "--help" || argument == "-h") {
+                print_live_run_help(std::cout);
+                return 0;
+            }
+        }
     }
 
     {

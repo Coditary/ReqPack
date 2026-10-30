@@ -4,7 +4,14 @@
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-mkdir -p "${root}/debian" "${root}/rpm" "${root}/arch" "${root}/npm"
+if [ "$(basename "${root}")" != "fixtures" ]; then
+    echo "Error: build-all-fixtures.sh must live under tests/system/live/fixtures (got ${root})" >&2
+    exit 1
+fi
+mkdir -p "${root}/debian" "${root}/rpm" "${root}/arch" "${root}/npm" "${root}/corrupt"
+
+printf 'corrupt-bytes' >"${root}/corrupt/corrupt.deb"
+printf 'corrupt-bytes' >"${root}/corrupt/corrupt.rpm"
 
 CONTAINER_BIN="${CONTAINER_BIN:-}"
 if [ -z "${CONTAINER_BIN}" ]; then
@@ -22,41 +29,45 @@ container_run() {
     "${CONTAINER_BIN}" run --rm "$@"
 }
 
-build_debian_container() {
-    container_run debian:bookworm-slim bash -lc '
-        set -euo pipefail
-        apt-get update -qq
-        apt-get install -y -qq dpkg-dev >/dev/null
-        pkg=/tmp/pkg
-        mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin"
-        printf "Package: reqpack-live-fixture\nVersion: 1.0\nArchitecture: all\nMaintainer: test\nDescription: tiny\n" > "$pkg/DEBIAN/control"
-        printf "#!/bin/sh\necho ok\n" > "$pkg/usr/bin/rqplive-fixture"
-        chmod 755 "$pkg/usr/bin/rqplive-fixture"
-        dpkg-deb --build "$pkg" /tmp/fix.deb >/dev/null
-        cat /tmp/fix.deb
-    ' >"${root}/debian/reqpack-live-fixture_1.0_all.deb"
-}
-
 build_debian_host() {
-    local out="${root}/debian/reqpack-live-fixture_1.0_all.deb"
+    local version="${1:-1.0}"
+    local out="${root}/debian/reqpack-live-fixture_${version}_all.deb"
     local pkg
     pkg="$(mktemp -d)"
     mkdir -p "${pkg}/DEBIAN" "${pkg}/usr/bin"
-    printf "Package: reqpack-live-fixture\nVersion: 1.0\nArchitecture: all\nMaintainer: test\nDescription: tiny\n" >"${pkg}/DEBIAN/control"
+    printf "Package: reqpack-live-fixture\nVersion: %s\nArchitecture: all\nMaintainer: test\nDescription: tiny\n" "${version}" >"${pkg}/DEBIAN/control"
     printf "#!/bin/sh\necho ok\n" >"${pkg}/usr/bin/rqplive-fixture"
     chmod 755 "${pkg}/usr/bin/rqplive-fixture"
     dpkg-deb --build "${pkg}" "${out}" >/dev/null
     rm -rf "${pkg}"
 }
 
+build_debian_container() {
+    local version="${1:-1.0}"
+    container_run debian:bookworm-slim bash -lc "
+        set -euo pipefail
+        apt-get update -qq
+        apt-get install -y -qq dpkg-dev >/dev/null
+        pkg=/tmp/pkg
+        mkdir -p \"\$pkg/DEBIAN\" \"\$pkg/usr/bin\"
+        printf 'Package: reqpack-live-fixture\nVersion: ${version}\nArchitecture: all\nMaintainer: test\nDescription: tiny\n' > \"\$pkg/DEBIAN/control\"
+        printf '#!/bin/sh\necho ok\n' > \"\$pkg/usr/bin/rqplive-fixture\"
+        chmod 755 \"\$pkg/usr/bin/rqplive-fixture\"
+        dpkg-deb --build \"\$pkg\" /tmp/fix.deb >/dev/null
+        cat /tmp/fix.deb
+    " >"${root}/debian/reqpack-live-fixture_${version}_all.deb"
+}
+
 build_debian() {
     if [ "${LIVE_FIXTURES_FORCE_CONTAINER:-0}" != "1" ] && command -v dpkg-deb >/dev/null 2>&1; then
         printf '[fixtures] debian: host (dpkg-deb)\n' >&2
-        build_debian_host
+        build_debian_host 1.0
+        build_debian_host 2.0
         return
     fi
     printf '[fixtures] debian: container\n' >&2
-    build_debian_container
+    build_debian_container 1.0
+    build_debian_container 2.0
 }
 
 build_rpm_container() {

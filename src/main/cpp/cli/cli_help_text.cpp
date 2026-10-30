@@ -41,7 +41,7 @@ HelpScanResult scan_help_arguments(const std::vector<std::string>& arguments) {
         if (result.dedicatedCommand.empty()) {
             const std::string normalized = to_lower_copy(argument);
             if (normalized == "security" || normalized == "version" || normalized == "self-update" ||
-                normalized == "test-plugin" || normalized == "plugin") {
+                normalized == "test-plugin" || normalized == "plugin" || normalized == "live") {
                 result.dedicatedCommand = normalized;
                 continue;
             }
@@ -80,6 +80,7 @@ std::string general_help_text() {
            "  remote            Execute commands on a configured remote profile\n"
            "  serve             Run rqp as a stdin batch runner or remote TCP server\n"
            "  host              Manage cached host system metadata (e.g. 'rqp host refresh')\n"
+           "  live              Run distro container integration tests (`rqp live run`)\n"
            "  version           Print ReqPack version\n"
            "\nGlobal Options:\n"
            "  -h, --help                Show help (use 'rqp <command> -h' for command options)\n"
@@ -205,10 +206,19 @@ std::string dedicated_command_help_text(const std::string& command) {
                "Usage:\n"
                "  rqp test-plugin --plugin <path-or-id> --preset core [--report <file.json>]\n"
                "  rqp test-plugin --plugin <path-or-id> --live [--report <file.json>]\n"
+               "  rqp test-plugin --plugin ./plugin.rqp --live --cases ./cases\n"
                "  rqp plugin test --plugin <path-or-id> --preset core\n"
                "\n"
                "Presets: core (hermetic, fakeExec), live (real PM in container)\n"
                "See also: rqp plugin test --help\n";
+    }
+    if (command == "live") {
+        return "rqp live - Distro container integration tests\n"
+               "\n"
+               "Usage:\n"
+               "  rqp live run [options] [matrix-id ...]\n"
+               "\n"
+               "Run `rqp live run --help` for matrix options, bundle prepare, and plugin-live .rqp flow.\n";
     }
     return {};
 }
@@ -632,10 +642,28 @@ std::string command_help_text(ActionType action) {
                 "  -f,--force               Overwrite existing output file without prompting\n"
                 "  -y,--yes                Disable all prompts\n"
                 "\n"
+                "Pack metadata overrides (builtin .rqp and plugin-bundle .rqp):\n"
+                "  CLI flags override project metadata.json; environment variables fill\n"
+                "  fields not set via CLI. Env names use prefix REQPACK_PACK_ (e.g.\n"
+                "  REQPACK_PACK_RELEASE, REQPACK_PACK_VENDOR, REQPACK_PACK_SYSTEM).\n"
+                "  --pack-version <ver>    Package version string\n"
+                "  --pack-release <n>      Release number\n"
+                "  --pack-revision <n>     Revision number\n"
+                "  --pack-vendor <name>    Vendor / organization\n"
+                "  --pack-maintainer-email <addr>\n"
+                "  --pack-url <url>        Project URL\n"
+                "  --pack-homepage <url>   Homepage URL\n"
+                "  --pack-source-url <url> Source repository URL\n"
+                "  --pack-architecture <arch>\n"
+                "  --pack-arch <arch>      Same as --pack-architecture\n"
+                "  --pack-system <id>      Target system (repeatable)\n"
+                "\n"
                 "Examples:\n"
                 "  rqp pack\n"
                 "  rqp pack ./my-package\n"
                 "  rqp pack ./my-package --output ./dist/demo.rqp\n"
+                "  rqp pack ./plugins/d/dpkg --pack-release 1 --pack-vendor 'My Org'\n"
+                "  REQPACK_PACK_RELEASE=2 rqp pack ./plugins/d/dpkg\n"
                 "  rqp pack ./my-package --payload-dir ./rootfs\n"
                 "  rqp pack deb ./debian-project --output ./dist/demo.deb\n";
         case ActionType::SERVE:

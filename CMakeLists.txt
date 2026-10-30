@@ -419,6 +419,7 @@ set(REQPACK_CLI_SOURCES
     src/main/cpp/main_diagnostics.cpp
     src/main/cpp/main_dispatch.cpp
     src/main/cpp/main_security_status.cpp
+    src/main/cpp/main_live.cpp
     src/main/cpp/main_self_update.cpp
     src/main/cpp/main_self_update_support.cpp
     src/main/cpp/main_self_update_release.cpp
@@ -497,6 +498,7 @@ target_compile_definitions(ReqPack PRIVATE REQPACK_RELEASE_ID="${REQPACK_RELEASE
 target_compile_definitions(ReqPack PRIVATE REQPACK_TRIVY_HELPER_DEFAULT_PATH="${REQPACK_TRIVY_HELPER_PATH}")
 target_compile_definitions(ReqPack PRIVATE
     REQPACK_COMPLETIONS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scripts/completions"
+    REQPACK_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 target_compile_definitions(reqpack_cli_unit_tests PRIVATE
     SOL_ALL_SAFETIES_ON=1
@@ -515,7 +517,7 @@ catch_discover_tests(reqpack_cli_unit_tests TEST_PREFIX "cli::unit::")
 if(UNIX AND NOT WIN32 AND NOT APPLE)
     add_test(
         NAME live::container::quick
-        COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/run-live-system-tests.sh" --quick
+        COMMAND "$<TARGET_FILE:ReqPack>" live run --repo-root "${CMAKE_SOURCE_DIR}" --quick
     )
     set_tests_properties(live::container::quick PROPERTIES
         LABELS "container-live"

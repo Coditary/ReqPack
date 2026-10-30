@@ -1,4 +1,5 @@
 #include "main_dispatch.h"
+#include "main_live.h"
 
 #include "main_arg_parsing.h"
 #include "main_diagnostics.h"
@@ -196,6 +197,12 @@ int dispatch_main_command(Cli& cli,
 
     if (is_info_command(rawArguments)) {
         return run_info_command(config, logger);
+    }
+
+    if (is_live_command(rawArguments)) {
+        const int result = run_live_command(config, logger, configPath, rawArguments);
+        logger.flushSync();
+        return result;
     }
 
     const PluginTestCliParseResult pluginTest = parse_plugin_test_invocation(rawArguments);

@@ -186,6 +186,7 @@ std::vector<Request> parse_arguments(const std::vector<std::string>& arguments, 
     }
 
     if (action == ActionType::PACK) {
+        RqPackMetadataOverrides packMetadata;
         std::vector<std::string> positional;
         positional.reserve(requestArguments.size());
         for (std::size_t i = actionIndex + 1; i < requestArguments.size(); ++i) {
@@ -211,6 +212,13 @@ std::vector<Request> parse_arguments(const std::vector<std::string>& arguments, 
                     packPayloadPath = requestArguments[++i];
                     continue;
                 }
+                if (cli_internal::consume_pack_metadata_flag(requestArguments, i, packMetadata)) {
+                    continue;
+                }
+                if (argument.rfind("--pack-", 0) == 0) {
+                    state.lastParseFailed = true;
+                    return {};
+                }
                 global_flags.push_back(argument.substr(2));
                 continue;
             }
@@ -227,6 +235,7 @@ std::vector<Request> parse_arguments(const std::vector<std::string>& arguments, 
         request.flags = global_flags;
         request.outputPath = packOutputPath;
         request.payloadPath = packPayloadPath;
+        request.packMetadata = packMetadata;
         request.localPath = positional.empty() ? "." : positional.back();
         request.usesLocalTarget = true;
 

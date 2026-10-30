@@ -18,4 +18,8 @@ bool action_supports_output_path_flag(ActionType action);
 /// Maps `-f`, `-o`, `-a`, `-n`, etc. to canonical Request.flags entries (without `--` prefix).
 std::optional<std::string> canonical_request_flag_token(ActionType action, const std::string& argument);
 
+bool consume_pack_metadata_flag(const std::vector<std::string>& arguments,
+                                std::size_t& index,
+                                RqPackMetadataOverrides& overrides);
+
 }  // namespace cli_internal

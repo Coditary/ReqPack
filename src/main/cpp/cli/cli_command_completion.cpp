@@ -46,6 +46,8 @@ completion::CompletionTree build_subcommand_completion_tree() {
     add_leaf(root, "self-update");
     add_leaf(root, "ensure");
     add_leaf(root, "test-plugin");
+    auto& live = root.ensure_object_child("live");
+    add_leaf(live, "run");
     add_leaf(root, "version");
     add_leaf(root, "serve");
     add_leaf(root, "remote");

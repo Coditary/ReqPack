@@ -2,6 +2,8 @@
 
 Third test tier beside CTest mocks and hermetic `rqp test-plugin` cases.
 
+Orchestration is implemented in **`rqp live run`** (C++). `scripts/run-live-system-tests.sh` is a thin wrapper that execs the built `rqp` binary.
+
 These tests mount a real Linux `rqp` bundle and selected plugins from `reqpack-plugins`
 into official distro base images, then run install/search/list/info/outdated/remove
 against the real package manager inside the container.
@@ -45,9 +47,24 @@ Matrix column `mode`:
 
 - `repo` — full lifecycle against distro mirrors (`run_live_lifecycle.sh`)
 - `local` — offline install from `fixtures/` (`package` column: `path/to.art:remove-name`)
-- `plugin-live` — `rqp test-plugin --live` using `.reqpack-test/live/` cases (`run_live_plugin_test.sh`)
+- `plugin-live` — pack `.rqp` on the host, `rqp install rqp` in the container, then `rqp test-plugin --live`
+- `conformance` — **Plugin Conformance Suite**: same `.rqp` bootstrap as `plugin-live`, then standard
+  `.reqpack-test/live/` cases (Ebene A) and `run_live_conformance.sh` with `profiles/<system>.env` (Ebene B, 7 phases)
+
+Parametric profiles live under `profiles/*.env` (offline fixture paths, remote smoke package, arch tokens).
+Rebuild offline v1/v2 fixtures: `bash tests/system/live/fixtures/build-all-fixtures.sh`.
 
 Parallel runs register containers as `rqp-live-<run-id>-<row>` and remove them on exit/interrupt.
+
+### Ephemeral work directories
+
+Each `rqp live run` without `--work-root` creates `build/live-system-tests/run-<timestamp>-<pid>/`
+(bundle extract, row workspaces, reports). That directory is **removed automatically** when the run
+finishes (pass or fail). Use `--keep-work` or `REQPACK_LIVE_KEEP_WORK=1` to retain it for debugging.
+Explicit `--work-root` paths are never deleted. `--prepare-only` keeps the prepared tree.
+
+Offline package fixtures under `fixtures/debian/` etc. are **not** removed by live runs: they are
+rebuilt only when you run `fixtures/build-all-fixtures.sh` (some are committed for CI).
 
 ## Container runtime
 

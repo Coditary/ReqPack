@@ -1,0 +1,28 @@
+[
+  {
+    "id": "CVE-2026-REQPACK-CONFORMANCE",
+    "modified": "2026-01-15T00:00:00Z",
+    "published": "2026-01-01T00:00:00Z",
+    "summary": "ReqPack conformance fixture advisory (intentionally unsafe test package)",
+    "severity": [{ "type": "CVSS_V3", "score": "9.1" }],
+    "affected": [
+      {
+        "package": { "ecosystem": "Debian", "name": "reqpack-live-fixture" },
+        "ranges": [{ "type": "ECOSYSTEM", "events": [{ "introduced": "0" }] }]
+      }
+    ]
+  },
+  {
+    "id": "CVE-2026-REQPACK-NIX-CONFORMANCE",
+    "modified": "2026-01-15T00:00:00Z",
+    "published": "2026-01-01T00:00:00Z",
+    "summary": "ReqPack nix conformance fixture advisory (hello profile package)",
+    "severity": [{ "type": "CVSS_V3", "score": "9.0" }],
+    "affected": [
+      {
+        "package": { "ecosystem": "Nix", "name": "hello" },
+        "ranges": [{ "type": "ECOSYSTEM", "events": [{ "introduced": "0" }] }]
+      }
+    ]
+  }
+]

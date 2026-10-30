@@ -1,7 +1,12 @@
 build/
 gmon.out
-docs/
+docs/*
+!docs/agent/
+!docs/agent/**
+!docs/superpowers/
+!docs/superpowers/**
 rqp-plugins/
+build/live-system-tests/run-*/
 
 build-check
 build-local/
