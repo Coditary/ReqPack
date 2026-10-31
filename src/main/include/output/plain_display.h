@@ -56,7 +56,7 @@ public:
 	                    const DisplayProgressMetrics& metrics) override;
 	void onItemStep(const std::string& itemId,
 	                const std::string& step) override;
-	void onItemSuccess(const std::string& itemId) override;
+	void onItemSuccess(const std::string& itemId, const std::string& version = {}) override;
 	void onItemSkipped(const std::string& itemId, const std::string& reason) override;
 	void onItemFailure(const std::string& itemId,
 	                   const std::string& reason) override;
@@ -84,6 +84,9 @@ protected:
 	/// Session header text (e.g. "INSTALL: curl  wget").
 	virtual std::string decorateHeader(const std::string& text) const;
 
+	/// Leading action banner line (e.g. ":: Installing pkg...").
+	virtual std::string decorateActionBanner(const std::string& banner) const;
+
 	/// Session summary line when everything succeeded.
 	virtual std::string decorateSummaryOk(const std::string& text) const;
 
@@ -108,6 +111,12 @@ protected:
 	/// "[FAILED]" marker text (does NOT include the reason).
 	virtual std::string decorateFailureMarker(const std::string& text) const;
 
+	/// Indented hint line under a failed item.
+	virtual std::string decorateFailureHint(const std::string& text) const;
+
+	/// Version segment inside a success outcome line.
+	virtual std::string decorateSuccessVersion(const std::string& version) const;
+
 	/// "SKIPPED" marker text.
 	virtual std::string decorateSkippedMarker(const std::string& text) const;
 
@@ -131,6 +140,9 @@ protected:
 	bool                                               fieldValueTable{false};
 	PackageTableDisplayContext                         packageTableContext{};
 	mutable std::mutex                                 mtx;
+
+	bool commitItemFailure(const std::string& itemId, const std::string& reason, std::string& effectiveReason);
+	void writeItemFailureLines(const std::string& itemId, const std::string& effectiveReason);
 
 private:
 	// ── Private helpers ───────────────────────────────────────────────────────

@@ -1,7 +1,9 @@
 #include "output/color_display.h"
 #include "output/ansi_color.h"
+#include "plain_display_internal.h"
 
 #include <cctype>
+#include <sstream>
 #include <string>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -16,6 +18,16 @@ std::string ColorDisplay::decorateRule(const std::string& rule) const {
 
 std::string ColorDisplay::decorateHeader(const std::string& text) const {
 	return ansi_wrap(LiveDisplay::decorateHeader(text), scheme_.header);
+}
+
+std::string ColorDisplay::decorateActionBanner(const std::string& banner) const {
+	const std::size_t space = banner.find(' ');
+	if (space == std::string::npos) {
+		return ansi_wrap(LiveDisplay::decorateActionBanner(banner), "bold");
+	}
+	const std::string verb = banner.substr(0, space);
+	const std::string rest = banner.substr(space);
+	return ansi_wrap(verb, "bold") + ansi_wrap(rest, scheme_.header.empty() ? "cyan" : scheme_.header);
 }
 
 std::string ColorDisplay::decorateSummaryOk(const std::string& text) const {
@@ -52,15 +64,22 @@ std::string ColorDisplay::decorateStep(const std::string& step) const {
 }
 
 std::string ColorDisplay::decorateSuccessMarker(const std::string& text) const {
-	return ansi_wrap(LiveDisplay::decorateSuccessMarker(text), scheme_.successMarker);
+	return ansi_wrap(LiveDisplay::decorateSuccessMarker(text), scheme_.successMarker.empty() ? "green" : scheme_.successMarker);
 }
 
 std::string ColorDisplay::decorateFailureMarker(const std::string& text) const {
-	return ansi_wrap(LiveDisplay::decorateFailureMarker(text), scheme_.failureMarker);
+	const std::string markerSpec = scheme_.failureMarker.empty() ? "red" : scheme_.failureMarker;
+	const std::size_t failedPos = text.find(" failed");
+	if (failedPos == std::string::npos) {
+		return ansi_wrap(LiveDisplay::decorateFailureMarker(text), markerSpec);
+	}
+	const std::string head = text.substr(0, failedPos);
+	const std::string tail = text.substr(failedPos);
+	return LiveDisplay::decorateFailureMarker(head) + ansi_wrap(tail, markerSpec);
 }
 
 std::string ColorDisplay::decorateSkippedMarker(const std::string& text) const {
-	return ansi_wrap(LiveDisplay::decorateSkippedMarker(text), scheme_.step);
+	return ansi_wrap(LiveDisplay::decorateSkippedMarker(text), scheme_.step.empty() ? "bright_black" : scheme_.step);
 }
 
 std::string ColorDisplay::decorateMessage(const std::string& text) const {
@@ -75,33 +94,60 @@ std::string ColorDisplay::format_session_summary(const bool success,
                                                  const int succeeded,
                                                  const int skipped,
                                                  const int failed) const {
-	const std::string plain = LiveDisplay::format_session_summary(success, succeeded, skipped, failed);
-	if (plain.empty()) {
-		return plain;
-	}
-	if (plain.rfind("Found ", 0) == 0) {
-		return decorateSummaryOk(plain);
+	const std::optional<std::string> summary =
+	    plain_display_internal::session_summary_text(sessionMode_, success, succeeded, skipped, failed);
+	if (!summary.has_value()) {
+		return {};
 	}
 
 	const std::string dim = "bright_black";
 	const std::string okSpec = scheme_.summaryOk.empty() ? "bold green" : scheme_.summaryOk;
 	const std::string failSpec = scheme_.summaryFail.empty() ? "bold red" : scheme_.summaryFail;
 
-	std::ostringstream stream;
-	if (plain.rfind("🗑️", 0) == 0) {
-		stream << "🗑️ ";
-		stream << ansi_wrap(std::to_string(succeeded) + " removed", okSpec);
-	} else {
-		stream << "✨ ";
-		const char* verb = plain.find("installed") != std::string::npos ? "installed" : "updated";
-		stream << ansi_wrap(std::to_string(succeeded) + " " + verb, okSpec);
+	const char* verb = "updated";
+	switch (sessionMode_) {
+		case DisplayMode::INSTALL:
+			verb = "installed";
+			break;
+		case DisplayMode::REMOVE:
+			verb = "removed";
+			break;
+		default:
+			break;
 	}
-	stream << ansi_wrap(", " + std::to_string(skipped) + " skipped", skipped > 0 ? scheme_.step : dim);
-	stream << ansi_wrap(", " + std::to_string(failed) + " failed", failed > 0 ? failSpec : dim);
-	if (!success) {
+
+	std::ostringstream stream;
+	stream << ansi_wrap("Summary:", dim) << ' '
+	       << ansi_wrap(std::to_string(succeeded) + " " + verb, okSpec);
+	if (skipped > 0) {
+		stream << ansi_wrap(", " + std::to_string(skipped) + " skipped", scheme_.step.empty() ? dim : scheme_.step);
+	}
+	if (failed > 0) {
+		stream << ansi_wrap(", " + std::to_string(failed) + " failed", failSpec);
+	}
+	if (!success || failed > 0) {
 		return decorateSummaryFail(stream.str());
 	}
 	return stream.str();
+}
+
+std::string ColorDisplay::decorateFailureHint(const std::string& text) const {
+	const std::string spec = scheme_.message.empty() ? "bright_black" : scheme_.message;
+	return ansi_wrap(LiveDisplay::decorateFailureHint(text), spec);
+}
+
+std::string ColorDisplay::decorateSuccessVersion(const std::string& version) const {
+	return ansi_wrap(LiveDisplay::decorateSuccessVersion(version), "bright_black");
+}
+
+void ColorDisplay::onSessionEnd(const bool success, const int succeeded, const int skipped, const int failed) {
+	if (use_live_ui()) {
+		LiveDisplay::onSessionEnd(success, succeeded, skipped, failed);
+		return;
+	}
+	std::lock_guard<std::mutex> lock(mtx);
+	out() << '\n' << format_session_summary(success, succeeded, skipped, failed) << '\n';
+	out().flush();
 }
 
 std::string ColorDisplay::applySearchHighlight(const std::string& text) const {

@@ -5,6 +5,7 @@
 #include "core/common/terminal_width.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cwchar>
 #include <iomanip>
@@ -139,6 +140,190 @@ std::string join_items(const std::vector<std::string>& values) {
     return out;
 }
 
+std::string format_session_item_list(const std::vector<std::string>& values) {
+    if (values.empty()) {
+        return {};
+    }
+    if (values.size() == 1) {
+        return values.front();
+    }
+    if (values.size() <= 3) {
+        std::string out;
+        for (size_t index = 0; index < values.size(); ++index) {
+            if (index > 0) {
+                out += ", ";
+            }
+            out += values[index];
+        }
+        return out;
+    }
+    return std::to_string(values.size()) + " packages";
+}
+
+std::optional<std::string> common_session_system(const std::vector<std::string>& itemIds) {
+    if (itemIds.size() < 2) {
+        return std::nullopt;
+    }
+    std::string sharedSystem;
+    for (const std::string& itemId : itemIds) {
+        const std::size_t separator = itemId.find(':');
+        if (separator == std::string::npos || separator == 0) {
+            return std::nullopt;
+        }
+        const std::string system = itemId.substr(0, separator);
+        if (sharedSystem.empty()) {
+            sharedSystem = system;
+        } else if (sharedSystem != system) {
+            return std::nullopt;
+        }
+    }
+    return sharedSystem.empty() ? std::nullopt : std::optional<std::string>(sharedSystem);
+}
+
+std::string transaction_action_verb(const DisplayMode mode) {
+    switch (mode) {
+        case DisplayMode::INSTALL:
+            return "Installing";
+        case DisplayMode::REMOVE:
+            return "Removing";
+        case DisplayMode::UPDATE:
+            return "Updating";
+        default:
+            return {};
+    }
+}
+
+std::string action_banner_text(const DisplayMode mode, const std::vector<std::string>& items) {
+    const std::string joined = format_session_item_list(items);
+    std::ostringstream banner;
+    switch (mode) {
+        case DisplayMode::SEARCH:
+            banner << (joined.empty() ? "Searching" : "Searching " + joined);
+            break;
+        case DisplayMode::INFO:
+            banner << (joined.empty() ? "Showing package info" : "Info for " + joined);
+            break;
+        case DisplayMode::LIST:
+            banner << (joined.empty() ? "Listing packages" : "Listing " + joined);
+            break;
+        case DisplayMode::INSTALL:
+        case DisplayMode::REMOVE:
+        case DisplayMode::UPDATE: {
+            const std::string verb = transaction_action_verb(mode);
+            if (items.size() >= 2) {
+                if (const std::optional<std::string> system = common_session_system(items); system.has_value()) {
+                    banner << verb << ' ' << items.size() << " packages (" << *system << ')';
+                    break;
+                }
+            }
+            if (joined.empty()) {
+                banner << verb << " packages";
+            } else {
+                banner << verb << ' ' << joined;
+            }
+            break;
+        }
+        default:
+            banner << "Running";
+            if (!joined.empty()) {
+                banner << ' ' << joined;
+            }
+            break;
+    }
+    banner << "...";
+    return banner.str();
+}
+
+std::string format_item_action_line(const char* marker, const std::string& body) {
+    return std::string(kIndent) + marker + (body.empty() ? "" : " " + body);
+}
+
+std::string item_outcome_phrase(const DisplayMode mode) {
+	switch (mode) {
+		case DisplayMode::INSTALL:
+			return "installed";
+		case DisplayMode::REMOVE:
+			return "removed";
+		case DisplayMode::UPDATE:
+			return "updated";
+		default:
+			return "done";
+	}
+}
+
+bool is_generic_plugin_failure_summary(const std::string& reason) {
+	if (reason.empty()) {
+		return false;
+	}
+	if (reason.rfind("Plugin action failed for ", 0) == 0) {
+		return true;
+	}
+	if (reason.rfind("Plugin action failed", 0) == 0) {
+		return true;
+	}
+	if (reason.rfind("Package is unavailable:", 0) == 0) {
+		return false;
+	}
+	return false;
+}
+
+std::string format_item_failure_primary(const std::string& itemId, const std::string& reason) {
+	if (reason.empty()) {
+		return itemId + " failed";
+	}
+	return itemId + " failed: " + reason;
+}
+
+std::optional<std::string> failure_hint_for_reason(const std::string& itemId, const std::string& reason) {
+	(void)itemId;
+	if (reason.find("rqp repositories not configured") != std::string::npos) {
+		return "Configure a repository in ~/.config/reqpack/config.lua or pass --registry <path>";
+	}
+	if (reason.find("not found in rqp repositories") != std::string::npos) {
+		return "Check the package name and configured rqp repository indexes";
+	}
+	if (reason.rfind("Unable to locate package", 0) == 0 || reason.find("Unable to locate package") != std::string::npos) {
+		return "Run your package manager update command or verify the package name";
+	}
+	return std::nullopt;
+}
+
+std::string format_item_success_body(const std::string& itemId, const DisplayMode mode, const std::string& version) {
+	std::ostringstream body;
+	body << itemId;
+	if (!version.empty()) {
+		body << " (" << version << ')';
+	}
+	body << ' ' << item_outcome_phrase(mode);
+	return body.str();
+}
+
+void write_session_summary(std::ostream& stream, const DisplayMode mode, const int succeeded, const int skipped,
+                           const int failed) {
+	const char* verb = "updated";
+	switch (mode) {
+		case DisplayMode::INSTALL:
+			verb = "installed";
+			break;
+		case DisplayMode::REMOVE:
+			verb = "removed";
+			break;
+		default:
+			break;
+	}
+	stream << "Summary: " << succeeded << ' ' << verb;
+	if (skipped > 0) {
+		stream << ", " << skipped << " skipped";
+	}
+	if (failed > 0) {
+		stream << ", " << failed << " failed";
+	}
+}
+
+bool progress_has_byte_transfer(const DisplayProgressMetrics& metrics) {
+	return metrics.currentBytes.has_value() || metrics.totalBytes.has_value();
+}
+
 std::string repeat_char(char value, int count) {
     return count > 0 ? std::string(static_cast<size_t>(count), value) : std::string{};
 }
@@ -180,6 +365,62 @@ std::string trim_trailing_newlines(const std::string_view value) {
 		trimmed.pop_back();
 	}
 	return trimmed;
+}
+
+namespace {
+
+std::string trim_message_copy(std::string value) {
+	while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+		value.erase(value.begin());
+	}
+	while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+		value.pop_back();
+	}
+	return value;
+}
+
+bool starts_with_prefix(const std::string_view text, const std::string_view prefix) {
+	return text.rfind(prefix, 0) == 0;
+}
+
+} // namespace
+
+bool is_transaction_chatter_message(const std::string& text) {
+	const std::string trimmed = trim_message_copy(text);
+	if (trimmed.empty()) {
+		return true;
+	}
+	if (starts_with_prefix(trimmed, "already on release") || starts_with_prefix(trimmed, "Already up to date")
+	    || starts_with_prefix(trimmed, "now on release")) {
+		return true;
+	}
+	if (starts_with_prefix(trimmed, "link:") || starts_with_prefix(trimmed, "Linked to")) {
+		return true;
+	}
+	if (starts_with_prefix(trimmed, "Note: Running self-update")) {
+		return true;
+	}
+	if (starts_with_prefix(trimmed, "status ")) {
+		return true;
+	}
+	if (trimmed == "done") {
+		return true;
+	}
+	if (starts_with_prefix(trimmed, "progress")) {
+		return true;
+	}
+	return false;
+}
+
+TranscriptLineDecoration transcript_line_decoration(const std::string_view trimmed) {
+	if (starts_with_prefix(trimmed, "already on release") || starts_with_prefix(trimmed, "Already up to date")) {
+		return TranscriptLineDecoration::Info;
+	}
+	if (starts_with_prefix(trimmed, "link:") || starts_with_prefix(trimmed, "Linked to")
+	    || starts_with_prefix(trimmed, "now on release")) {
+		return TranscriptLineDecoration::Link;
+	}
+	return TranscriptLineDecoration::None;
 }
 
 bool stdout_is_tty() {
@@ -277,22 +518,8 @@ std::optional<std::string> session_summary_text(const DisplayMode mode,
     }
 
     if (succeeded > 0 || skipped > 0 || failed > 0) {
-        const char* verb = "updated";
-        const char* emoji = "✨";
-        switch (mode) {
-            case DisplayMode::INSTALL:
-                verb = "installed";
-                break;
-            case DisplayMode::REMOVE:
-                verb = "removed";
-                emoji = "🗑️";
-                break;
-            case DisplayMode::UPDATE:
-            default:
-                break;
-        }
         std::ostringstream stream;
-        stream << emoji << ' ' << succeeded << ' ' << verb << ", " << skipped << " skipped, " << failed << " failed";
+        write_session_summary(stream, mode, succeeded, skipped, failed);
         return stream.str();
     }
     if (mode == DisplayMode::SEARCH || mode == DisplayMode::LIST) {
@@ -343,6 +570,10 @@ std::string PlainDisplay::decorateHeader(const std::string& text) const {
     return text;
 }
 
+std::string PlainDisplay::decorateActionBanner(const std::string& banner) const {
+    return banner;
+}
+
 std::string PlainDisplay::decorateSummaryOk(const std::string& text) const {
     return text;
 }
@@ -352,23 +583,17 @@ std::string PlainDisplay::decorateSummaryFail(const std::string& text) const {
 }
 
 std::string PlainDisplay::decorateBarFill(int count) const {
-	std::string fill;
-	for (int i = 0; i < count; ++i) {
-		fill += "█";
-	}
-	return fill;
+	return plain_display_internal::repeat_visual_unit(plain_display_internal::kBarDoneUnit,
+	                                                  static_cast<size_t>(count));
 }
 
 std::string PlainDisplay::decorateBarEmpty(int count) const {
-	std::string empty;
-	for (int i = 0; i < count; ++i) {
-		empty += "░";
-	}
-	return empty;
+	return plain_display_internal::repeat_visual_unit(plain_display_internal::kBarTodoUnit,
+	                                                  static_cast<size_t>(count));
 }
 
 std::string PlainDisplay::decorateBarOuter(const std::string& inner) const {
-    return "[" + inner + "]";
+    return inner;
 }
 
 std::string PlainDisplay::decorateStep(const std::string& step) const {
@@ -381,6 +606,14 @@ std::string PlainDisplay::decorateSuccessMarker(const std::string& text) const {
 
 std::string PlainDisplay::decorateFailureMarker(const std::string& text) const {
     return text;
+}
+
+std::string PlainDisplay::decorateFailureHint(const std::string& text) const {
+    return text;
+}
+
+std::string PlainDisplay::decorateSuccessVersion(const std::string& version) const {
+    return version;
 }
 
 std::string PlainDisplay::decorateSkippedMarker(const std::string& text) const {
@@ -424,8 +657,7 @@ std::string PlainDisplay::renderBar(int percent) const {
     percent = std::clamp(percent, 0, 100);
     const int filled = (percent * BAR_WIDTH) / 100;
     const int empty = BAR_WIDTH - filled;
-    const std::string inner = decorateBarFill(filled) + decorateBarEmpty(empty);
-    return decorateBarOuter(inner);
+    return decorateBarFill(filled) + decorateBarEmpty(empty);
 }
 
 std::string PlainDisplay::modeLabel(DisplayMode mode) {

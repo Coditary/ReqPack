@@ -21,6 +21,7 @@ public:
 
 protected:
 	bool use_live_ui() const;
+	bool use_animated_session_progress() const;
 
 	virtual std::string decorateSpinnerFrame(std::string_view frame) const;
 	virtual std::string format_live_progress_line(const std::string& itemId,
@@ -37,7 +38,7 @@ protected:
 	void onItemBegin(const std::string& itemId, const std::string& label) override;
 	void onItemProgress(const std::string& itemId, const DisplayProgressMetrics& metrics) override;
 	void onItemStep(const std::string& itemId, const std::string& step) override;
-	void onItemSuccess(const std::string& itemId) override;
+	void onItemSuccess(const std::string& itemId, const std::string& version = {}) override;
 	void onItemSkipped(const std::string& itemId, const std::string& reason) override;
 	void onItemFailure(const std::string& itemId, const std::string& reason) override;
 	void onMessage(const std::string& text, const std::string& source) override;
@@ -47,9 +48,11 @@ protected:
 	void onProgressSuspend() override;
 	void onProgressResume() override;
 
+protected:
+	DisplayMode sessionMode_{DisplayMode::IDLE};
+
 private:
 	std::unique_ptr<reqpack::terminal::LiveProgressController> live_;
-	DisplayMode sessionMode_{DisplayMode::IDLE};
 	std::vector<std::string> sessionItems_;
 
 	std::string format_session_banner(DisplayMode mode, const std::vector<std::string>& items) const;

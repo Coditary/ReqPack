@@ -86,18 +86,15 @@ std::string format_link_display(const std::string& url, const size_t maxLength, 
 	if (url.empty()) {
 		return {};
 	}
-	constexpr const char* kLinkArrow = " \xe2\x86\x97";
-	const size_t labelBudget = maxLength > plain_display_internal::visual_length(kLinkArrow)
-	                               ? maxLength - plain_display_internal::visual_length(kLinkArrow)
-	                               : maxLength;
-	const std::string shortened = shorten_url_display(url, labelBudget);
-	const std::string linked = reqpack::terminal::osc8_hyperlink(url, shortened, style.hyperlinks);
-	std::string rendered = linked;
-	if (style.color) {
-		rendered = wrap(linked, "dim underline", style);
+	std::string display = url;
+	if (maxLength > 0 && plain_display_internal::visual_length(display) > maxLength) {
+		display = plain_display_internal::truncate_end(display, maxLength);
 	}
-	rendered += style.color ? wrap(kLinkArrow, "bright_black", style) : kLinkArrow;
-	return rendered;
+	const std::string linked = reqpack::terminal::osc8_hyperlink(url, display, style.hyperlinks);
+	if (style.color) {
+		return wrap(linked, "dim underline", style);
+	}
+	return linked;
 }
 
 std::optional<std::chrono::system_clock::time_point> parse_iso8601(const std::string& raw) {
@@ -230,18 +227,18 @@ StatusBadge resolve_status_badge(const PackageInfo& info) {
 	const bool hasUpdate = installed && !info.latestVersion.empty() && !iequals_trimmed(info.latestVersion, info.version);
 
 	if (hasUpdate) {
-		return {"\xe2\x86\x91 Update available", "yellow"};
+		return {"[update available]", "yellow"};
 	}
 	if (installed) {
-		return {"\xe2\x97\x8f Installed", "green"};
+		return {"[installed]", "green"};
 	}
 	if (iequals_trimmed(info.status, "available") || info.installed == "false") {
-		return {"\xe2\x97\x8b Not installed", "bright_black"};
+		return {"[not installed]", "bright_black"};
 	}
 	if (!info.status.empty()) {
-		return {info.status, "bright_black"};
+		return {"[" + info.status + "]", "bright_black"};
 	}
-	return {"\xe2\x97\x8b Not installed", "bright_black"};
+	return {"[not installed]", "bright_black"};
 }
 
 std::string repeat_unit(const char* unit, size_t count) {
@@ -303,12 +300,12 @@ std::string format_tags_metadata_value(const std::vector<std::string>& tags, con
 	std::ostringstream stream;
 	for (size_t index = 0; index < tags.size(); ++index) {
 		if (index > 0) {
-			stream << "  ";
+			stream << ", ";
 		}
-		const std::string token = '#' + tags[index];
-		stream << (style.color ? wrap(token, "cyan", style) : token);
+		stream << tags[index];
 	}
-	return stream.str();
+	const std::string joined = stream.str();
+	return style.color ? wrap(joined, "cyan", style) : joined;
 }
 
 std::string join_values(const std::vector<std::string>& values) {
@@ -345,19 +342,17 @@ std::string render_section(const std::string& title,
 
 	std::ostringstream stream;
 	stream << '\n';
-	stream << "  " << wrap(title, "bold", style) << '\n';
-	for (size_t index = 0; index < rows.size(); ++index) {
-		const bool last = index + 1 == rows.size();
-		const std::string prefix = last ? kTreeLast : kTreeBranch;
-		const std::string label = wrap(rows[index].label, "bright_black", style);
+	stream << wrap(title, "bold", style) << '\n';
+	for (const auto& row : rows) {
+		const std::string label = wrap(row.label, "bright_black", style);
 		const std::string paddedLabel = plain_display_internal::pad_right_visual(label, labelWidth);
-		std::string value = rows[index].value;
-		if (rows[index].isUrl) {
+		std::string value = row.value;
+		if (row.isUrl) {
 			value = format_link_display(value, urlMaxWidth, style);
 		} else if (style.color) {
 			value = wrap(value, "white", style);
 		}
-		stream << "  " << prefix << ' ' << paddedLabel << "  " << value << '\n';
+		stream << plain_display_internal::kIndent << paddedLabel << "  " << value << '\n';
 	}
 	return stream.str();
 }
@@ -401,9 +396,7 @@ std::string format_package_info(const PackageInfo& info) {
 	};
 
 	const size_t terminalWidth = std::max<size_t>(plain_display_internal::terminal_width(), 62);
-	const size_t layoutWidth = std::min<size_t>(terminalWidth, 80);
-	const size_t boxInnerWidth = layoutWidth >= 2 ? layoutWidth - 2 : 78;
-	const size_t titleContentWidth = boxInnerWidth >= 2 ? boxInnerWidth - 2 : 76;
+	const size_t layoutWidth = std::min<size_t>(terminalWidth, 120);
 
 	const std::string displayName = package_table_display_name(info.name.empty() ? info.packageId : info.name);
 	const std::string version = info.version;
@@ -413,27 +406,22 @@ std::string format_package_info(const PackageInfo& info) {
 	const std::string description = trim_copy(info.description);
 	const bool showLongDescription = !description.empty() && !iequals_trimmed(description, summary);
 
-	std::ostringstream titleLeft;
-	titleLeft << "\xf0\x9f\x93\xa6 " << wrap(displayName, "bold cyan", style);
-	if (!version.empty()) {
-		titleLeft << ' ' << wrap(version, "yellow", style);
-	}
-
-	const std::string badgeText = wrap(badge.text, badge.colorSpec, style);
-	const std::string headerRendered = compose_box_title_row(titleLeft.str(), badgeText, titleContentWidth);
-
 	std::ostringstream output;
 	output << '\n';
-	output << kBoxTopLeft << repeat_unit(kBoxHorizontal, boxInnerWidth) << kBoxTopRight << '\n';
-	output << format_box_line(' ' + headerRendered, boxInnerWidth);
-	if (!summary.empty()) {
-		output << format_box_line(' ' + wrap(summary, "dim white", style), boxInnerWidth);
+	output << wrap(displayName, "bold cyan", style);
+	if (!version.empty()) {
+		output << ' ' << wrap(version, "yellow", style);
 	}
-	output << kBoxBottomLeft << repeat_unit(kBoxHorizontal, boxInnerWidth) << kBoxBottomRight << "\n\n";
+	if (!badge.text.empty()) {
+		output << "  " << wrap(badge.text, badge.colorSpec, style);
+	}
+	output << '\n';
+	if (!summary.empty()) {
+		output << wrap(summary, "dim white", style) << '\n';
+	}
 
 	const size_t sectionLabelWidth = 11;
-	const size_t treeValueOffset = 2 + 3 + 1 + sectionLabelWidth + 2;
-	const size_t urlMaxWidth = layoutWidth > treeValueOffset ? layoutWidth - treeValueOffset : 48;
+	const size_t urlMaxWidth = layoutWidth > (2 + sectionLabelWidth + 2) ? layoutWidth - (2 + sectionLabelWidth + 2) : 48;
 
 	std::vector<SectionRow> metadata;
 	append_row(metadata, "System", system_label(info));

@@ -63,6 +63,9 @@ bool action_supports_output_path_flag(ActionType action) {
 }
 
 std::optional<std::string> canonical_request_flag_token(ActionType action, const std::string& argument) {
+    if (argument == "--json") {
+        return std::nullopt;
+    }
     if (action == ActionType::UPDATE && is_request_all_packages_flag(argument)) {
         return std::string {"all"};
     }

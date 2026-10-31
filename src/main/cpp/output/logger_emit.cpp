@@ -1,6 +1,8 @@
 #include "output/logger.h"
 #include "output/logger_core.h"
 
+#include "plain_display_internal.h"
+
 namespace {
 
 std::string join_pipe(const std::vector<std::string>& values) {
@@ -151,8 +153,8 @@ void Logger::displayItemStep(const std::string& itemId, const std::string& step)
     emit(OutputAction::DISPLAY_ITEM_STEP, OutputContext{.message = step, .source = itemId});
 }
 
-void Logger::displayItemSuccess(const std::string& itemId) {
-    emit(OutputAction::DISPLAY_ITEM_SUCCESS, OutputContext{.source = itemId});
+void Logger::displayItemSuccess(const std::string& itemId, const std::string& version) {
+    emit(OutputAction::DISPLAY_ITEM_SUCCESS, OutputContext{.message = version, .source = itemId});
 }
 
 void Logger::displayItemSkipped(const std::string& itemId, const std::string& reason) {
@@ -164,7 +166,13 @@ void Logger::displayItemFailure(const std::string& itemId, const std::string& re
 }
 
 void Logger::displayItemFailure(const std::string& itemId, const DiagnosticMessage& diagnostic) {
+    if (quietTransactionTranscript() && plain_display_internal::is_generic_plugin_failure_summary(diagnostic.summary)) {
+        return;
+    }
     displayItemFailure(itemId, diagnostic.summary);
+    if (quietTransactionTranscript()) {
+        return;
+    }
     displayDiagnostic(diagnostic, itemId, false);
 }
 

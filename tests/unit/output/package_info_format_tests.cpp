@@ -31,15 +31,14 @@ TEST_CASE("package info format deduplicates status and summary fields", "[unit][
     CHECK(rendered.find("Package ID") == std::string::npos);
     CHECK(rendered.find("Installed:") == std::string::npos);
     CHECK(rendered.find("Status:") == std::string::npos);
-    CHECK(rendered.find("Installed") != std::string::npos);
     CHECK(rendered.find("Unified AI CLI") != std::string::npos);
     CHECK(rendered.find("Description") == std::string::npos);
     CHECK(rendered.find("Coditary <Matographo@gmail.com>") != std::string::npos);
     CHECK(rendered.find("Artifact") != std::string::npos);
     CHECK(rendered.find("Source") != std::string::npos);
     CHECK(rendered.find("Registry") != std::string::npos);
-    CHECK(rendered.find("#cli") != std::string::npos);
-    CHECK(rendered.find("● Installed") != std::string::npos);
+    CHECK(rendered.find("cli, ai, wuji") != std::string::npos);
+    CHECK(rendered.find("[installed]") != std::string::npos);
     CHECK(rendered.find("Tags") != std::string::npos);
     CHECK(rendered.find("Metadata") != std::string::npos);
     CHECK(rendered.find("Links") != std::string::npos);
@@ -54,5 +53,5 @@ TEST_CASE("package info format shows update badge when latest differs", "[unit][
     info.summary = "Demo package";
 
     const std::string rendered = format_package_info(info);
-    CHECK(rendered.find("Update available") != std::string::npos);
+    CHECK(rendered.find("[update available]") != std::string::npos);
 }

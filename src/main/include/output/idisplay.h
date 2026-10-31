@@ -47,6 +47,8 @@ struct DisplayItemStatus {
 	DisplayProgressMetrics metrics{};
 	std::string      step;
 	DisplayItemState state{DisplayItemState::PENDING};
+	std::string      failureReason;
+	std::string      successVersion;
 };
 
 struct PackageTableDisplayContext {
@@ -105,7 +107,8 @@ public:
 	                        const std::string& step) = 0;
 
 	/// Item completed successfully; progress implied 100 %.
-	virtual void onItemSuccess(const std::string& itemId) = 0;
+	/// @param version  Optional installed version for transcript display.
+	virtual void onItemSuccess(const std::string& itemId, const std::string& version = {}) = 0;
 
 	/// Item was skipped because desired state is already satisfied.
 	virtual void onItemSkipped(const std::string& itemId, const std::string& reason) = 0;

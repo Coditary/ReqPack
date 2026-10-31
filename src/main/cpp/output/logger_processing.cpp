@@ -1,7 +1,10 @@
 #include "output/logger.h"
 #include "output/logger_core.h"
 
+#include "plain_display_internal.h"
+
 #include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <sstream>
 
@@ -80,6 +83,31 @@ DisplayProgressMetrics progress_metrics_from_context(const OutputContext& contex
     });
 }
 
+bool plugin_artifact_is_manifest_inventory(const std::string& payload) {
+	if (payload.empty() || payload.front() != '{') {
+		return false;
+	}
+	return payload.find("\"type\"") != std::string::npos && payload.find("\"path\"") != std::string::npos;
+}
+
+bool should_mirror_plugin_artifact_to_display(const OutputContext& context, const bool verboseTranscript) {
+	if (verboseTranscript) {
+		return true;
+	}
+	return !plugin_artifact_is_manifest_inventory(context.payload);
+}
+
+bool should_mirror_transcript_message(const Logger& logger, const std::string& text) {
+	if (!logger.quietTransactionTranscript()) {
+		return true;
+	}
+	return !plain_display_internal::is_transaction_chatter_message(text);
+}
+
+bool progress_has_byte_transfer(const DisplayProgressMetrics& metrics) {
+	return plain_display_internal::progress_has_byte_transfer(metrics);
+}
+
 }  // namespace
 
 void Logger::routeToDisplay(const OutputEvent& event) {
@@ -89,6 +117,11 @@ void Logger::routeToDisplay(const OutputEvent& event) {
     }
 
     const OutputContext& context = event.context;
+    if (event.action == OutputAction::DISPLAY_SESSION_BEGIN) {
+        activeDisplayMode_.store(context.displayMode, std::memory_order_release);
+    } else if (event.action == OutputAction::DISPLAY_SESSION_END) {
+        activeDisplayMode_.store(static_cast<int>(DisplayMode::IDLE), std::memory_order_release);
+    }
     if (event.action == OutputAction::DIAGNOSTIC) {
         emit_message_lines(activeDisplay, logger_diagnostic_text(context, false), context.source);
         return;
@@ -104,26 +137,35 @@ void Logger::routeToDisplay(const OutputEvent& event) {
                 activeDisplay->onItemProgress(context.source, metrics);
             } else {
                 const std::string summary = format_progress_summary(metrics);
-                activeDisplay->onMessage(summary.empty() ? "progress" : "progress " + summary, displaySource);
+                const std::string message = summary.empty() ? "progress" : "progress " + summary;
+                if (should_mirror_transcript_message(*this, message)) {
+                    activeDisplay->onMessage(message, displaySource);
+                }
             }
             break;
         }
         case OutputAction::PLUGIN_STATUS:
-            activeDisplay->onMessage("status " + std::to_string(context.statusCode), displaySource);
+            if (should_mirror_transcript_message(*this, "status " + std::to_string(context.statusCode))) {
+                activeDisplay->onMessage("status " + std::to_string(context.statusCode), displaySource);
+            }
             break;
         case OutputAction::PLUGIN_EVENT:
             if (context.eventName == "begin_step") {
                 if (itemScoped) {
                     activeDisplay->onItemStep(context.source, context.payload);
-                } else {
+                } else if (should_mirror_transcript_message(*this, context.payload)) {
                     activeDisplay->onMessage(context.payload, displaySource);
                 }
                 break;
             }
             if (context.eventName == "success") {
                 if (itemScoped) {
-                    activeDisplay->onItemSuccess(context.source);
-                } else {
+                    std::string version;
+                    if (!context.payload.empty() && context.payload != "ok") {
+                        version = context.payload;
+                    }
+                    activeDisplay->onItemSuccess(context.source, version);
+                } else if (should_mirror_transcript_message(*this, "done")) {
                     activeDisplay->onMessage("done", displaySource);
                 }
                 break;
@@ -141,10 +183,18 @@ void Logger::routeToDisplay(const OutputEvent& event) {
                 || context.eventName == "outdated") {
                 break;
             }
-            activeDisplay->onMessage(context.eventName + ": " + context.payload, displaySource);
+            {
+                const std::string line = context.eventName + ": " + context.payload;
+                if (should_mirror_transcript_message(*this, line)) {
+                    activeDisplay->onMessage(line, displaySource);
+                }
+            }
             break;
         case OutputAction::PLUGIN_ARTIFACT:
-            activeDisplay->onMessage("artifact: " + context.payload, displaySource);
+            if (should_mirror_plugin_artifact_to_display(context, isConsoleOutputEnabled())
+                && should_mirror_transcript_message(*this, "artifact: " + context.payload)) {
+                activeDisplay->onMessage("artifact: " + context.payload, displaySource);
+            }
             break;
         case OutputAction::DISPLAY_SESSION_BEGIN:
             activeDisplay->onSessionBegin(static_cast<DisplayMode>(context.displayMode), split_pipe(context.payload));
@@ -169,14 +219,21 @@ void Logger::routeToDisplay(const OutputEvent& event) {
         case OutputAction::DISPLAY_ITEM_BEGIN:
             activeDisplay->onItemBegin(context.source, context.message.empty() ? context.source : context.message);
             break;
-        case OutputAction::DISPLAY_ITEM_PROGRESS:
-            activeDisplay->onItemProgress(context.source, progress_metrics_from_context(context));
+        case OutputAction::DISPLAY_ITEM_PROGRESS: {
+            const DisplayProgressMetrics metrics = progress_metrics_from_context(context);
+            if (quietTransactionTranscript() && !progress_has_byte_transfer(metrics)) {
+                break;
+            }
+            activeDisplay->onItemProgress(context.source, metrics);
             break;
+        }
         case OutputAction::DISPLAY_ITEM_STEP:
-            activeDisplay->onItemStep(context.source, context.message);
+            if (!quietTransactionTranscript()) {
+                activeDisplay->onItemStep(context.source, context.message);
+            }
             break;
         case OutputAction::DISPLAY_ITEM_SUCCESS:
-            activeDisplay->onItemSuccess(context.source);
+            activeDisplay->onItemSuccess(context.source, context.message);
             break;
         case OutputAction::DISPLAY_ITEM_SKIPPED:
             activeDisplay->onItemSkipped(context.source, context.message);
@@ -185,7 +242,9 @@ void Logger::routeToDisplay(const OutputEvent& event) {
             activeDisplay->onItemFailure(context.source, context.message);
             break;
         case OutputAction::DISPLAY_MESSAGE:
-            emit_message_lines(activeDisplay, context.message, context.source);
+            if (should_mirror_transcript_message(*this, context.message)) {
+                emit_message_lines(activeDisplay, context.message, context.source);
+            }
             break;
         case OutputAction::DISPLAY_UNINDENTED_TEXT:
             activeDisplay->onUnindentedText(context.message);
@@ -200,7 +259,9 @@ void Logger::routeToDisplay(const OutputEvent& event) {
             activeDisplay->onTableEnd();
             break;
         case OutputAction::STDOUT:
-            activeDisplay->onMessage(logger_format_message(context));
+            if (should_mirror_transcript_message(*this, logger_format_message(context))) {
+                activeDisplay->onMessage(logger_format_message(context));
+            }
             break;
         default:
             break;

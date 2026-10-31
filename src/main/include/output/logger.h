@@ -152,6 +152,7 @@ class Logger {
 
 	/// IDisplay implementation; accessed only on the worker thread after set.
 	std::atomic<IDisplay*>          display{nullptr};
+	std::atomic<int>                activeDisplayMode_{static_cast<int>(DisplayMode::IDLE)};
 
 	Logger(const Logger&)            = delete;
 	Logger& operator=(const Logger&) = delete;
@@ -183,6 +184,9 @@ public:
 	void setPattern(const std::string& pattern);
 	void setConsoleOutput(bool enable);
 	bool isConsoleOutputEnabled() const;
+	DisplayMode activeDisplayMode() const;
+	/// Hide plugin transcript/progress chrome during install/remove/update unless --verbose.
+	bool quietTransactionTranscript() const;
 	void setJsonOutputMode(bool enable);
 	bool isJsonOutputMode() const;
 	void setFileSink(const std::string& filename);
@@ -238,7 +242,7 @@ public:
 	void displayItemProgress(const std::string& itemId,
 	                        const DisplayProgressMetrics& metrics);
 	void displayItemStep   (const std::string& itemId, const std::string& step);
-	void displayItemSuccess(const std::string& itemId);
+	void displayItemSuccess(const std::string& itemId, const std::string& version = {});
 	void displayItemSkipped(const std::string& itemId, const std::string& reason = "already installed");
 	void displayItemFailure(const std::string& itemId, const std::string& reason);
 	void displayItemFailure(const std::string& itemId, const DiagnosticMessage& diagnostic);

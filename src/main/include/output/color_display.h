@@ -40,7 +40,11 @@ protected:
 	std::string decorateListDescriptionCell(const std::string& text) const override;
 	std::string applySearchHighlight(const std::string& text) const override;
 	std::string decorateSpinnerFrame(std::string_view frame) const override;
+	std::string decorateActionBanner(const std::string& banner) const override;
+	std::string decorateFailureHint(const std::string& text) const override;
+	std::string decorateSuccessVersion(const std::string& version) const override;
 	std::string format_session_summary(bool success, int succeeded, int skipped, int failed) const override;
+	void onSessionEnd(bool success, int succeeded, int skipped, int failed) override;
 
 private:
 	DisplayColorScheme scheme_;

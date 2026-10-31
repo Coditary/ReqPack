@@ -438,10 +438,12 @@ add_executable(reqpack_cli_unit_tests
     tests/unit/output/package_info_format_tests.cpp
     tests/unit/output/terminal/terminal_ui_tests.cpp
     tests/unit/output/run_result_json_tests.cpp
+    tests/unit/output/query_result_json_tests.cpp
 )
 
 target_include_directories(reqpack_cli_unit_tests PRIVATE
     ${REQPACK_PRIVATE_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/output
     tests/cpp
 )
 

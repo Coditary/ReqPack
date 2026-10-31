@@ -19,6 +19,7 @@
 #include "output/command_output.h"
 #include "output/idisplay.h"
 #include "output/logger.h"
+#include "output/query_result_json.h"
 
 #include <exception>
 #include <iostream>
@@ -40,6 +41,11 @@ int run_host_refresh(Logger& logger) {
 }
 
 int run_info_command(const ReqPackConfig& config, Logger& logger) {
+    if (config.display.jsonOutput) {
+        emit_local_rqp_info_json(config, reqpack_build_release_id());
+        logger.flushSync();
+        return 0;
+    }
     CommandOutput output;
     output.mode = DisplayMode::INFO;
     output.sessionItems = {"rqp"};
@@ -169,10 +175,6 @@ int dispatch_main_command(Cli& cli,
     }
 
     if (is_self_update_command(rawArguments)) {
-        if (is_legacy_self_update_via_update_command(rawArguments)) {
-            logger.logStdout(
-                "Note: Running self-update. Prefer `rqp self-update` or `rqp update --all` for packages.");
-        }
         const int result = run_self_update(config, logger);
         logger.flushSync();
         return result;

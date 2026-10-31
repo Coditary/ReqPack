@@ -2,41 +2,12 @@
 
 #include "output/logger.h"
 
-#include <cstdio>
+#include <rqp/security/json_util.h>
+
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <utility>
-
-namespace {
-
-std::string json_escape(const std::string& value) {
-	std::string escaped;
-	escaped.reserve(value.size());
-	for (const char c : value) {
-		switch (c) {
-			case '\\': escaped += "\\\\"; break;
-			case '"': escaped += "\\\""; break;
-			case '\b': escaped += "\\b"; break;
-			case '\f': escaped += "\\f"; break;
-			case '\n': escaped += "\\n"; break;
-			case '\r': escaped += "\\r"; break;
-			case '\t': escaped += "\\t"; break;
-			default:
-				if (static_cast<unsigned char>(c) < 0x20) {
-					char buffer[8];
-					std::snprintf(buffer, sizeof(buffer), "\\u%04x", static_cast<unsigned char>(c));
-					escaped += buffer;
-				} else {
-					escaped.push_back(c);
-				}
-				break;
-		}
-	}
-	return escaped;
-}
-
-}  // namespace
 
 std::string run_result_status_for_action(ActionType action, bool success, bool dryRun) {
 	if (!success) {
@@ -74,18 +45,21 @@ std::string serialize_run_result_json(const RunResultJsonDocument& document) {
 	stream << ",\"dryRun\":" << (document.dryRun ? "true" : "false");
 
 	for (const auto& [system, items] : bySystem) {
-		stream << ",\"" << json_escape(system) << "\":[";
+		stream << ",\"" << rqp_json_escape(system) << "\":[";
 		for (std::size_t index = 0; index < items.size(); ++index) {
 			const RunResultJsonItem& item = *items[index];
 			if (index > 0) {
 				stream << ",";
 			}
 			stream << "{";
-			stream << "\"name\":\"" << json_escape(item.name) << "\"";
-			stream << ",\"version\":\"" << json_escape(item.version) << "\"";
-			stream << ",\"status\":\"" << json_escape(item.status) << "\"";
+			stream << "\"name\":\"" << rqp_json_escape(item.name) << "\"";
+			stream << ",\"version\":\"" << rqp_json_escape(item.version) << "\"";
+			if (!item.latestVersion.empty()) {
+				stream << ",\"latestVersion\":\"" << rqp_json_escape(item.latestVersion) << "\"";
+			}
+			stream << ",\"status\":\"" << rqp_json_escape(item.status) << "\"";
 			if (!item.errorMessage.empty()) {
-				stream << ",\"errorMessage\":\"" << json_escape(item.errorMessage) << "\"";
+				stream << ",\"errorMessage\":\"" << rqp_json_escape(item.errorMessage) << "\"";
 			}
 			stream << "}";
 		}

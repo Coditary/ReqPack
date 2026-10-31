@@ -323,18 +323,6 @@ int run_self_update(const ReqPackConfig& config, Logger& logger) {
     }
 
     begin_step("finalize", 99);
-    if (previousLinkTargetPath.has_value() && previousLinkTargetPath.value() == installedBinaryPath) {
-        logger.emit(OutputAction::DISPLAY_MESSAGE,
-                    OutputContext{.message = "already on release " + asset->first,
-                                  .source = std::string(itemId)});
-    } else {
-        logger.emit(OutputAction::DISPLAY_MESSAGE,
-                    OutputContext{.message = "now on release " + asset->first,
-                                  .source = std::string(itemId)});
-    }
-    logger.emit(OutputAction::DISPLAY_MESSAGE,
-                OutputContext{.message = "link: " + config.selfUpdate.linkPath,
-                              .source = std::string(itemId)});
     emit_progress(100);
     logger.displayItemSuccess(std::string(itemId));
     logger.displaySessionEnd(true, 1, 0, 0);

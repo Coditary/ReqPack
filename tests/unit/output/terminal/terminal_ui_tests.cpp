@@ -10,12 +10,12 @@
 #include <chrono>
 #include <sstream>
 
-TEST_CASE("block progress bar uses full-block unicode fill", "[unit][terminal]") {
-	CHECK(reqpack::terminal::render_fractional_block_bar(0.0, 10).find("░") != std::string::npos);
-	CHECK(reqpack::terminal::render_fractional_block_bar(1.0, 10).find("█") != std::string::npos);
+TEST_CASE("block progress bar uses line unicode fill", "[unit][terminal]") {
+	CHECK(reqpack::terminal::render_fractional_block_bar(0.0, 10).find("\xe2\x94\x80") != std::string::npos);
+	CHECK(reqpack::terminal::render_fractional_block_bar(1.0, 10).find("\xe2\x94\x81") != std::string::npos);
 	const std::string half = reqpack::terminal::render_fractional_block_bar(0.5, 20);
-	CHECK(half.find("█") != std::string::npos);
-	CHECK(half.find("░") != std::string::npos);
+	CHECK(half.find("\xe2\x94\x81") != std::string::npos);
+	CHECK(half.find("\xe2\x94\x80") != std::string::npos);
 	CHECK(half.size() == 60);
 }
 
@@ -55,7 +55,7 @@ TEST_CASE("complete_item prints outcome line only once", "[unit][terminal]") {
 	    });
 	controller.begin_session("Installing...");
 	controller.begin_item("dnf:gimp", "gimp");
-	const std::string marker = "  └─ ✔dnf:gimp done";
+	const std::string marker = "  \xe2\x9c\x93 dnf:gimp done";
 	controller.complete_item("dnf:gimp", true, marker);
 	controller.complete_item("dnf:gimp", true, marker);
 	const std::string rendered = stream.str();

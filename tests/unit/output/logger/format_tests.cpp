@@ -11,6 +11,7 @@
 #include "output/logger.h"
 #include "output/logger_core.h"
 #include "output/command_output.h"
+#include "plain_display_internal.h"
 #include "test_helpers.h"
 
 #include <mutex>
@@ -41,8 +42,9 @@ public:
         steps.emplace_back(itemId, step);
     }
 
-    void onItemSuccess(const std::string& itemId) override {
+    void onItemSuccess(const std::string& itemId, const std::string& version = {}) override {
         std::lock_guard<std::mutex> lock(mutex_);
+        (void)version;
         successes.push_back(itemId);
     }
 
@@ -185,7 +187,7 @@ TEST_CASE("logger preserves trailing empty table cells", "[unit][logger][display
         void onItemBegin(const std::string&, const std::string&) override {}
         void onItemProgress(const std::string&, const DisplayProgressMetrics&) override {}
         void onItemStep(const std::string&, const std::string&) override {}
-        void onItemSuccess(const std::string&) override {}
+        void onItemSuccess(const std::string&, const std::string& = {}) override {}
         void onItemSkipped(const std::string&, const std::string&) override {}
         void onItemFailure(const std::string&, const std::string&) override {}
         void onMessage(const std::string&, const std::string&) override {}
@@ -415,8 +417,8 @@ TEST_CASE("color display wraps decorated segments with configured ansi styles", 
     CHECK(display.decorateHeader("LIST: dnf") == ansi_wrap("LIST: dnf", "bold"));
     CHECK(display.decorateSummaryOk("done") == ansi_wrap("done", "green"));
     CHECK(display.decorateSummaryFail("failed") == ansi_wrap("failed", "red"));
-    CHECK(display.decorateBarFill(3) == ansi_wrap("███", "yellow"));
-    CHECK(display.decorateBarEmpty(2) == ansi_wrap("░░", "dim"));
+    CHECK(display.decorateBarFill(3) == ansi_wrap("\xe2\x94\x81\xe2\x94\x81\xe2\x94\x81", "yellow"));
+    CHECK(display.decorateBarEmpty(2) == ansi_wrap("\xe2\x94\x80\xe2\x94\x80", "dim"));
     CHECK(display.decorateStep("Downloading") == ansi_wrap("Downloading", "cyan"));
     CHECK(display.decorateSuccessMarker("OK") == ansi_wrap("OK", "bright_green"));
     CHECK(display.decorateFailureMarker("[FAILED]") == ansi_wrap("[FAILED]", "bright_red"));
@@ -424,14 +426,14 @@ TEST_CASE("color display wraps decorated segments with configured ansi styles", 
 }
 
 TEST_CASE("color display colors only progress bar brackets when configured", "[unit][display][color]") {
-    const std::string inner = ansi_wrap("███░░", "green");
+    const std::string inner = ansi_wrap("\xe2\x94\x81\xe2\x94\x81\xe2\x94\x80\xe2\x94\x80", "green");
 
-    SECTION("empty and none bar specs keep plain brackets") {
-        CHECK(TestColorDisplay(DisplayColorScheme{}).decorateBarOuter(inner) == "[" + inner + "]");
-        CHECK(TestColorDisplay(DisplayColorScheme{.barOuter = "none"}).decorateBarOuter(inner) == "[" + inner + "]");
+    SECTION("empty and none bar specs keep inner bar unchanged") {
+        CHECK(TestColorDisplay(DisplayColorScheme{}).decorateBarOuter(inner) == inner);
+        CHECK(TestColorDisplay(DisplayColorScheme{.barOuter = "none"}).decorateBarOuter(inner) == inner);
     }
 
-    SECTION("bar outer spec wraps brackets only") {
+    SECTION("bar outer spec wraps bar when brackets were used") {
         const std::string spec = "bold blue";
         const std::string expected = ansi_open(spec) + "[" + ansi_reset(spec) + inner + ansi_open(spec) + "]" + ansi_reset(spec);
         CHECK(TestColorDisplay(DisplayColorScheme{.barOuter = spec}).decorateBarOuter(inner) == expected);
@@ -465,6 +467,65 @@ TEST_CASE("logger routes item-scoped plugin callbacks to display lifecycle", "[u
     CHECK(display.failures[0].first == "smoke:demo");
     CHECK(display.failures[0].second == "broken");
 
+    logger.setDisplay(nullptr);
+    logger.setConsoleOutput(true);
+    logger.flushSync();
+}
+
+TEST_CASE("logger hides transaction chatter during quiet update sessions", "[unit][logger][display]") {
+    Logger& logger = Logger::instance();
+    RecordingDisplay display;
+
+    logger.flushSync();
+    logger.setConsoleOutput(false);
+    logger.setDisplay(&display);
+    logger.displaySessionBegin(DisplayMode::UPDATE, {"rqp"});
+
+    logger.emit(OutputAction::DISPLAY_MESSAGE,
+                OutputContext{.message = "link: /home/user/.local/bin/rqp", .source = "rqp"});
+    logger.emit(OutputAction::DISPLAY_MESSAGE,
+                OutputContext{.message = "already on release v1.3.1", .source = "rqp"});
+    logger.flushSync();
+
+    CHECK(display.messages.empty());
+
+    logger.setConsoleOutput(true);
+    logger.emit(OutputAction::DISPLAY_MESSAGE, OutputContext{.message = "link: /tmp/rqp", .source = "rqp"});
+    logger.flushSync();
+    REQUIRE(display.messages.size() == 1);
+
+    logger.displaySessionEnd(true, 1, 0, 0);
+    logger.setDisplay(nullptr);
+    logger.setConsoleOutput(true);
+    logger.flushSync();
+}
+
+TEST_CASE("logger hides manifest inventory artifacts from display unless verbose", "[unit][logger][display]") {
+    Logger& logger = Logger::instance();
+    RecordingDisplay display;
+
+    logger.flushSync();
+    logger.setConsoleOutput(false);
+    logger.setDisplay(&display);
+
+    logger.emit(OutputAction::PLUGIN_ARTIFACT,
+                OutputContext{.source = "rqp", .payload = R"({"type": "dir", "path": "/tmp/pkg"})"});
+    logger.emit(OutputAction::PLUGIN_ARTIFACT, OutputContext{.source = "rqp", .payload = "./dist/demo.rqp"});
+    logger.flushSync();
+
+    REQUIRE(display.messages.size() == 1);
+    CHECK(display.messages[0].text.find("artifact: ./dist/demo.rqp") != std::string::npos);
+
+    display.messages.clear();
+    logger.setConsoleOutput(true);
+    logger.emit(OutputAction::PLUGIN_ARTIFACT,
+                OutputContext{.source = "rqp", .payload = R"({"type": "file", "path": "/tmp/bin"})"});
+    logger.flushSync();
+
+    REQUIRE(display.messages.size() == 1);
+    CHECK(display.messages[0].text.find("artifact:") != std::string::npos);
+
+    logger.displaySessionEnd(true, 1, 0, 0);
     logger.setDisplay(nullptr);
     logger.setConsoleOutput(true);
     logger.flushSync();
@@ -726,4 +787,25 @@ TEST_CASE("command output keeps list rows within terminal width", "[unit][logger
             CHECK(line.size() <= 76);
         }
     }
+}
+
+TEST_CASE("transaction banner groups shared-system installs", "[unit][logger][format]") {
+    const std::vector<std::string> items = {"rqp:wuji-ai", "rqp:tempify"};
+    const std::string banner = plain_display_internal::action_banner_text(DisplayMode::INSTALL, items);
+    CHECK(banner == "Installing 2 packages (rqp)...");
+}
+
+TEST_CASE("transaction failure helpers dedupe generic plugin summaries", "[unit][logger][format]") {
+    CHECK(plain_display_internal::is_generic_plugin_failure_summary("Plugin action failed for rqp:tempify"));
+    CHECK_FALSE(plain_display_internal::is_generic_plugin_failure_summary("rqp repositories not configured"));
+    CHECK(plain_display_internal::format_item_failure_primary("rqp:tempify", "rqp repositories not configured")
+          == "rqp:tempify failed: rqp repositories not configured");
+    REQUIRE(plain_display_internal::failure_hint_for_reason("rqp:tempify", "rqp repositories not configured").has_value());
+}
+
+TEST_CASE("session summary hides zero skipped and failed counts", "[unit][logger][format]") {
+    const std::optional<std::string> summary =
+        plain_display_internal::session_summary_text(DisplayMode::INSTALL, true, 2, 0, 0);
+    REQUIRE(summary.has_value());
+    CHECK(*summary == "Summary: 2 installed");
 }

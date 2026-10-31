@@ -336,13 +336,6 @@ void PlainDisplay::renderWrappedPackageTable() const {
         }
     }
     out() << '\n';
-    for (size_t i = 0; i < tableHeaders.size(); ++i) {
-        out() << decorateRule(plain_display_internal::repeat_char('-', static_cast<int>(widths[i])));
-        if (i + 1 < tableHeaders.size()) {
-            out() << "  ";
-        }
-    }
-    out() << '\n';
     for (const auto& row : tableRows) {
         for (size_t i = 0; i < tableHeaders.size(); ++i) {
             const std::string cell = i < row.size() ? row[i] : std::string{};
@@ -472,8 +465,6 @@ void PlainDisplay::renderPlatformPackageTable() const {
         return;
     }
 
-    const std::string ruleUnit = "\xe2\x94\x80";
-
     const auto write_plain_cell = [&](const std::string& plain, const size_t width,
                                       const std::function<std::string(const std::string&)>& decorate) {
         const std::string truncated = plain_display_internal::truncate_end(plain, width);
@@ -493,21 +484,15 @@ void PlainDisplay::renderPlatformPackageTable() const {
         }
     }
     out() << '\n';
-    for (size_t columnIndex = 0; columnIndex < columnCount; ++columnIndex) {
-        const std::string plainRule =
-            plain_display_internal::repeat_visual_unit(ruleUnit, widths[columnIndex]);
-        write_plain_cell(plainRule, widths[columnIndex],
-            [this](const std::string& value) { return decorateRule(value); });
-        if (columnIndex + 1 < columnCount) {
-            out() << "  ";
-        }
-    }
-    out() << '\n';
 
     for (const auto& row : tableRows) {
         for (size_t columnIndex = 0; columnIndex < columnCount; ++columnIndex) {
             const std::string cell = columnIndex < row.size() ? row[columnIndex] : std::string{};
-            const std::string plain = plain_display_internal::truncate_end(cell, widths[columnIndex]);
+            std::string plain = cell;
+            if (columnIndex == descriptionIndex && plain.empty()) {
+                plain = "-";
+            }
+            plain = plain_display_internal::truncate_end(plain, widths[columnIndex]);
             out() << decorateCell(columnIndex, plain);
             const size_t padding = widths[columnIndex] > plain_display_internal::visual_length(plain)
                 ? widths[columnIndex] - plain_display_internal::visual_length(plain)
@@ -610,13 +595,6 @@ void PlainDisplay::onTableEnd() {
     out() << '\n';
     for (size_t i = 0; i < tableHeaders.size(); ++i) {
         out() << decorateHeader(plain_display_internal::pad_right(tableHeaders[i], colWidths[i]));
-        if (i + 1 < tableHeaders.size()) {
-            out() << "  ";
-        }
-    }
-    out() << '\n';
-    for (size_t i = 0; i < tableHeaders.size(); ++i) {
-        out() << decorateRule(plain_display_internal::repeat_char('-', static_cast<int>(colWidths[i])));
         if (i + 1 < tableHeaders.size()) {
             out() << "  ";
         }

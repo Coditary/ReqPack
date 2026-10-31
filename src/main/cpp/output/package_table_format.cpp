@@ -275,15 +275,7 @@ std::string section_heading(const ListSectionKind kind, const size_t count) {
 	return {};
 }
 
-std::string section_emoji(const ListSectionKind kind) {
-	switch (kind) {
-		case ListSectionKind::Packages:
-			return "📦 ";
-		case ListSectionKind::Plugins:
-			return "🔌 ";
-		case ListSectionKind::Aliases:
-			return "🔗 ";
-	}
+std::string section_emoji(const ListSectionKind /*kind*/) {
 	return {};
 }
 
@@ -433,9 +425,6 @@ std::vector<std::vector<std::string>> prepared_search_rows_to_table_cells(const 
 			cells.push_back(row.system);
 		}
 		std::string nameCell = row.name;
-		if (row.installed) {
-			nameCell = std::string("\xe2\x97\x8f ") + nameCell;
-		}
 		cells.push_back(std::move(nameCell));
 		cells.push_back(row.version);
 		cells.push_back(row.typeBadge);

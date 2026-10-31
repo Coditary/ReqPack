@@ -6,12 +6,26 @@
 
 #include "plain_display_internal.h"
 
+#include "output/logger.h"
+
 #include <sstream>
 
 namespace {
 
 bool has_measurable_progress(const DisplayProgressMetrics& metrics) {
 	return metrics.percent.has_value() || metrics.currentBytes.has_value() || metrics.totalBytes.has_value();
+}
+
+bool use_live_progress_for(DisplayMode mode) {
+	switch (mode) {
+		case DisplayMode::INSTALL:
+		case DisplayMode::REMOVE:
+		case DisplayMode::UPDATE:
+		case DisplayMode::ENSURE:
+			return false;
+		default:
+			return true;
+	}
 }
 
 }  // namespace
@@ -33,50 +47,16 @@ bool LiveDisplay::use_live_ui() const {
 	return live_ != nullptr;
 }
 
+bool LiveDisplay::use_animated_session_progress() const {
+	return use_live_ui() && use_live_progress_for(sessionMode_);
+}
+
 std::string LiveDisplay::decorateSpinnerFrame(const std::string_view frame) const {
 	return std::string(frame);
 }
 
 std::string LiveDisplay::format_session_banner(const DisplayMode mode, const std::vector<std::string>& items) const {
-	const std::string joined = plain_display_internal::join_items(items);
-	std::ostringstream banner;
-	banner << "📦 ";
-	switch (mode) {
-		case DisplayMode::SEARCH:
-			if (!joined.empty()) {
-				banner << "Searching " << joined;
-			} else {
-				banner << "Searching";
-			}
-			break;
-		case DisplayMode::INFO:
-			if (!joined.empty()) {
-				banner << "Info for " << joined;
-			} else {
-				banner << "Showing package info";
-			}
-			break;
-		case DisplayMode::LIST:
-			banner << (joined.empty() ? "Listing packages" : "Listing " + joined);
-			break;
-		case DisplayMode::INSTALL:
-			banner << (joined.empty() ? "Installing" : "Installing " + joined);
-			break;
-		case DisplayMode::REMOVE:
-			banner << (joined.empty() ? "Removing" : "Removing " + joined);
-			break;
-		case DisplayMode::UPDATE:
-			banner << (joined.empty() ? "Updating" : "Updating " + joined);
-			break;
-		default:
-			banner << PlainDisplay::modeLabel(mode);
-			if (!joined.empty()) {
-				banner << ' ' << joined;
-			}
-			break;
-	}
-	banner << "...";
-	return banner.str();
+	return plain_display_internal::action_banner_text(mode, items);
 }
 
 std::string LiveDisplay::format_live_progress_line(const std::string& itemId,
@@ -90,7 +70,7 @@ std::string LiveDisplay::format_live_progress_line(const std::string& itemId,
 	const double ratio = measurable ? static_cast<double>(percent) / 100.0 : 0.0;
 
 	std::ostringstream line;
-	line << decorateSpinnerFrame(spinnerFrame) << ' ' << itemId << ' ';
+	line << plain_display_internal::kIndent << decorateSpinnerFrame(spinnerFrame) << ' ' << itemId << ' ';
 	if (measurable) {
 		line << reqpack::terminal::render_fractional_block_bar(ratio, PlainDisplay::BAR_WIDTH) << ' '
 		     << reqpack::terminal::format_progress_tail(metrics, phase);
@@ -105,60 +85,30 @@ std::string LiveDisplay::format_session_summary(const bool success,
                                                 const int succeeded,
                                                 const int skipped,
                                                 const int failed) const {
-	switch (sessionMode_) {
-		case DisplayMode::INFO:
-			return {};
-		case DisplayMode::SEARCH:
-		case DisplayMode::LIST:
-		case DisplayMode::OUTDATED:
-			return {};
-		default:
-			break;
-	}
-
-	std::ostringstream stream;
-	if (succeeded > 0 || skipped > 0 || failed > 0) {
-		const char* verb = "updated";
-		const char* emoji = "✨";
-		switch (sessionMode_) {
-			case DisplayMode::INSTALL:
-				verb = "installed";
-				emoji = "✨";
-				break;
-			case DisplayMode::REMOVE:
-				verb = "removed";
-				emoji = "🗑️";
-				break;
-			case DisplayMode::UPDATE:
-			default:
-				verb = "updated";
-				emoji = "✨";
-				break;
-		}
-		stream << emoji << ' ' << succeeded << ' ' << verb << ", " << skipped << " skipped, " << failed << " failed";
-		if (!success) {
-			return decorateSummaryFail(stream.str());
-		}
-		return decorateSummaryOk(stream.str());
-	}
-	if (sessionMode_ == DisplayMode::SEARCH || sessionMode_ == DisplayMode::LIST) {
+	const std::optional<std::string> summary =
+	    plain_display_internal::session_summary_text(sessionMode_, success, succeeded, skipped, failed);
+	if (!summary.has_value()) {
 		return {};
 	}
-	const std::string fallback = success ? "done" : "failed";
-	return success ? decorateSummaryOk(fallback) : decorateSummaryFail(fallback);
+	if (!success || failed > 0) {
+		return decorateSummaryFail(*summary);
+	}
+	return decorateSummaryOk(*summary);
 }
 
 std::string LiveDisplay::format_log_branch(const std::string& text, const std::string& source) const {
 	const std::string trimmed = plain_display_internal::trim_trailing_newlines(text);
 	std::ostringstream line;
-	line << "  ├─ ";
-	if (trimmed.rfind("already on release", 0) == 0) {
-		line << "ℹ " << decorateMessage(trimmed);
+	line << plain_display_internal::kIndent;
+	switch (plain_display_internal::transcript_line_decoration(trimmed)) {
+	case plain_display_internal::TranscriptLineDecoration::Info:
+		line << plain_display_internal::kInfoMark << ' ' << decorateMessage(trimmed);
 		return line.str();
-	}
-	if (trimmed.rfind("link:", 0) == 0 || trimmed.rfind("now on release", 0) == 0) {
-		line << "🔗 " << decorateMessage(trimmed);
+	case plain_display_internal::TranscriptLineDecoration::Link:
+		line << plain_display_internal::kLinkMark << ' ' << decorateMessage(trimmed);
 		return line.str();
+	case plain_display_internal::TranscriptLineDecoration::None:
+		break;
 	}
 	if (!source.empty()) {
 		line << '[' << source << "] ";
@@ -168,14 +118,12 @@ std::string LiveDisplay::format_log_branch(const std::string& text, const std::s
 }
 
 std::string LiveDisplay::format_item_outcome_line(const std::string& /*itemId*/, const std::string& body) const {
-	std::ostringstream line;
-	line << "  └─ " << body;
-	return line.str();
+	return plain_display_internal::format_item_action_line(plain_display_internal::kSuccessMark, body);
 }
 
 std::string LiveDisplay::format_item_step_line(const std::string& itemId, const std::string& step) const {
 	std::ostringstream line;
-	line << "  ├─ " << decorateSpinnerFrame("⠿") << ' ' << itemId;
+	line << plain_display_internal::kIndent << decorateSpinnerFrame("⠋") << ' ' << itemId;
 	if (!step.empty()) {
 		line << "  " << decorateStep(step);
 	}
@@ -186,10 +134,10 @@ void LiveDisplay::onSessionBegin(const DisplayMode mode, const std::vector<std::
 	sessionMode_ = mode;
 	sessionItems_ = items;
 	setSessionContext(mode, items);
-	if (use_live_ui()) {
+	if (use_live_ui() && use_live_progress_for(mode)) {
 		if (mode != DisplayMode::LIST && mode != DisplayMode::SEARCH && mode != DisplayMode::OUTDATED
 		    && mode != DisplayMode::INFO) {
-			live_->begin_session(format_session_banner(mode, items));
+			live_->begin_session(decorateActionBanner(format_session_banner(mode, items)));
 		}
 		return;
 	}
@@ -197,7 +145,7 @@ void LiveDisplay::onSessionBegin(const DisplayMode mode, const std::vector<std::
 }
 
 void LiveDisplay::onSessionEnd(const bool success, const int succeeded, const int skipped, const int failed) {
-	if (use_live_ui()) {
+	if (use_animated_session_progress()) {
 		const std::string summary = format_session_summary(success, succeeded, skipped, failed);
 		live_->end_session(success, succeeded, skipped, failed, summary);
 		return;
@@ -206,7 +154,7 @@ void LiveDisplay::onSessionEnd(const bool success, const int succeeded, const in
 }
 
 void LiveDisplay::onItemBegin(const std::string& itemId, const std::string& label) {
-	if (use_live_ui()) {
+	if (use_animated_session_progress()) {
 		trackItemBegin(itemId, label);
 		live_->begin_item(itemId, label);
 		return;
@@ -215,7 +163,11 @@ void LiveDisplay::onItemBegin(const std::string& itemId, const std::string& labe
 }
 
 void LiveDisplay::onItemProgress(const std::string& itemId, const DisplayProgressMetrics& metrics) {
-	if (use_live_ui()) {
+	if (use_animated_session_progress()) {
+		if (Logger::instance().quietTransactionTranscript()
+		    && !plain_display_internal::progress_has_byte_transfer(metrics)) {
+			return;
+		}
 		live_->update_item(itemId, metrics, false);
 		return;
 	}
@@ -224,9 +176,12 @@ void LiveDisplay::onItemProgress(const std::string& itemId, const DisplayProgres
 
 void LiveDisplay::onItemStep(const std::string& itemId, const std::string& step) {
 	const DisplayProgressMetrics metrics = trackItemStep(itemId, step);
-	if (use_live_ui()) {
+	if (use_animated_session_progress()) {
 		live_->note_step(itemId, step);
 		if (!has_measurable_progress(metrics)) {
+			if (Logger::instance().quietTransactionTranscript()) {
+				return;
+			}
 			live_->log_message(format_item_step_line(itemId, step));
 			return;
 		}
@@ -236,43 +191,63 @@ void LiveDisplay::onItemStep(const std::string& itemId, const std::string& step)
 	PlainDisplay::onItemStep(itemId, step);
 }
 
-void LiveDisplay::onItemSuccess(const std::string& itemId) {
-	if (use_live_ui()) {
+void LiveDisplay::onItemSuccess(const std::string& itemId, const std::string& version) {
+	if (use_animated_session_progress()) {
 		if (!tryMarkItemSuccess(itemId)) {
 			return;
 		}
-		const std::string marker =
-		    format_item_outcome_line(itemId, decorateSuccessMarker(std::string("✔ ") + itemId + " done"));
+		std::ostringstream body;
+		body << itemId;
+		if (!version.empty()) {
+			body << ' ' << decorateSuccessVersion('(' + version + ')');
+		}
+		body << ' ' << plain_display_internal::item_outcome_phrase(sessionMode_);
+		const std::string marker = format_item_outcome_line(itemId, decorateSuccessMarker(body.str()));
 		live_->complete_item(itemId, true, marker);
 		return;
 	}
-	PlainDisplay::onItemSuccess(itemId);
+	PlainDisplay::onItemSuccess(itemId, version);
 }
 
 void LiveDisplay::onItemSkipped(const std::string& itemId, const std::string& reason) {
-	if (use_live_ui()) {
-		std::ostringstream line;
-		line << "  ├─ " << decorateSkippedMarker("skipped " + itemId);
-		if (!reason.empty()) {
-			line << "  " << decorateStep(reason);
+	if (use_animated_session_progress()) {
+		std::ostringstream body;
+		body << itemId;
+		if (reason == "already installed") {
+			body << " is already installed, skipping";
+		} else if (!reason.empty()) {
+			body << "  " << reason;
+		} else {
+			body << " skipped";
 		}
-		live_->skip_item(itemId, line.str());
+		const std::string line =
+		    plain_display_internal::format_item_action_line(plain_display_internal::kSkippedMark,
+		                                                    decorateSkippedMarker(body.str()));
+		live_->skip_item(itemId, line);
 		return;
 	}
 	PlainDisplay::onItemSkipped(itemId, reason);
 }
 
 void LiveDisplay::onItemFailure(const std::string& itemId, const std::string& reason) {
-	if (use_live_ui()) {
-		std::ostringstream line;
-		line << "  ├─ " << decorateFailureMarker("✖ " + itemId);
-		if (!reason.empty()) {
-			line << "  " << reason;
-		}
-		live_->fail_item(itemId, line.str());
+	std::string effectiveReason = reason;
+	if (!commitItemFailure(itemId, reason, effectiveReason)) {
 		return;
 	}
-	PlainDisplay::onItemFailure(itemId, reason);
+	if (use_animated_session_progress()) {
+		const std::string primary = plain_display_internal::format_item_failure_primary(itemId, effectiveReason);
+		const std::string line = plain_display_internal::format_item_action_line(
+		    plain_display_internal::kErrorMark, decorateFailureMarker(primary));
+		live_->fail_item(itemId, line);
+		if (const std::optional<std::string> hint =
+		        plain_display_internal::failure_hint_for_reason(itemId, effectiveReason);
+		    hint.has_value()) {
+			live_->log_message(std::string(plain_display_internal::kIndent) + plain_display_internal::kIndent
+			                   + decorateFailureHint("hint: " + hint.value()));
+		}
+		return;
+	}
+	writeItemFailureLines(itemId, effectiveReason);
 }
 
 void LiveDisplay::onMessage(const std::string& text, const std::string& source) {

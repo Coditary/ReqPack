@@ -8,8 +8,8 @@ namespace reqpack::terminal {
 
 namespace {
 
-constexpr const char* kEmptyBlock = "░";
-constexpr const char* kFullBlock = "█";
+constexpr const char* kEmptyBlock = "\xe2\x94\x80";  // ─
+constexpr const char* kFullBlock = "\xe2\x94\x81";   // ━
 
 }  // namespace
 

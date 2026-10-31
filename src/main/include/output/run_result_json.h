@@ -9,6 +9,7 @@ struct RunResultJsonItem {
 	std::string system;
 	std::string name;
 	std::string version;
+	std::string latestVersion;
 	std::string status;
 	std::string errorMessage;
 };

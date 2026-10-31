@@ -143,6 +143,9 @@ void Logger::updateConsoleSinkLevel() {
 
 void Logger::setDisplay(IDisplay* activeDisplay) {
     display.store(activeDisplay, std::memory_order_release);
+    if (activeDisplay == nullptr) {
+        activeDisplayMode_.store(static_cast<int>(DisplayMode::IDLE), std::memory_order_release);
+    }
     updateConsoleSinkLevel();
 }
 
@@ -153,6 +156,25 @@ void Logger::setConsoleOutput(bool enable) {
 
 bool Logger::isConsoleOutputEnabled() const {
     return consoleOutputEnabled.load(std::memory_order_acquire);
+}
+
+DisplayMode Logger::activeDisplayMode() const {
+    return static_cast<DisplayMode>(activeDisplayMode_.load(std::memory_order_acquire));
+}
+
+bool Logger::quietTransactionTranscript() const {
+    if (isConsoleOutputEnabled()) {
+        return false;
+    }
+    switch (activeDisplayMode()) {
+        case DisplayMode::INSTALL:
+        case DisplayMode::REMOVE:
+        case DisplayMode::UPDATE:
+        case DisplayMode::ENSURE:
+            return true;
+        default:
+            return false;
+    }
 }
 
 void Logger::setJsonOutputMode(bool enable) {

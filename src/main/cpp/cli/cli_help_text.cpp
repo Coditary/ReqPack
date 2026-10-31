@@ -412,7 +412,8 @@ std::string command_help_text(ActionType action) {
                 "  rqp s npm react\n"
                 "  rqp search brew \"json tool\"\n"
                 "  rqp search dnf python3 --arch noarch --arch x86_64\n"
-                "  rqp search dnf python3 --type doc --type devel\n";
+                "  rqp search dnf python3 --type doc --type devel\n"
+                "  rqp search apt curl --json\n";
         case ActionType::LIST:
             return
                 "Usage: rqp list (ls) [<system> [<package>...]] [<dir-path>] [options]\n"
@@ -448,6 +449,7 @@ std::string command_help_text(ActionType action) {
                 "  rqp list dnf --arch x86_64\n"
                 "  rqp list dnf --type doc --type devel\n"
                 "  rqp list rqp wuji-ai\n"
+                "  rqp list rqp --json\n"
                 "  rqp list rqp:wuji-ai\n";
         case ActionType::INFO:
             return
@@ -470,6 +472,8 @@ std::string command_help_text(ActionType action) {
                 "  rqp info\n"
                 "  rqp info apt\n"
                 "  rqp info apt curl\n"
+                "  rqp info rqp wuji-ai\n"
+                "  rqp info rqp wuji-ai --json\n"
                 "  rqp info npm express\n"
                 "  rqp info brew jq\n";
         case ActionType::ENSURE:
@@ -590,7 +594,8 @@ std::string command_help_text(ActionType action) {
                 "  rqp outdated .\n"
                 "  rqp outdated ./project\n"
                 "  rqp outdated dnf --arch noarch\n"
-                "  rqp outdated dnf --type doc\n";
+                "  rqp outdated dnf --type doc\n"
+                "  rqp outdated dnf --json\n";
         case ActionType::HOST:
             return
                 "Usage: rqp host refresh\n"
