@@ -130,6 +130,7 @@ ensure_linux_tools() {
     return 0
   fi
   if need_cmd apt-get; then
+    run_as_root apt-get update
     run_as_root apt-get install -y --no-install-recommends \
       ca-certificates curl git python3 tar
     return 0
@@ -154,6 +155,40 @@ ensure_tools() {
     Darwin) ensure_macos_tools ;;
     *) die "Unsupported operating system: $(uname -s)" ;;
   esac
+}
+
+ensure_install_dir_on_path() {
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *) PATH="$INSTALL_DIR:$PATH" ;;
+  esac
+  export PATH
+
+  path_marker="# Added by ReqPack install.sh"
+  for profile in "$HOME/.profile" "$HOME/.bashrc"; do
+    if [ ! -f "$profile" ]; then
+      continue
+    fi
+    if grep -Fq "$path_marker" "$profile" 2>/dev/null; then
+      continue
+    fi
+    {
+      printf '\n%s\n' "$path_marker"
+      printf 'export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+    } >> "$profile"
+  done
+}
+
+verify_installed_rqp() {
+  rqp_path="$1"
+  err_file="$2"
+  if "$rqp_path" --help >/dev/null 2>"$err_file"; then
+    return 0
+  fi
+  if grep -q GLIBC_ "$err_file" 2>/dev/null; then
+    die "The downloaded rqp binary needs a newer glibc than this system provides. Use Debian 12+, Fedora 38+, Ubuntu 22.04+, or install from source. ($(tr '\n' ' ' <"$err_file"))"
+  fi
+  die "Installed rqp but it failed to start. Try: $rqp_path --help ($(tr '\n' ' ' <"$err_file"))"
 }
 
 write_default_config() {
@@ -231,14 +266,15 @@ main() {
   rm -f "$INSTALL_DIR/rqp"
   ln -s "$bundle_path/rqp" "$INSTALL_DIR/rqp"
   write_default_config "$owner" "$repo"
+  ensure_install_dir_on_path
+  verify_installed_rqp "$INSTALL_DIR/rqp" "$tmpdir/rqp-verify.err"
 
   printf 'Installed ReqPack %s to %s/rqp\n' "$tag_name" "$INSTALL_DIR"
-  "$INSTALL_DIR/rqp" update --all || printf '%s\n' 'Warning: rqp update --all failed. Run it manually after checking your environment.' >&2
-  "$INSTALL_DIR/rqp" host refresh || printf '%s\n' 'Warning: rqp host refresh failed. Run it manually if plugins need fresh host info.' >&2
+  printf 'Run `rqp self-update` to refresh the CLI, or `rqp plugin update --all` only when you use plugins.\n'
 
   case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;
-    *) printf 'Add %s to PATH if needed.\n' "$INSTALL_DIR" ;;
+    *) printf 'Open a new shell or run: export PATH="%s:$PATH"\n' "$INSTALL_DIR" ;;
   esac
 }
 

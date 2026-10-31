@@ -129,16 +129,25 @@ jobs:
           ccache --set-config=max_size="$CCACHE_MAXSIZE"
           ccache --zero-stats
 
+      - name: Prepare Shared-Cpp completion
+        if: matrix.family == 'linux'
+        run: |
+          mkdir -p "${{ github.workspace }}/../../Coditary"
+          if [ ! -f "${{ github.workspace }}/../../Coditary/shared/Shared-Cpp/completion/CMakeLists.txt" ]; then
+            git clone --depth 1 https://github.com/Coditary/shared.git \
+              "${{ github.workspace }}/../../Coditary/shared"
+          fi
+
       - name: Build Linux targets
         if: matrix.family == 'linux'
         run: |
           rm -rf build release-artifacts build-artifacts
-          bash .github/scripts/configure-build.sh build linux \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DSOL2_INCLUDE_DIR="${{ github.workspace }}/third_party/include"
           mkdir -p release-artifacts build-artifacts
-          bash scripts/package_release_bundle.sh build/rqp "release-artifacts/rqp-${RELEASE_ID}-${{ matrix.target }}.tar.gz" linux
+          bash .github/scripts/build-linux-release-bundle.sh \
+            "${{ github.workspace }}" \
+            "release-artifacts/rqp-${RELEASE_ID}-${{ matrix.target }}.tar.gz"
+          bash .github/scripts/smoke-linux-release-on-bookworm.sh \
+            "release-artifacts/rqp-${RELEASE_ID}-${{ matrix.target }}.tar.gz"
           bash .github/scripts/archive-build-tree.sh build "build-artifacts/build-tree-${{ matrix.target }}.tar.gz"
 
       - name: Build macOS targets

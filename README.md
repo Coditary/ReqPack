@@ -113,7 +113,16 @@ Each archive currently contains `rqp` binary and `SHA256SUMS` is published along
 curl -fsSL https://raw.githubusercontent.com/Coditary/ReqPack/main/install.sh | sh
 ```
 
-`install.sh` detects OS and architecture, downloads matching release binary, installs it to `~/.local/bin/rqp`, writes default self-update config if missing, then runs `rqp update --all` to refresh already-installed plugin wrappers and `rqp host refresh`.
+`install.sh` detects OS and architecture, downloads matching release binary, installs it to `~/.local/bin/rqp`, and writes default self-update config if missing. It does **not** run `rqp update --all` (that would refresh every plugin wrapper in the registry). After install, use `rqp host refresh` or `rqp plugin update <system>` when you actually need plugins.
+
+On minimal Debian/Ubuntu images without `curl`, either pipe from a host that has `curl`, or run:
+
+```bash
+apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+curl -fsSL https://raw.githubusercontent.com/Coditary/ReqPack/main/install.sh | sh
+```
+
+Linux release binaries are built on Debian 12 (glibc 2.36) so they run on Bookworm, Fedora 38+, Ubuntu 22.04+, and newer. Older published Linux binaries built on Ubuntu 24.04 may fail on Debian 12 with `GLIBC_2.38 not found`; use a current release or build from source.
 
 If you prefer manual asset installation:
 
