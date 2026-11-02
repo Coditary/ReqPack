@@ -1,7 +1,7 @@
 #include "main_self_update_internal.h"
 
-#include "core/common/process_runner.h"
-#include "core/common/temp_directory.h"
+#include <reqpack/process_runner.h>
+#include <reqpack/temp_directory.h>
 
 #include <cerrno>
 #include <cstdio>

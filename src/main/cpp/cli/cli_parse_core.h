@@ -3,7 +3,7 @@
 #include <CLI/CLI.hpp>
 
 #include "cli_parse_state.h"
-#include "core/config/configuration.h"
+#include <reqpack/config.h>
 
 #include <string>
 #include <vector>

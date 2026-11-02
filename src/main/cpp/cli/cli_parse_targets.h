@@ -1,8 +1,8 @@
 #pragma once
 
 #include "cli_parse_state.h"
-#include "core/common/types.h"
-#include "core/config/configuration.h"
+#include <reqpack/types.h>
+#include <reqpack/config.h>
 
 #include <filesystem>
 #include <functional>

@@ -381,7 +381,7 @@ add_library(reqpack_output STATIC ${REQPACK_OUTPUT_SOURCES})
 target_include_directories(reqpack_output
     PUBLIC
         src/main/include
-        ${REQPACK_CORE_SOURCE_DIR}/src/main/include
+        ${REQPACK_CORE_SOURCE_DIR}/include
 )
 target_link_libraries(reqpack_output PUBLIC
     reqpack_security_core
@@ -389,7 +389,9 @@ target_link_libraries(reqpack_output PUBLIC
     ${REQPACK_SPDLOG_TARGET}
     ${REQPACK_FMT_TARGET}
 )
-target_include_directories(reqpack_core PUBLIC src/main/include)
+target_include_directories(reqpack_core PUBLIC
+    ${REQPACK_CORE_SOURCE_DIR}/include
+)
 target_link_libraries(reqpack_core PUBLIC reqpack_output)
 
 file(GLOB REQPACK_CLI_LIB_SOURCES CONFIGURE_DEPENDS

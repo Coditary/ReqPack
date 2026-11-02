@@ -1,8 +1,8 @@
 #pragma once
 
-#include "core/common/action_tokens.h"
-#include "core/common/types.h"
-#include "core/config/configuration.h"
+#include <reqpack/action_tokens.h>
+#include <reqpack/types.h>
+#include <reqpack/config.h>
 
 #include <filesystem>
 #include <optional>

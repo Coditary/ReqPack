@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cli/cli.h"
-#include "core/config/configuration.h"
+#include <reqpack/config.h>
 
 #include <string>
 #include <vector>

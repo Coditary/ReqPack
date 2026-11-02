@@ -1,11 +1,11 @@
 #include "main_live.h"
 
 #include "cli/cli.h"
-#include "core/common/process_runner.h"
-#include "core/execution/orchestrator.h"
-#include "core/plugins/plugin_bundle.h"
+#include <reqpack/process_runner.h>
+#include <reqpack/orchestrator.h>
+#include <reqpack/plugin_bundle.h>
 
-#include "core/config/configuration.h"
+#include <reqpack/config.h>
 
 #include <iostream>
 #include <cstdlib>

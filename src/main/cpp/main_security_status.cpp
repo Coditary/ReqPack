@@ -1,6 +1,6 @@
-#include "core/config/configuration.h"
-#include "core/registry/registry.h"
-#include "core/security/security_bridge.h"
+#include <reqpack/config.h>
+#include <reqpack/registry.h>
+#include <reqpack/security_bridge.h>
 #include "output/logger.h"
 
 #include <rqp/security/security_status.h>

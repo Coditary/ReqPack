@@ -4,9 +4,9 @@
 
 #include "cli/cli.h"
 #include "main_diagnostics.h"
-#include "core/config/configuration.h"
-#include "core/security/security_bridge.h"
-#include "core/plugins/plugin_test_runner.h"
+#include <reqpack/config.h>
+#include <reqpack/security_bridge.h>
+#include <reqpack/plugin_test_runner.h>
 #include "output/display_factory.h"
 #include "output/logger.h"
 

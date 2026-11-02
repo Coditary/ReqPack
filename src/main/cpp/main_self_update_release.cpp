@@ -1,8 +1,8 @@
 #include "main_self_update_internal.h"
 
-#include "core/common/network_environment.h"
-#include "core/common/process_runner.h"
-#include "core/registry/registry_database.h"
+#include <reqpack/network_environment.h>
+#include <reqpack/process_runner.h>
+#include <reqpack/registry_database.h>
 #include "output/logger.h"
 
 #include <boost/property_tree/json_parser.hpp>
@@ -31,7 +31,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "core/common/pipe_helpers.h"
+#include <reqpack/pipe_helpers.h>
 #endif
 
 namespace {

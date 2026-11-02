@@ -1,6 +1,6 @@
 #include <catch2/catch.hpp>
 
-#include "core/common/types.h"
+#include <reqpack/types.h>
 #include "output/package_table_format.h"
 
 TEST_CASE("package table formatting strips boilerplate and merges versions", "[unit][output][package-table]") {

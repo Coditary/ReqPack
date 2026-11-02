@@ -2,7 +2,7 @@
 
 #include "cli_parse_shared.h"
 
-#include "core/manifest/manifest_loader.h"
+#include <reqpack/manifest_loader.h>
 #include "output/diagnostic.h"
 #include "output/logger.h"
 

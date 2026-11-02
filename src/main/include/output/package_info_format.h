@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/common/types.h"
+#include <reqpack/types.h>
 
 #include <string>
 

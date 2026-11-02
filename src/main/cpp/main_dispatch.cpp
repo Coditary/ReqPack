@@ -6,16 +6,16 @@
 #include "main_self_update.h"
 #include "main_stdin.h"
 
-#include "core/common/types.h"
+#include <reqpack/types.h>
 
 #include "cli/cli.h"
-#include "core/common/build_info.h"
-#include "core/execution/orchestrator.h"
-#include "core/host/host_info.h"
-#include "core/plugins/plugin_test_runner.h"
-#include "core/remote/remote_client.h"
-#include "core/remote/remote_profiles.h"
-#include "core/remote/serve_remote.h"
+#include <reqpack/build_info.h>
+#include <reqpack/orchestrator.h>
+#include <reqpack/host_info.h>
+#include <reqpack/plugin_test_runner.h>
+#include <reqpack/remote_client.h>
+#include <reqpack/remote_profiles.h>
+#include <reqpack/serve_remote.h>
 #include "output/command_output.h"
 #include "output/idisplay.h"
 #include "output/logger.h"

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/config/configuration.h"
+#include <reqpack/config.h>
 #include "output/logger.h"
 
 #include <filesystem>

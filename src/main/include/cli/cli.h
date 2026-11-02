@@ -2,9 +2,9 @@
 
 #include <CLI/CLI.hpp>
 
-#include "core/config/configuration.h"
-#include "core/registry/registry_database.h"
-#include "core/common/types.h"
+#include <reqpack/config.h>
+#include <reqpack/registry_database.h>
+#include <reqpack/types.h>
 
 #include <filesystem>
 #include <memory>

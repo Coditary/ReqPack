@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/remote/serve_remote.h"
+#include <reqpack/serve_remote.h>
 
 #include <string>
 #include <vector>

@@ -2,8 +2,8 @@
 
 #include "main_self_update.h"
 
-#include "core/download/downloader.h"
-#include "core/host/host_info.h"
+#include <reqpack/downloader.h>
+#include <reqpack/host_info.h>
 
 #include <filesystem>
 #include <functional>

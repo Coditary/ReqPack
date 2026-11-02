@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cli_parse_state.h"
-#include "core/config/configuration.h"
+#include <reqpack/config.h>
 
 #include <optional>
 #include <string>

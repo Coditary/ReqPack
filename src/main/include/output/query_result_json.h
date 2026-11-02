@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/common/types.h"
-#include "core/config/configuration.h"
+#include <reqpack/types.h>
+#include <reqpack/config.h>
 #include "output/run_result_json.h"
 
 #include <string>

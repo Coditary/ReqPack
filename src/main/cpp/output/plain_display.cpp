@@ -2,7 +2,7 @@
 
 #include "plain_display_internal.h"
 
-#include "core/common/terminal_width.h"
+#include <reqpack/terminal_width.h>
 
 #include <algorithm>
 #include <cctype>

@@ -2,8 +2,8 @@
 
 #include "cli/cli.h"
 #include "cli_parse_shared.h"
-#include "core/plugins/plugin_bundle.h"
-#include "core/registry/registry_database_core.h"
+#include <reqpack/plugin_bundle.h>
+#include <reqpack/registry_database_store.h>
 
 #include <algorithm>
 #include <filesystem>

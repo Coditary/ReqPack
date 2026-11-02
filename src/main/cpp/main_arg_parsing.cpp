@@ -1,7 +1,7 @@
 #include "main_arg_parsing.h"
 
 #include "cli/cli.h"
-#include "core/config/configuration.h"
+#include <reqpack/config.h>
 
 #include <algorithm>
 #include <cctype>

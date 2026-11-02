@@ -1,9 +1,9 @@
 #include "cli_parse_shared.h"
 
 #include "cli/cli.h"
-#include "core/common/action_tokens.h"
-#include "core/manifest/manifest_loader.h"
-#include "core/manifest/manifest_path_resolver.h"
+#include <reqpack/action_tokens.h>
+#include <reqpack/manifest_loader.h>
+#include <reqpack/manifest_path_resolver.h>
 
 #include <algorithm>
 #include <cctype>
